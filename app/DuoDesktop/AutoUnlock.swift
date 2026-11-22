@@ -2,6 +2,7 @@ import Foundation
 import LocalAuthentication
 import Security
 import SwiftUI
+import UIKit
 
 // Unlock a locked Mac automatically (project notes). The owner: "Given that we're already connected to the
 // Mac, why do we see a login screen? Shouldn't we log in automatically?" — "Yes, let's do that." One Touch ID (the owner,
@@ -109,6 +110,36 @@ enum AutoUnlockRules {
     }
 
     static let failedNotice = "Could not unlock. The saved password may be wrong."
+
+    /// What stands in the way (Touch ID clarity): the phone has no passcode/Touch ID, or Require Touch ID is off.
+    enum Blocker: Equatable { case noPasscode, appLockOff }
+
+    static func blocker(appLockOn: Bool, deviceCanAuthenticate: Bool) -> Blocker? {
+        if !deviceCanAuthenticate { return .noPasscode }
+        if !appLockOn { return .appLockOff }
+        return nil
+    }
+
+    /// The section's footer, saying the dependency before it matters (the owner 2026-11-22: "it should clarify that you
+    /// have to set Touch ID if you want your Mac to unlock automatically").
+    static let footer = "Needs Require Touch ID, which locks Duo Desktop itself. One Touch ID then unlocks every Mac. When this Mac is locked, Duo Desktop types its password for you; the password stays in this iPhone’s Keychain."
+    static let noPasscodeText = "This iPhone has no passcode, so Touch ID can’t be used. Set up a passcode and Touch ID in Settings."
+    static let appLockOffText = "Require Touch ID is off."
+
+    /// The Mac list's Security footer: what depends on Require Touch ID.
+    static let securityFooter = "Asks for Touch ID when Duo Desktop opens and after 5 minutes away. Unlock Automatically and the saved Mac passwords need it, and Terminal and JetKVM wait for it after 5 minutes away."
+
+    /// The Macs that stop unlocking automatically if Require Touch ID is turned off.
+    static func macsUsing(_ macs: [MacEntry]) -> [MacEntry] { macs.filter { $0.autoUnlock == true } }
+
+    /// The one warning before Require Touch ID goes off while Macs use Unlock Automatically (nil: no warning).
+    static func lockOffWarning(_ macs: [MacEntry]) -> String? {
+        let names = macsUsing(macs).map { "“\($0.name)”" }
+        guard !names.isEmpty else { return nil }
+        let list = ListFormatter.localizedString(byJoining: names)
+        let them = names.count == 1 ? "its saved Mac password is" : "their saved Mac passwords are"
+        return "\(list) will stop unlocking automatically, and \(them) deleted from this iPhone."
+    }
 }
 
 /// One Mac's non-secret flag: the last automatic try failed. Kept until the password is saved again or the setting
@@ -141,6 +172,16 @@ enum AutoUnlockSetting {
         AutoUnlockFailures.set(macID, failed: false, in: defaults)
         store.update(macID) { $0.autoUnlock = nil }
     }
+
+    /// Require Touch ID went off: no Mac can be unlocked automatically, so every saved Mac password is deleted and
+    /// each switch goes off (the passwords are only ever read with the app lock's context; build 38's rule).
+    @MainActor static func appLockTurnedOff(store: MacStore,
+                                            keychain: MacPasswordKeeping = MacPasswordKeychain.shared,
+                                            defaults: UserDefaults = .standard) {
+        for mac in store.macs where mac.autoUnlock == true {
+            turnOff(macID: mac.id, store: store, keychain: keychain, defaults: defaults)
+        }
+    }
 }
 
 /// The plain notice after a try that did not unlock (HIG: say what happened in plain words; one way to close it).
@@ -168,17 +209,26 @@ struct UnlockNoticeBanner: View {
 /// The Mac's "Unlock Automatically" row (project notes). HIG Toggles: a switch for an on/off setting; HIG Text
 /// fields: a secure field for a password, with a clear label. Turning it on shows the secure field; the switch is on
 /// only once a password is saved. Turning it off deletes the password at once.
+/// Touch ID clarity: the footer says it needs Require Touch ID; when that is off, a button right here turns it
+/// on (HIG Buttons in a list: an action row; the system's Touch ID check runs, `AppLock.setRequired`); when the
+/// phone has no passcode, a button opens Settings.
 struct AutoUnlockSection: View {
     let store: MacStore
     let id: String
-    /// Why it cannot be used (app lock off, no passcode), or nil.
-    let unavailable: String?
+    /// The app lock, for its state and the "Turn On Require Touch ID" row; nil reads the stored setting only.
+    let lock: AppLock?
+    var deviceCanAuthenticate: Bool = AppLock.deviceCanAuthenticate()
+    @Environment(\.openURL) private var openURL
     @State private var entering = false
     @State private var password = ""
     @State private var failed = false
     @FocusState private var focused: Bool
 
     private var on: Bool { store.entry(id)?.autoUnlock == true }
+    private var blocker: AutoUnlockRules.Blocker? {
+        AutoUnlockRules.blocker(appLockOn: lock?.required ?? AppLock.isOn(in: .standard),
+                                deviceCanAuthenticate: deviceCanAuthenticate)
+    }
 
     var body: some View {
         Section {
@@ -192,8 +242,31 @@ struct AutoUnlockSection: View {
                     AutoUnlockSetting.turnOff(macID: id, store: store, keychain: store.passwords)
                 }
             }))
-            .disabled(unavailable != nil && !on)
+            .disabled(blocker != nil && !on)
             .accessibilityIdentifier("autoUnlockSwitch")
+            if !on, let blocker {
+                switch blocker {
+                case .noPasscode:
+                    Text(AutoUnlockRules.noPasscodeText).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("autoUnlockNoPasscode")
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                case .appLockOff:
+                    if let lock {
+                        Button {
+                            Task { await lock.setRequired(true) }
+                        } label: {
+                            Label("Turn On Require Touch ID", systemImage: "touchid")
+                        }
+                        .disabled(lock.busy)
+                        .accessibilityIdentifier("autoUnlockTurnOnTouchID")
+                        if let m = lock.message { Text(m).font(.footnote).foregroundStyle(.secondary) }
+                    } else {
+                        Text("Turn on Require Touch ID in the Mac list’s Security section.").foregroundStyle(.secondary)
+                    }
+                }
+            }
             if entering {
                 SecureField("Mac Password", text: $password)
                     .textContentType(nil)
@@ -207,12 +280,10 @@ struct AutoUnlockSection: View {
                     .disabled(password.isEmpty)
             }
         } footer: {
-            if let unavailable, !on {
-                Text(unavailable)
-            } else if failed {
+            if failed {
                 Text("The password could not be saved.")
             } else {
-                Text("When this Mac is locked, Duo Desktop types its password for you. The password stays in this iPhone’s Keychain, behind Touch ID.")
+                Text(AutoUnlockRules.footer)
             }
         }
     }

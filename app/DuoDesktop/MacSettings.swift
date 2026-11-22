@@ -253,27 +253,46 @@ struct MacSettingsScreen: View {
     let store: MacStore
     let id: String
     let chosen: AddressKind?
-    /// Why "Unlock Automatically" cannot be used right now (`AutoUnlockRules.unavailableReason`), or nil.
-    var autoUnlockUnavailable: String? = nil
+    /// The app lock: Unlock Automatically's "Turn On Require Touch ID" row (nil: the stored setting is read only).
+    var lock: AppLock? = nil
+    /// This iPhone's Glass Act identity, for the home address picker's key checks.
+    var identity: SecIdentity? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var draft: MacEntry?
     @State private var port = ""
     @State private var forgetting = false
     @State private var removing: MacEntry?
+    /// Only `--home-picker` (simulator pictures) opens the list without a tap.
+    @State private var homePickerBySwitch = SimulatorSwitches.openHomePicker
 
     var body: some View {
+      ScrollViewReader { proxy in
         Form {
             if let entry = store.entry(id) {
                 Section("Name") {
                     TextField("Name", text: field(\.name)).accessibilityIdentifier("settingsName")
                 }
                 Section {
-                    LabeledContent("Home network") {
-                        TextField("Not set", text: address(.home)).multilineTextAlignment(.trailing)
-                            .accessibilityIdentifier("settingsHome")
+                    // Touch ID clarity A (the owner 2026-11-22: "Shouldn't I be able to just select a Mac that is
+                    // broadcasting instead of typing a name?"): the home address is chosen from the Macs nearby
+                    // (HIG Lists: a row with a disclosure indicator opens a list to choose from, as Settings › Wi-Fi).
+                    NavigationLink {
+                        HomeAddressPicker(store: store, id: id, identity: identity) {
+                            draft?.home = store.entry(id)?.home
+                        }
+                    } label: {
+                        LabeledContent("Home Network") {
+                            Text(draft?.home ?? "Choose…")
+                                .foregroundStyle(draft?.home == nil ? Color.accentColor : .secondary)
+                        }
                     }
+                    .accessibilityIdentifier("settingsHome")
                     LabeledContent("Tailscale") {
-                        TextField("Not set", text: address(.tailscale)).multilineTextAlignment(.trailing)
+                        TextField(HomeAddressRules.tailscalePlaceholder, text: address(.tailscale))
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
                             .accessibilityIdentifier("settingsTailscale")
                     }
                     LabeledContent("Port") {
@@ -284,12 +303,12 @@ struct MacSettingsScreen: View {
                     Text("Addresses")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Duo Desktop tries both and uses the one that answers.")
+                        Text(HomeAddressRules.addressesFooter)
                         if let last = entry.lastAddress { Text("Last used: \(last.label).") }
                         if draft.map({ $0.addresses.isEmpty }) == true { Text("At least one address is needed.") }
                     }
                 }
-                AutoUnlockSection(store: store, id: id, unavailable: autoUnlockUnavailable)
+                AutoUnlockSection(store: store, id: id, lock: lock)
                 #if DUO_TERMINAL
                 TerminalSettingsSection(store: store, id: id)
                 #endif
@@ -308,12 +327,23 @@ struct MacSettingsScreen: View {
                     // Reviewer wording correction: reinstalling Glass Act Host keeps the Mac's key.
                     Text("Forget only if you know this Mac’s Glass Act identity was reset or replaced.")
                 }
+                .id("settings.macKey")
                 Section {
                     Button("Remove Mac", role: .destructive) { removing = entry }
                         .frame(maxWidth: .infinity)
                 }
             }
         }
+        .navigationDestination(isPresented: $homePickerBySwitch) {
+            HomeAddressPicker(store: store, id: id, identity: identity) { draft?.home = store.entry(id)?.home }
+        }
+        .onAppear {
+            // `--settings-at-end` (simulator only, README pictures): scrolls down to the Mac's key (Terminal and
+            // JetKVM above it), as a finger would.
+            guard SimulatorSwitches.settingsAtEnd else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { proxy.scrollTo("settings.macKey", anchor: .bottom) }
+        }
+      }
         .navigationTitle(draft?.name ?? store.entry(id)?.name ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

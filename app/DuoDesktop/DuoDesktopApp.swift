@@ -13,7 +13,7 @@ struct DuoDesktopApp: App {
 struct RootView: View {
     @State private var model = SessionModel.app
     @State private var list = MacList()
-    @State private var lock = AppLock(bypass: SimulatorSwitches.noAppLock)
+    @State private var lock = AppLock(bypass: SimulatorSwitches.noAppLock, passedForPicture: SimulatorSwitches.appLockPassed)
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var coldTried = false

@@ -87,6 +87,41 @@ enum SimulatorSwitches {
         return args[i + 1]
     }
 
+    /// `--hold-key-look ID` (README pictures): our horizontal keyboard draws key ID (e.g. `c-g`) pressed, with its
+    /// pop-up, and keeps it so. Look only; nothing is typed.
+    static var holdKeyLook: String? {
+        guard let i = args.firstIndex(of: "--hold-key-look"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    /// `--settings-at-end` (README pictures): a Mac's settings open scrolled to the end.
+    static let settingsAtEnd = args.contains("--settings-at-end")
+    /// `--home-picker`: a Mac's settings open on the Home Network list (Touch ID clarity pictures).
+    static let openHomePicker = args.contains("--home-picker")
+    /// `--app-lock-passed`: Require Touch ID on and already passed, for pictures (the simulator has no finger).
+    static let appLockPassed = args.contains("--app-lock-passed")
+
+    /// `--show-about` (README pictures): the Mac list opens with About showing.
+    static let showAbout = args.contains("--show-about")
+
+    /// `--choose-screen N` (README pictures): 4 s into the session, the Mac's screen N is chosen.
+    static var chooseScreen: UInt32? {
+        guard let i = args.firstIndex(of: "--choose-screen"), i + 1 < args.count else { return nil }
+        return UInt32(args[i + 1])
+    }
+
+    /// `--pointer-walk "T:DX,DY,N;…"` (README pictures): T seconds into the session, N trackpad moves of DX,DY
+    /// through the real trackpad engine (as `--edge-demo`), 0.05 s apart, so Follow Pointer can be shown following.
+    static var pointerWalk: [(at: Double, dx: Double, dy: Double, n: Int)] {
+        guard let i = args.firstIndex(of: "--pointer-walk"), i + 1 < args.count else { return [] }
+        return args[i + 1].split(separator: ";").compactMap { seg in
+            let ts = seg.split(separator: ":")
+            let v = ts.count == 2 ? ts[1].split(separator: ",").compactMap { Double($0) } : []
+            guard let t = ts.first.flatMap({ Double($0) }), v.count == 3 else { return nil }
+            return (t, v[0], v[1], Int(v[2]))
+        }
+    }
+
     /// `--choose-view NAME` (a `SessionView` raw value): the session switches to that view after it opens.
     static var chooseView: SessionView? {
         guard let i = args.firstIndex(of: "--choose-view"), i + 1 < args.count else { return nil }
@@ -182,6 +217,13 @@ enum SimulatorSwitches {
     static let topRowPreview: (mac: String, screen: String?)? = nil
     static let leaveAfter: Double? = nil
     static let keyboardInset: CGFloat? = nil
+    static let holdKeyLook: String? = nil
+    static let showAbout = false
+    static let settingsAtEnd = false
+    static let openHomePicker = false
+    static let appLockPassed = false
+    static let chooseScreen: UInt32? = nil
+    static let pointerWalk: [(at: Double, dx: Double, dy: Double, n: Int)] = []
     @MainActor static var inputDemo: ((SessionModel) -> Void)? { nil }
     #endif
 }

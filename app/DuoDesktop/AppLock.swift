@@ -26,13 +26,15 @@ final class AppLock {
 
     /// `bypass`: this run only, the lock is off and nothing is stored. Passed only from
     /// `SimulatorSwitches.noAppLock`, which is `false` in device builds.
-    init(defaults: UserDefaults = .standard, bypass: Bool = false,
+    /// `passedForPicture`: this run only, the lock is on and already passed (no context, so no Mac password is ever
+    /// read). Passed only from `SimulatorSwitches.appLockPassed` (`--app-lock-passed`), `false` in device builds.
+    init(defaults: UserDefaults = .standard, bypass: Bool = false, passedForPicture: Bool = false,
          authenticate: @escaping (String) async -> Result<LAContext?, Error> = AppLock.deviceOwnerAuthentication) {
         self.defaults = defaults
         self.authenticate = authenticate
-        let on = !bypass && Self.isOn(in: defaults)
+        let on = passedForPicture || (!bypass && Self.isOn(in: defaults))
         required = on
-        locked = on
+        locked = passedForPicture ? false : on
     }
 
     /// The stored setting, on when never set.

@@ -157,6 +157,8 @@ struct OuterSessionView: View {
     static func keyboardAtOpen(onPassword: Bool) -> Bool {
         #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("--outer-keyboard-down") { return false }
+        // `--outer-keyboard-up` (README pictures): starts up, as for a locked Mac.
+        if ProcessInfo.processInfo.arguments.contains("--outer-keyboard-up") { return true }
         #endif
         return onPassword
     }

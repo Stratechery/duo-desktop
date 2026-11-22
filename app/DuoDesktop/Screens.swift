@@ -9,10 +9,11 @@ struct MacListScreen: View {
     @Bindable var model: SessionModel
     let list: MacList
     let lock: AppLock
-    @State private var showAbout = false
+    @State private var showAbout = SimulatorSwitches.showAbout
     @State private var showAdd = SimulatorSwitches.showAddMac
     @State private var settingsFor: String? = SimulatorSwitches.showMacSettings
     @State private var removing: MacEntry?
+    @State private var confirmLockOff = false
     @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
     @AppStorage(KeyFeedback.hapticsKey) private var keyboardHaptics = false
 
@@ -60,6 +61,28 @@ struct MacListScreen: View {
                     }
                 }
 
+                // Touch ID clarity (the owner 2026-11-22: "Touch ID is sort of buried on the first page of settings,
+                // but it's pretty critical"): its own titled section right under the Macs, with what depends on it
+                // in the footer (HIG Lists and tables: group related settings under a header; footers explain).
+                Section {
+                    Toggle(isOn: Binding(get: { lock.required }, set: { on in
+                        if !on, AutoUnlockRules.lockOffWarning(list.macs) != nil {
+                            confirmLockOff = true // HIG Alerts: confirm an action that deletes something
+                        } else {
+                            Task { await lock.setRequired(on) }
+                        }
+                    })) {
+                        Label("Require Touch ID", systemImage: "touchid")
+                    }
+                    .disabled(lock.busy)
+                    .accessibilityIdentifier("requireTouchID")
+                } header: {
+                    Text("Security")
+                } footer: {
+                    Text(lock.message ?? AutoUnlockRules.securityFooter)
+                }
+                .id("security")
+
                 Section {
                     LabeledContent("Key") {
                         Text(model.viewerKeyString.isEmpty ? "None" : model.viewerKeyString)
@@ -93,13 +116,6 @@ struct MacListScreen: View {
                     Text("A light tap when you press our keys, the click buttons or the trackpad.")
                 }
 
-                Section {
-                    Toggle("Require Touch ID", isOn: Binding(get: { lock.required },
-                                                             set: { on in Task { await lock.setRequired(on) } }))
-                        .disabled(lock.busy)
-                } footer: {
-                    Text(lock.message ?? "Asks for Touch ID when Duo Desktop opens and after 5 minutes away.")
-                }
             }
             // HIG Toolbars, Titles: "Don't title windows with your app name" (DESIGN rule 7). The large title
             // sits under the clock's row; the About button is a system toolbar item in that row (rule 1).
@@ -116,11 +132,21 @@ struct MacListScreen: View {
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showAdd, onDismiss: probe) { AddMacSheet(store: list.store, identity: model.identity) }
             .navigationDestination(item: $settingsFor) { id in
-                MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id],
-                                  autoUnlockUnavailable: AutoUnlockRules.unavailableReason(
-                                      appLockOn: lock.required, deviceCanAuthenticate: AppLock.deviceCanAuthenticate()))
+                MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
+                                  identity: model.identity)
             }
             .modifier(RemoveMacAlert(mac: $removing) { list.store.remove($0.id) })
+            .alert("Turn Off Require Touch ID?", isPresented: $confirmLockOff) {
+                Button("Turn Off", role: .destructive) {
+                    Task {
+                        await lock.setRequired(false)
+                        if !lock.required { AutoUnlockSetting.appLockTurnedOff(store: list.store) }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(AutoUnlockRules.lockOffWarning(list.macs) ?? "")
+            }
             .onChange(of: settingsFor) { _, new in if new == nil { probe() } }
             .refreshable { probe() }
             .onAppear { probe() }
@@ -562,6 +588,23 @@ struct SessionScreen: View {
                     for i in 0..<50 {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 6 + Double(i) * 0.15 + (i >= 20 ? 3 : 0)) {
                             pad.move(dx: i < 20 ? 40 : -40, dy: 0, dt: 1)
+                        }
+                    }
+                }
+                .onAppear {
+                    // `--choose-screen N` (simulator only, README pictures): what choosing screen N in the name
+                    // bubble's menu does, once the session is up.
+                    guard let n = SimulatorSwitches.chooseScreen else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { model.chooseScreen(n) }
+                }
+                .onAppear {
+                    // `--pointer-walk` (simulator only, README pictures): moves through the real trackpad engine.
+                    let pad = parts.trackpad
+                    for w in SimulatorSwitches.pointerWalk {
+                        for i in 0..<w.n {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + w.at + Double(i) * 0.05) {
+                                pad.move(dx: w.dx, dy: w.dy, dt: 1)
+                            }
                         }
                     }
                 }

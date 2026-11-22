@@ -140,6 +140,21 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
     @ObservationIgnored private var size = (cols: 80, rows: 24)
     /// One line about the link, shown over the terminal when it is not connected.
     var status: String?
+    /// Why the last attempt failed, in plain words (nil while it is fine or still trying the first time).
+    var problem: TerminalProblem?
+
+    /// After the Mac's settings changed (from the problem's button): forget the old link and connect again.
+    func retry(_ entry: MacEntry?, store: MacStore) {
+        link?.stop()
+        link = nil
+        linkKey = nil
+        problem = nil
+        status = nil
+        whenAppOpen { [weak self] in
+            guard let self else { return }
+            TerminalKeyByHost.thenConnect(self, entry: entry, store: store)
+        }
+    }
     /// Review fixes (review finding 3): the Terminal view asked to connect while the app was not open (locked, or
     /// back before the lock decided). Run once the same unlock opens it; nothing (no key read, no Host request, no
     /// SSH) happens before.
@@ -181,8 +196,9 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
 
     /// Connects to the Mac in `entry` (its tailnet name, its SSH user, the phone's key), once per Mac and target.
     func connect(_ entry: MacEntry?) {
-        guard let entry, let user = entry.sshUser else {
-            status = "Set this Mac's SSH user name in its settings."; return
+        let hostUser = entry.flatMap { TerminalKeyByHost.states.state(for: $0.id)?.user }.flatMap { $0.isEmpty ? nil : $0 }
+        guard let entry, let user = entry.sshUser ?? hostUser else {
+            status = "Set this Mac's SSH user name in its settings."; problem = nil; return
         }
         guard let host = entry.address(.tailscale) ?? entry.address(.home) else { status = "This Mac has no address."; return }
         let k = "\(user)@\(host)"
@@ -194,13 +210,33 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             let l = TerminalLink(target: .init(host: host, user: user, hostKeyID: sshHostKeyID(mac: entry.id)),
                                  key: key, hostKeys: TerminalKeys.hostKeys)
             l.onOutput = { [weak self] b in DispatchQueue.main.async { self?.view.feed(byteArray: b[...]) } }
+            // Touch ID clarity B (the owner: "I typed the wrong name, but I never got any indication it wouldn't
+            // work"): each failure is told in plain words, also on the Mac's settings line (`TerminalProblems`).
+            let macID = entry.id
+            l.onAttemptFailed = { [weak self] error in
+                let kind = SSHFailureKind.of(error)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        let p = TerminalProblem.diagnose(kind, user: user, host: host,
+                                                         keyState: TerminalKeyByHost.states.state(for: macID))
+                        self?.problem = p
+                        TerminalProblems.shared.set(p, for: macID)
+                    }
+                }
+            }
             l.onState = { [weak self] st in
                 DispatchQueue.main.async {
-                    switch st {
-                    case .connected: self?.status = nil
-                    case .connecting, .waiting: self?.status = "Connecting to \(entry.name)…"
-                    case .stopped(let why): self?.status = why
-                    case .idle, .held: break
+                    MainActor.assumeIsolated {
+                        switch st {
+                        case .connected:
+                            self?.status = nil; self?.problem = nil
+                            TerminalProblems.shared.set(nil, for: macID)
+                        case .connecting, .waiting:
+                            if let p = self?.problem { self?.status = p.text + (p.retries ? " Trying again…" : "") }
+                            else { self?.status = "Connecting to \(entry.name)…" }
+                        case .stopped(let why): self?.status = self?.problem?.text ?? why
+                        case .idle, .held: break
+                        }
                     }
                 }
             }
@@ -270,14 +306,35 @@ struct TerminalPanel: View {
     let session: TerminalSession
     let entry: MacEntry?
     let store: MacStore
+    @State private var showSettings = false
 
     var body: some View {
         TerminalHost(session: session)
             .overlay(alignment: .top) {
                 if let s = session.status {
-                    Text(s).font(.footnote).padding(.horizontal, 10).padding(.vertical, 6)
-                        .glassEffect(.regular, in: .capsule).padding(8)
-                        .accessibilityIdentifier("terminalStatus")
+                    VStack(spacing: 8) {
+                        Text(s).font(.footnote).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("terminalStatus")
+                        // HIG Alerts/Feedback: say what happened and offer the one way to fix it, right there.
+                        if session.problem?.opensSettings == true, entry != nil {
+                            Button("Open \(entry?.name ?? "Mac") Settings") { showSettings = true }
+                                .buttonStyle(.glassProminent)
+                                .accessibilityIdentifier("terminalOpenSettings")
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 16)).padding(8)
+                }
+            }
+            .sheet(isPresented: $showSettings, onDismiss: { session.retry(entry.flatMap { store.entry($0.id) }, store: store) }) {
+                if let entry {
+                    NavigationStack {
+                        MacSettingsScreen(store: store, id: entry.id, chosen: nil)
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } }
+                            }
+                    }
                 }
             }
             .onAppear {
@@ -370,6 +427,7 @@ struct TerminalSettingsSection: View {
                 }))
                     .accessibilityIdentifier("settingsTerminal")
                 if entry.terminalOn {
+                    let hostUser = TerminalKeyByHost.states.state(for: id)?.user ?? ""
                     LabeledContent("SSH User Name") {
                         TextField("Not set", text: Binding(get: { store.entry(id)?.sshUser ?? "" }, set: { v in
                             let t = v.trimmingCharacters(in: .whitespaces)
@@ -381,9 +439,27 @@ struct TerminalSettingsSection: View {
                         .textContentType(.username)
                         .accessibilityIdentifier("settingsSSHUser")
                     }
+                    // Touch ID clarity B: the account the Host reported, and an in-place warning on a different
+                    // name (HIG: validate in place, say how to fix it, offer the fix).
+                    if !hostUser.isEmpty {
+                        Text("This Mac’s Host runs as \(hostUser).").foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settingsHostUser")
+                    }
+                    if let w = SSHUserRules.warning(typed: entry.sshUser, hostUser: hostUser) {
+                        Label(w, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("settingsSSHUserWarning")
+                        Button("Use \(hostUser)") { store.update(id) { $0.sshUser = hostUser } }
+                            .accessibilityIdentifier("settingsUseHostUser")
+                    }
+                    if let p = TerminalProblems.shared.problems[id] {
+                        Label(p.text, systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("settingsTerminalProblem")
+                    }
                 }
             } footer: {
-                Text("Adds Terminal to the view switch for this Mac.")
+                Text("Adds Terminal to the view switch for this Mac. Terminal signs in over SSH as the user name above.")
             }
             if entry.terminalOn {
                 Section {
@@ -592,6 +668,80 @@ struct TerminalKeyState: Codable, Equatable {
             if !s.tmuxPresent { missing.append("tmux is not installed") }
             return missing.isEmpty ? "Key installed on this Mac" : "Key installed on this Mac. " + missing.joined(separator: ". ") + "."
         }
+    }
+}
+
+// MARK: - Why a terminal sign-in failed (Touch ID clarity B)
+
+/// The SSH user name check, pure (tests).
+enum SSHUserRules {
+    /// A warning when the typed name differs from the account the Host runs as (nil: no warning).
+    static func warning(typed: String?, hostUser: String) -> String? {
+        let t = (typed ?? "").trimmingCharacters(in: .whitespaces)
+        guard !hostUser.isEmpty, !t.isEmpty, t != hostUser else { return nil }
+        return "The Host on this Mac runs as \(hostUser). Terminal signs in as that user unless Remote Login allows \(t)."
+    }
+}
+
+/// One failed terminal sign-in, in plain words, with what to do.
+enum TerminalProblem: Equatable {
+    /// The Mac refused the key for the typed name; the Host runs as another account (its key went there).
+    case wrongUser(typed: String, hostUser: String)
+    /// The Mac refused the key and the Host never said it installed it.
+    case keyNotInstalled
+    /// The Mac refused the key for the right name: it was removed, or the Mac no longer takes it.
+    case keyRefused(user: String)
+    /// Nothing answers on the SSH port.
+    case remoteLoginOff
+    /// No answer at all.
+    case notReachable(host: String)
+
+    static func diagnose(_ kind: SSHFailureKind, user: String, host: String, keyState: TerminalKeyState?) -> TerminalProblem {
+        switch kind {
+        case .signInRefused:
+            if let h = keyState?.user, !h.isEmpty, h != user { return .wrongUser(typed: user, hostUser: h) }
+            if keyState?.keyOnMac != true { return .keyNotInstalled }
+            return .keyRefused(user: user)
+        case .connectionRefused:
+            return .remoteLoginOff
+        case .notReachable:
+            return keyState?.remoteLoginOn == false ? .remoteLoginOff : .notReachable(host: host)
+        }
+    }
+
+    var text: String {
+        switch self {
+        case let .wrongUser(typed, hostUser):
+            "Wrong user name: the Mac refused the sign-in as “\(typed)”. This phone’s key was added for “\(hostUser)”, the account the Host runs as. Change the SSH user name in this Mac’s settings."
+        case .keyNotInstalled:
+            "This phone’s key is not installed on the Mac. Add it in this Mac’s settings."
+        case let .keyRefused(user):
+            "The Mac refused this phone’s key for “\(user)”. Add the key again in this Mac’s settings."
+        case .remoteLoginOff:
+            "Remote Login is off: the Mac is not taking SSH sign-ins. Turn it on in the Mac’s System Settings › General › Sharing."
+        case let .notReachable(host):
+            "Can’t reach \(host) for SSH. Check that this iPhone can reach the Mac."
+        }
+    }
+
+    /// The link keeps trying (the Mac may come back); a refused sign-in stops it.
+    var retries: Bool {
+        switch self {
+        case .remoteLoginOff, .notReachable: true
+        default: false
+        }
+    }
+
+    /// Fixed from this Mac's settings (user name, key).
+    var opensSettings: Bool { !retries }
+}
+
+/// The last problem per Mac, for the Mac's settings line (kept while the app runs).
+@MainActor @Observable final class TerminalProblems {
+    static let shared = TerminalProblems()
+    private(set) var problems: [String: TerminalProblem] = [:]
+    func set(_ p: TerminalProblem?, for mac: String) {
+        if problems[mac] != p { problems[mac] = p }
     }
 }
 

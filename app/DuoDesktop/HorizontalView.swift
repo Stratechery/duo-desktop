@@ -220,7 +220,14 @@ final class TouchKeyboardModel {
     @ObservationIgnored let engine: MacKeyboardEngine
     static let doubleTap: TimeInterval = 0.35
 
-    init(engine: MacKeyboardEngine) { self.engine = engine }
+    init(engine: MacKeyboardEngine) {
+        self.engine = engine
+        // `--hold-key-look ID` (simulator only, README pictures): that key is drawn pressed and stays so. Look only:
+        // nothing is typed.
+        if let id = SimulatorSwitches.holdKeyLook {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.shownKeys.insert(id) }
+        }
+    }
 
     /// The Mac key a character key sends now (capital with shift on the letters page).
     func macKey(for c: Character) -> MacKey? {

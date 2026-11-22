@@ -39,6 +39,33 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(id, "ssh:test-mac:22")
     }
 
+    /// Touch ID clarity B: nothing listening on the SSH port (Remote Login off) is told apart from other failures.
+    func testClosedPortIsConnectionRefused() async throws {
+        let key = try PhoneKey.file(FileManager.default.temporaryDirectory.appendingPathComponent("duo-closed-\(UUID())"))
+        do {
+            _ = try await SSHConnection.connect(host: "127.0.0.1", port: 1, user: "made-up-user", signIn: .key(key),
+                                                hostKeys: MemoryStore(), hostKeyID: "ssh:closed:1", timeout: .seconds(3))
+            XCTFail("connected to a closed port")
+        } catch {
+            XCTAssertEqual(SSHFailureKind.of(error), .connectionRefused, "\(error)")
+        }
+        XCTAssertEqual(SSHFailureKind.of(SSHSignInRefused()), .signInRefused)
+        XCTAssertEqual(SSHFailureKind.of(CancellationError()), .notReachable)
+    }
+
+    /// A made-up user name against this Mac's own sshd is a refused sign-in (what the owner saw as "no indication").
+    func testMadeUpUserIsSignInRefusedLive() async throws {
+        guard ProcessInfo.processInfo.environment["DUO_LIVE_SSH"] == "1" else { throw XCTSkip("live only") }
+        let key = try PhoneKey.file(FileManager.default.temporaryDirectory.appendingPathComponent("duo-user-\(UUID())"))
+        do {
+            _ = try await SSHConnection.connect(host: "127.0.0.1", user: "made-up-user", signIn: .key(key),
+                                                hostKeys: MemoryStore(), hostKeyID: "ssh:live-user:22")
+            XCTFail("signed in as a made-up user")
+        } catch {
+            XCTAssertEqual(SSHFailureKind.of(error), .signInRefused, "\(error)")
+        }
+    }
+
     /// A refused host key stops the connection before sign-in, so no shell can open: a real handshake against
     /// this Mac's own sshd with a made-up stored key. Skipped when Remote Login is not reachable.
     func testRefusedHostKeyOpensNoShellLive() async throws {

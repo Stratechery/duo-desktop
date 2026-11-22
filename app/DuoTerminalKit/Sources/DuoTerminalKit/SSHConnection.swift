@@ -11,6 +11,7 @@ public enum SSHSignIn: Sendable {
 }
 
 public struct SSHSignInRefused: Error, CustomStringConvertible, Sendable {
+    public init() {}
     public var description: String { "The Mac did not accept the sign-in." }
 }
 
@@ -221,5 +222,29 @@ final class ReadyWatcher: ChannelInboundHandler, @unchecked Sendable {
     func channelInactive(context: ChannelHandlerContext) {
         if !done { done = true; ready.fail(SSHSignInRefused()) }
         context.fireChannelInactive()
+    }
+}
+
+/// Touch ID clarity B: what kind of failure one SSH attempt was, for a plain message.
+public enum SSHFailureKind: Equatable, Sendable {
+    /// The Mac answered and refused the sign-in (the key, for this user name).
+    case signInRefused
+    /// Nothing is listening on the SSH port (Remote Login off): the connection was refused.
+    case connectionRefused
+    /// Anything else: no route, timed out, name not found.
+    case notReachable
+
+    public static func of(_ error: Error) -> SSHFailureKind {
+        if error is SSHSignInRefused { return .signInRefused }
+        if let io = error as? IOError, io.errnoCode == ECONNREFUSED { return .connectionRefused }
+        if let c = error as? NIOConnectionError,
+           c.connectionErrors.contains(where: { ($0.error as? IOError)?.errnoCode == ECONNREFUSED }) {
+            return .connectionRefused
+        }
+        if (error as NSError).domain == NSPOSIXErrorDomain, (error as NSError).code == Int(ECONNREFUSED) {
+            return .connectionRefused
+        }
+        if String(describing: error).localizedCaseInsensitiveContains("connection refused") { return .connectionRefused }
+        return .notReachable
     }
 }

@@ -211,7 +211,7 @@ enum KeyInfo {
     /// "lists the keys of the new layout and the two click buttons").
     /// project notes: the feature in one plain line.
     static let autoUnlockLine = Line(face: .symbol("lock.open"),
-                                     text: "With Unlock Automatically on in a Mac’s settings, a locked Mac unlocks by itself",
+                                     text: "With Unlock Automatically on in a Mac’s settings (it needs Require Touch ID), a locked Mac unlocks by itself",
                                      ids: ["auto-unlock"])
 
     static let clickLines: [Line] = [

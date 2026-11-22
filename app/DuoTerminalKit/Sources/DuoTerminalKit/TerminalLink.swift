@@ -24,6 +24,9 @@ public final class TerminalLink: @unchecked Sendable {
     let command: String
     public var onOutput: @Sendable ([UInt8]) -> Void = { _ in }
     public var onState: @Sendable (State) -> Void = { _ in }
+    /// Touch ID clarity B: each failed attempt's error (a refused sign-in too, just before `.stopped`), so the
+    /// app can say why in plain words (wrong user name, Remote Login off, not reachable, key not installed).
+    public var onAttemptFailed: @Sendable (Error) -> Void = { _ in }
     /// Review fixes (review finding 3): asked before every connect and retry, and before input is sent. The app
     /// passes its lock state; false = wait (parked, no attempt) until `wake()`.
     public var mayConnect: @Sendable () -> Bool = { true }
@@ -174,15 +177,17 @@ public final class TerminalLink: @unchecked Sendable {
                 guard owns(g) else { break }
                 lock.withLock { wanted = false }
                 onState(.stopped(e.description)); return
-            } catch is SSHSignInRefused where !a.isCancelled {
+            } catch let e as SSHSignInRefused where !a.isCancelled {
                 lock.withLock { if pending === a { pending = nil } }
                 guard owns(g) else { break }
                 lock.withLock { wanted = false }
+                onAttemptFailed(e)
                 onState(.stopped("The Mac did not accept this phone's key. Add it in the Mac's settings.")); return
             } catch {
                 lock.withLock { if pending === a { pending = nil } }
                 // Cancelled by the lock: no wait, the loop parks at once.
                 if a.isCancelled || !mayProceed(g) { continue }
+                if owns(g) { onAttemptFailed(error) }
             }
             guard owns(g) else { break }
             let wait = lock.withLock { () -> Double in attempt += 1; return min(0.25 * pow(2, Double(attempt - 1)), 8) }
