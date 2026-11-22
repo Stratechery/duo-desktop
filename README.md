@@ -15,7 +15,7 @@ It has two parts:
 **Read [Known issues](#known-issues) before you start.** This was built for one person's setup and is not a
 finished product. This page describes **build 0.1 (53)**.
 
-*All pictures on this page are the real app, in the iPhone Duo Simulator (upright pictures: build 53; sideways and outside pictures: build 49). The Macs in them are Glass
+*All pictures on this page are the real app, in the iPhone Duo Simulator (build 53). The Macs in them are Glass
 Act's test host (a stand-in Mac that draws a test picture) under made-up names. No real Mac is shown.*
 
 Contents:
@@ -41,7 +41,7 @@ Contents:
 
 | | |
 |---|---|
-| <img src="docs/images/01-mac-list.png" width="300" alt="The list of Macs: Studio Mac ready, Office Mac sign in needed, Laptop not reachable"> | **The list of Macs.** Each Mac you added, with its state: **Ready**, **Sign in needed** or **Not reachable**. Tap a Mac to connect. Tap **ⓘ** beside it for its settings. Below the Macs: the **Security** section, the **Trackpad** side (Left or Right), keyboard haptics and **Keyboard Shortcuts**. |
+| <img src="docs/images/01-mac-list.png" width="300" alt="The list of Macs: Studio Mac ready, Office Mac sign in needed, Laptop not reachable"> | **The list of Macs.** Each Mac you added, with its state: **Ready**, **Sign in needed** or **Not reachable**. Tap a Mac to connect. Tap **ⓘ** beside it for its settings. Below the Macs: the **Security** section, **This iPhone** (the phone's key), the **Trackpad** side (Left or Right) and **Keyboard Shortcuts**. Further down, below the picture: **Keyboard Haptics**. |
 
 ---
 
@@ -93,9 +93,9 @@ the side. The Mac keys keep their order.
 | |
 |---|
 | <img src="docs/images/12-horizontal.png" width="640" alt="Held sideways: the whole Mac screen, the trackpad and the button column"> |
-| **Sideways.** The whole Mac screen, the trackpad at one side and the button column at the other. This picture is from an earlier test with the trackpad set to the left. |
+| **Sideways.** The whole Mac screen, with the button column on the left and the trackpad at the bottom right (the trackpad on the right, the default). |
 | <img src="docs/images/13-horizontal-keyboard.png" width="640" alt="Held sideways with Duo Desktop's keyboard up"> |
-| **Typing sideways.** Duo Desktop's own keyboard, with Mac keys along the top (esc, tab, Control, Option, Command, Shift, arrows). Keys show a pop-up of the letter as you press them, like the iPhone's keyboard. Here the G key is held. |
+| **Typing sideways.** Duo Desktop's own keyboard, with Mac keys along the top (esc, tab, Control, Option, Command, Shift, arrows). Keys show a pop-up of the letter as you press them, like the iPhone's keyboard. Here the G key is held. The trackpad stays at the bottom right. |
 
 ---
 
