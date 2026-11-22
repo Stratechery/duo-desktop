@@ -1,0 +1,1259 @@
+diff --git a/Sources/GlassActCore/DisplayChoice.swift b/Sources/GlassActCore/DisplayChoice.swift
+new file mode 100644
+index 0000000..b44b701
+--- /dev/null
++++ b/Sources/GlassActCore/DisplayChoice.swift
+@@ -0,0 +1,60 @@
++// Duo Screens build (multi-screen): the Host's screen-choice rules, kept pure
++// so they are unit-tested (Tests/GlassActCoreTests/DisplayChoiceTests.swift)
++// and shared by the Host and the test host.
++
++public enum DisplayChoice {
++    /// A screen in global points (the main screen's top-left is 0,0).
++    public struct Rect: Equatable, Sendable {
++        public var x: Double, y: Double, width: Double, height: Double
++        public init(x: Double, y: Double, width: Double, height: Double) {
++            self.x = x; self.y = y; self.width = width; self.height = height
++        }
++        public func contains(_ px: Double, _ py: Double) -> Bool {
++            px >= x && py >= y && px < x + width && py < y + height
++        }
++    }
++
++    /// Which screen to share. The viewer's pick when the host offers it;
++    /// otherwise the main screen — never "the first one listed". `nil`
++    /// (nothing picked, e.g. an older app) is the main screen, as before.
++    public static func screenToShare(requested: UInt32?, offered: [UInt32], main: UInt32) -> UInt32 {
++        if let requested, requested != 0, offered.contains(requested) { return requested }
++        return main
++    }
++
++    /// Where the host puts the pointer on a switch: the asked-for point
++    /// clamped inside `screen` (one point in from each edge); no point asked
++    /// = the middle of the screen.
++    public static func pointerPlacement(asked: (x: Double, y: Double)?, on screen: Rect) -> (x: Double, y: Double) {
++        guard let asked else { return (screen.x + screen.width / 2, screen.y + screen.height / 2) }
++        let inset = 1.0
++        let x = min(max(asked.x, screen.x + min(inset, screen.width / 2)),
++                    screen.x + screen.width - min(inset, screen.width / 2))
++        let y = min(max(asked.y, screen.y + min(inset, screen.height / 2)),
++                    screen.y + screen.height - min(inset, screen.height / 2))
++        return (x, y)
++    }
++
++    /// Every move and click stays on the shown screen: a canvas position is
++    /// clamped to the picture (the last pixel), so nothing lands on a
++    /// neighbour. A deliberate crossing is a DISPLAY_SELECT, never a move.
++    public static func clampToCanvas(x: Int, y: Int, width: Int, height: Int) -> (x: Int, y: Int) {
++        (min(max(x, 0), max(width - 1, 0)), min(max(y, 0), max(height - 1, 0)))
++    }
++
++    /// Geometry modes the host refuses for every viewer: 1 (Client
++    /// Resolution — changes the Mac's resolution) and 4 (virtual display —
++    /// mirrors the real screens) become 2 (Scale). The owner 2026-11-21: "I think
++    /// it's important to not change the resolution on the Mac."
++    public static func allowedGeometryMode(_ mode: Int) -> Int {
++        (mode == 1 || mode == 4) ? 2 : mode
++    }
++
++    /// Scale: the screen's pixels aspect-fitted into the request, never
++    /// enlarged past the screen's own pixels, even sides.
++    public static func scaledSize(screen: (w: Int, h: Int), request: (w: Int, h: Int)) -> (w: Int, h: Int) {
++        guard screen.w > 0, screen.h > 0, request.w > 0, request.h > 0 else { return screen }
++        let f = min(Double(request.w) / Double(screen.w), Double(request.h) / Double(screen.h), 1)
++        return (max(2, Int(Double(screen.w) * f) & ~1), max(2, Int(Double(screen.h) * f) & ~1))
++    }
++}
+diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
+index 57f6539..c8021f6 100644
+--- a/Sources/GlassActCore/HostEngine.swift
++++ b/Sources/GlassActCore/HostEngine.swift
+@@ -621,6 +621,9 @@ public final class HostEngine: @unchecked Sendable {
+     /// Single-window mode (§4.10): the viewer picked a window (0 = revert to full
+     /// display). The app rebuilds its SCK capture filter around that window.
+     public var onWindowSelect: ((_ windowID: UInt32) -> Void)?
++    /// Duo Screens build (multi-screen): DISPLAY_SELECT — share this screen
++    /// (0 = send the list), optionally placing the pointer (global points).
++    public var onDisplaySelect: ((_ displayID: UInt32, _ placePointer: Bool, _ x: Int32, _ y: Int32) -> Void)?
+     /// Single-window mode: the viewer issued a window-chrome action (see
+     /// WindowAction). The app drives the host window via Accessibility
+     /// (fullscreen / resize) or ends the single-window session.
+@@ -674,6 +677,19 @@ public final class HostEngine: @unchecked Sendable {
+         sendControl(.windowControl(action: WindowAction.endSession, width: 0, height: 0))
+     }
+ 
++    /// Duo Screens build (multi-screen): push the screen list (DISPLAY_LIST).
++    /// Dropped, not sent, if it would exceed maxBodyLength (sendControl's bound).
++    public func sendDisplayList(_ displays: [WireDisplay]) {
++        guard state == .running else { return }
++        sendControl(.displayList(displays: displays))
++    }
++
++    /// Duo Screens build (multi-screen): answer one DISPLAY_SELECT (DISPLAY_SELECTED).
++    public func sendDisplaySelected(_ result: WireDisplaySelection) {
++        guard state == .running else { return }
++        sendControl(.displaySelected(result))
++    }
++
+     public func sendWindowList(_ windows: [WireWindow]) {
+         guard state == .running else { return }
+         sendControl(.windowList(windows: windows))
+@@ -950,6 +966,8 @@ public final class HostEngine: @unchecked Sendable {
+                                    preferSmoothness: pref == 2)
+             case let .windowSelect(windowID):
+                 onWindowSelect?(windowID)
++            case let .displaySelect(displayID, place, x, y):
++                onDisplaySelect?(displayID, place, x, y)
+             case let .windowControl(action, width, height):
+                 onWindowControl?(action, width, height)
+             case let .viewerLog(name, offset, total, data):
+@@ -973,7 +991,7 @@ public final class HostEngine: @unchecked Sendable {
+                 linkEstimate.noteReceived(bytes: bytes, viewerTUS: tUS, nowUS: nowUS, queued: queued)
+             case let .syncRequest(region, generation):
+                 noteSyncRequest(region: region, generation: generation)
+-            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice:
++            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected:
+                 break // host-originated / not addressed to the host
+             }
+         }
+@@ -1015,7 +1033,7 @@ public final class HostEngine: @unchecked Sendable {
+             return k != 3 && k != 6 // mouse-up, key-up
+         case let .windowControl(action, _, _):
+             return action != WindowAction.endSession
+-        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize:
++        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect:
+             return true
+         default:
+             return false
+diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
+index b0b8388..880bcb4 100644
+--- a/Sources/GlassActCore/ViewerEngine.swift
++++ b/Sources/GlassActCore/ViewerEngine.swift
+@@ -110,6 +110,10 @@ public final class ViewerEngine: @unchecked Sendable {
+     /// Single-window mode: host → viewer, the pickable-window snapshot.
+     /// The app shows the picker; the choice comes back via sendWindowSelect.
+     public var onWindowList: ((_ windows: [WireWindow]) -> Void)?
++    /// Duo Screens build (multi-screen): host → viewer, the screen list.
++    public var onDisplayList: ((_ displays: [WireDisplay]) -> Void)?
++    /// Duo Screens build (multi-screen): host → viewer, the answer to a DISPLAY_SELECT.
++    public var onDisplaySelected: ((_ result: WireDisplaySelection) -> Void)?
+     /// The host ended the session on purpose (someone at the Mac disconnected
+     /// this viewer, or in single-window mode the shared window closed). The
+     /// app shows why and does NOT redial.
+@@ -132,6 +136,12 @@ public final class ViewerEngine: @unchecked Sendable {
+     public var onGeometryChanged: ((_ width: Int, _ height: Int) -> Void)?
+     /// Single-window mode: viewer → host, pick a window from the last
+     /// WINDOW_LIST (0 reverts to full display).
++    /// Duo Screens build (multi-screen): share this screen (0 = send the list),
++    /// optionally placing the pointer at a global point as part of the switch.
++    public func sendDisplaySelect(displayID: UInt32, placePointer: Bool = false, x: Int32 = 0, y: Int32 = 0) {
++        guard state == .running else { return }
++        sendControl(.displaySelect(displayID: displayID, placePointer: placePointer, pointerX: x, pointerY: y))
++    }
+     public func sendWindowSelect(windowID: UInt32) {
+         guard state == .running else { return }
+         sendControl(.windowSelect(windowID: windowID))
+@@ -468,6 +478,10 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onClipboard?(format, data)
+             case let .windowList(windows):
+                 onWindowList?(windows)
++            case let .displayList(displays):
++                onDisplayList?(displays)
++            case let .displaySelected(result):
++                onDisplaySelected?(result)
+             case let .windowControl(action, _, _):
+                 // Host → viewer endSession: the session is over, not interrupted —
+                 // someone at the Mac disconnected this viewer, or the shared window
+@@ -484,7 +498,7 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onHostNotice?(code)
+             case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
+                  .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
+-                 .viewerInfo, .syncRequest, .received, .viewerBye:
++                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect:
+                 break // viewer-originated / not addressed to the viewer
+             }
+         }
+diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
+index 77e3b05..9ace4f8 100644
+--- a/Sources/GlassActSession/ViewerController.swift
++++ b/Sources/GlassActSession/ViewerController.swift
+@@ -231,6 +231,12 @@ public final class ViewerController: @unchecked Sendable {
+ 
+     /// Fired when the host's pickable-window snapshot arrives.
+     public var onWindowList: (([WireWindow]) -> Void)?
++    /// Duo Screens build (multi-screen): the host's screen list (main thread).
++    public var onDisplayList: (([WireDisplay]) -> Void)?
++    /// Duo Screens build (multi-screen): the host's answer to each screen choice
++    /// (main thread): the screen now shared, its place, the picture size, the
++    /// pointer it placed, or a refusal. Choices are serialized until each answer.
++    public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
+     /// Main thread: the host ended the session on purpose (shared window
+     /// closed) — show why, don't redial.
+     public var onHostEndedSession: ((String) -> Void)?
+@@ -345,6 +351,15 @@ public final class ViewerController: @unchecked Sendable {
+     /// Pick a window (the host swaps its capture filter and re-HELLOs in
+     /// place — see onGeometryChanged).
+     public func selectWindow(_ id: UInt32) { session.selectWindow(id) }
++    /// Duo Screens build (multi-screen). True when the host lists screens.
++    public func hostSupportsDisplayList() -> Bool { session.hostSupportsDisplayList() }
++    /// Duo Screens build (multi-screen): a screen choice is waiting for its answer.
++    public func displaySelectPending() -> Bool { session.displaySelectPending() }
++    /// Duo Screens build (multi-screen): 0 = ask for the list; else share that screen,
++    /// with the host placing the pointer at `pointerAt` (global points) if given.
++    public func selectDisplay(_ id: UInt32, pointerAt point: (x: Int32, y: Int32)? = nil) {
++        session.selectDisplay(id, pointerAt: point)
++    }
+     /// A window-chrome action (fullscreen / resize / endSession).
+     public func windowControl(action: UInt8, width: Int = 0, height: Int = 0) {
+         session.windowControl(action: action, width: width, height: height)
+@@ -429,6 +444,8 @@ public final class ViewerController: @unchecked Sendable {
+             self?.agentDriver?.noteHostClipboard(format: format, data: data)
+             self?.applyInboundClipboard(format, data)
+         }
++        session.onDisplayList = { [weak self] displays in self?.onDisplayList?(displays) }
++        session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
+         session.onWindowList = { [weak self] windows in
+             self?.agentDriver?.noteWindowList(windows)
+             self?.onWindowList?(windows)
+diff --git a/Sources/GlassActSession/ViewerSession.swift b/Sources/GlassActSession/ViewerSession.swift
+index 430dace..bc7a6b8 100644
+--- a/Sources/GlassActSession/ViewerSession.swift
++++ b/Sources/GlassActSession/ViewerSession.swift
+@@ -72,6 +72,16 @@ public final class ViewerSession: @unchecked Sendable {
+     public var onHostKeyChanged: ((_ expected: String, _ presented: String) -> Void)?
+     /// Main: the host's pickable-window snapshot.
+     public var onWindowList: (([WireWindow]) -> Void)?
++    /// Duo Screens build (multi-screen): the host's screen list (main thread).
++    public var onDisplayList: (([WireDisplay]) -> Void)?
++    /// Duo Screens build (multi-screen): the answer to each screen choice (main
++    /// thread), in order. A choice still waiting when the connection ends is
++    /// answered `.connectionLost`.
++    public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
++    /// `queue`: the choice sent and not yet answered, and the one waiting behind
++    /// it (a newer one replaces an older waiting one). Selections are serialized.
++    private var displaySelectInFlight: (id: UInt32, point: (x: Int32, y: Int32)?)?
++    private var displaySelectQueued: (id: UInt32, point: (x: Int32, y: Int32)?)?
+     /// Main: the host ended the session on purpose — show why, don't redial.
+     public var onHostEndedSession: ((String) -> Void)?
+     /// Main thread: the host runs a different build (its wire version);
+@@ -166,6 +176,18 @@ public final class ViewerSession: @unchecked Sendable {
+         engine.onClipboard = { [weak self] format, data in
+             DispatchQueue.main.async { self?.onClipboard?(format, data) }
+         }
++        engine.onDisplayList = { [weak self] displays in
++            DispatchQueue.main.async { self?.onDisplayList?(displays) }
++        }
++        engine.onDisplaySelected = { [weak self] result in // engine queue = `queue`
++            guard let self else { return }
++            self.displaySelectInFlight = nil
++            DispatchQueue.main.async { self.onDisplaySelected?(result) }
++            if let next = self.displaySelectQueued {
++                self.displaySelectQueued = nil
++                self.sendDisplaySelectNow(next.id, next.point)
++            }
++        }
+         engine.onWindowList = { [weak self] windows in
+             DispatchQueue.main.async { self?.onWindowList?(windows) }
+         }
+@@ -210,6 +232,7 @@ public final class ViewerSession: @unchecked Sendable {
+                 self.tickTimer?.cancel()
+                 self.tickTimer = nil
+                 self.onTransportEnded?()
++                self.failPendingDisplaySelects() // Duo Screens build (multi-screen)
+                 guard !self.failureReported else { return }
+                 self.failureReported = true
+                 switch ViewerSessionEnd.classify(
+@@ -317,6 +340,59 @@ public final class ViewerSession: @unchecked Sendable {
+         queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: 0) }
+     }
+ 
++    /// Duo Screens build (multi-screen): share this screen (0 = just send the
++    /// list); with a point, the host places the pointer there (global points).
++    /// A real screen choice is serialized: while one waits for its
++    /// DISPLAY_SELECTED, the next waits (only the newest), then goes.
++    public func selectDisplay(_ id: UInt32, pointerAt point: (x: Int32, y: Int32)? = nil) {
++        queue.async { [weak self] in
++            guard let self else { return }
++            if id == 0 {
++                self.engine.sendDisplaySelect(displayID: 0)
++            } else if let waiting = self.displaySelectInFlight {
++                if let dropped = self.displaySelectQueued {
++                    self.onStatus("screen choice \(dropped.id) replaced by \(id) while \(waiting.id) is pending")
++                }
++                self.displaySelectQueued = (id, point)
++            } else {
++                self.sendDisplaySelectNow(id, point)
++            }
++        }
++    }
++
++    /// `queue`.
++    private func sendDisplaySelectNow(_ id: UInt32, _ point: (x: Int32, y: Int32)?) {
++        guard engine.state == .running else {
++            let result = WireDisplaySelection(requestedID: id, status: .connectionLost, displayID: 0)
++            DispatchQueue.main.async { self.onDisplaySelected?(result) }
++            return
++        }
++        displaySelectInFlight = (id, point)
++        engine.sendDisplaySelect(displayID: id, placePointer: point != nil, x: point?.x ?? 0, y: point?.y ?? 0)
++    }
++
++    /// `queue`: the connection ended; answer what was waiting.
++    private func failPendingDisplaySelects() {
++        let ids = [displaySelectInFlight?.id, displaySelectQueued?.id].compactMap { $0 }
++        displaySelectInFlight = nil
++        displaySelectQueued = nil
++        guard !ids.isEmpty else { return }
++        DispatchQueue.main.async {
++            for id in ids {
++                self.onDisplaySelected?(WireDisplaySelection(requestedID: id, status: .connectionLost, displayID: 0))
++            }
++        }
++    }
++
++    /// True while a screen choice waits for its answer (`queue`-safe from any thread).
++    public func displaySelectPending() -> Bool {
++        queue.sync { displaySelectInFlight != nil || displaySelectQueued != nil }
++    }
++
++    public func hostSupportsDisplayList() -> Bool {
++        queue.sync { engine.hostCaps & WireCaps.displayList != 0 }
++    }
++
+     /// Share one window (0 = back to the whole display).
+     public func selectWindow(_ id: UInt32) {
+         queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: id) }
+diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
+index 6520511..3493000 100644
+--- a/Sources/GlassActWire/Control.swift
++++ b/Sources/GlassActWire/Control.swift
+@@ -3,6 +3,98 @@
+ /// `thumbFormat` (1 = WebP-lossy, 2 = AVIF-still, 0 = none) at
+ /// `thumbWidth`×`thumbHeight`. All fields are advisory display metadata — the
+ /// only load-bearing value is `windowID`, echoed back in WINDOW_SELECT.
++/// Duo Screens build (multi-screen): one of the host's screens, in DISPLAY_LIST.
++/// Place and size are in global points (macOS display space: the main screen's
++/// top-left is 0,0; others may be negative). `pixelsPerPoint100` is the backing
++/// scale × 100 (200 = Retina); `rotation` in degrees; thumbnail as WireWindow.
++public struct WireDisplay: Equatable, Sendable {
++    public var displayID: UInt32
++    public var name: String
++    public var x: Int32
++    public var y: Int32
++    public var width: UInt16
++    public var height: UInt16
++    public var pixelsPerPoint100: UInt16
++    public var rotation: UInt16
++    public var isMain: Bool
++    /// The screen being shared right now.
++    public var isShown: Bool
++    public var thumbFormat: UInt8
++    public var thumbWidth: UInt16
++    public var thumbHeight: UInt16
++    public var thumb: [UInt8]
++
++    public init(displayID: UInt32, name: String, x: Int32, y: Int32, width: UInt16, height: UInt16,
++                pixelsPerPoint100: UInt16 = 100, rotation: UInt16 = 0, isMain: Bool, isShown: Bool,
++                thumbFormat: UInt8 = 0, thumbWidth: UInt16 = 0, thumbHeight: UInt16 = 0, thumb: [UInt8] = []) {
++        self.displayID = displayID
++        self.name = name
++        self.x = x
++        self.y = y
++        self.width = width
++        self.height = height
++        self.pixelsPerPoint100 = pixelsPerPoint100
++        self.rotation = rotation
++        self.isMain = isMain
++        self.isShown = isShown
++        self.thumbFormat = thumbFormat
++        self.thumbWidth = thumbWidth
++        self.thumbHeight = thumbHeight
++        self.thumb = thumb
++    }
++}
++
++/// Duo Screens build (multi-screen): the host's answer to one DISPLAY_SELECT
++/// (DISPLAY_SELECTED, type 0x62). Sent once the switch is committed (the new
++/// session is running at the new screen's size) or refused. It says which
++/// screen is now shared (on a refusal: the one still shared), where it sits
++/// (global points), the picture size it is sent at (pixels; the mapping is
++/// picture → that rect), and where the host put the pointer (global points).
++/// Picture-ready is separate: the first frame of the new screen.
++public struct WireDisplaySelection: Equatable, Sendable {
++    public enum Status: UInt8, Sendable {
++        case ok = 0
++        /// The screen is not offered (unknown, gone, or hidden): nothing changed.
++        case notOffered = 1
++        /// Not now (window sharing, no capture): nothing changed.
++        case notNow = 2
++        /// The host tried and the capture could not be rebuilt.
++        case failed = 3
++        /// Viewer-side only: the connection ended before an answer.
++        case connectionLost = 255
++    }
++    public var requestedID: UInt32
++    public var status: Status
++    public var displayID: UInt32
++    public var x: Int32
++    public var y: Int32
++    public var width: UInt16
++    public var height: UInt16
++    public var pictureWidth: UInt16
++    public var pictureHeight: UInt16
++    public var pointerPlaced: Bool
++    public var pointerX: Int32
++    public var pointerY: Int32
++
++    public init(requestedID: UInt32, status: Status, displayID: UInt32, x: Int32 = 0, y: Int32 = 0,
++                width: UInt16 = 0, height: UInt16 = 0, pictureWidth: UInt16 = 0, pictureHeight: UInt16 = 0,
++                pointerPlaced: Bool = false, pointerX: Int32 = 0, pointerY: Int32 = 0) {
++        self.requestedID = requestedID
++        self.status = status
++        self.displayID = displayID
++        self.x = x
++        self.y = y
++        self.width = width
++        self.height = height
++        self.pictureWidth = pictureWidth
++        self.pictureHeight = pictureHeight
++        self.pointerPlaced = pointerPlaced
++        self.pointerX = pointerX
++        self.pointerY = pointerY
++    }
++    public var succeeded: Bool { status == .ok }
++}
++
+ public struct WireWindow: Equatable, Sendable {
+     public var windowID: UInt32
+     public var appName: String
+@@ -252,6 +344,19 @@ public enum ControlMessage: Equatable, Sendable {
+     /// window; the pinned-video path takes over unchanged. `windowID == 0`
+     /// reverts to full-display.
+     case windowSelect(windowID: UInt32)
++    /// Duo Screens build (multi-screen) — host → viewer: every screen the host
++    /// offers, with place, size and a small picture. Sent on DISPLAY_SELECT 0
++    /// and again whenever screens are added, removed or moved. Type 0x60.
++    case displayList(displays: [WireDisplay])
++    /// Duo Screens build (multi-screen) — viewer → host: share this screen
++    /// (`displayID` from DISPLAY_LIST); 0 = just send the list. When `placePointer`
++    /// is set the host, as part of the switch, puts the pointer at (`pointerX`,
++    /// `pointerY`) in global points, clamped inside the new screen (a drag if a
++    /// button is held). Type 0x61.
++    case displaySelect(displayID: UInt32, placePointer: Bool, pointerX: Int32, pointerY: Int32)
++    /// Duo Screens build (multi-screen) — host → viewer: the answer to one
++    /// DISPLAY_SELECT (not to 0, which is answered by DISPLAY_LIST). Type 0x62.
++    case displaySelected(WireDisplaySelection)
+     /// Single-window mode — viewer → host: a window-chrome action on the
+     /// shared window:
+     ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
+@@ -373,6 +478,9 @@ public enum ControlMessage: Equatable, Sendable {
+         case .received: 0x1C
+         case .hostNotice: 0x1D
+         case .viewerBye: 0x1E
++        case .displayList: 0x60
++        case .displaySelect: 0x61
++        case .displaySelected: 0x62
+         }
+     }
+ 
+@@ -554,6 +662,45 @@ public enum ControlMessage: Equatable, Sendable {
+             body.writeU8(code)
+         case let .viewerBye(reason):
+             body.writeU8(reason)
++        case let .displayList(displays):
++            precondition(displays.count <= 255)
++            body.writeU8(UInt8(displays.count))
++            for d in displays {
++                let n = Array(d.name.utf8)
++                body.writeU32(d.displayID)
++                body.writeVarint(UInt32(n.count))
++                body.writeBytes(n)
++                body.writeU32(UInt32(bitPattern: d.x))
++                body.writeU32(UInt32(bitPattern: d.y))
++                body.writeU16(d.width)
++                body.writeU16(d.height)
++                body.writeU16(d.pixelsPerPoint100)
++                body.writeU16(d.rotation)
++                body.writeU8((d.isMain ? 1 : 0) | (d.isShown ? 2 : 0))
++                body.writeU8(d.thumbFormat)
++                body.writeU16(d.thumbWidth)
++                body.writeU16(d.thumbHeight)
++                body.writeVarint(UInt32(d.thumb.count))
++                body.writeBytes(d.thumb)
++            }
++        case let .displaySelect(displayID, placePointer, pointerX, pointerY):
++            body.writeU32(displayID)
++            body.writeU8(placePointer ? 1 : 0)
++            body.writeU32(UInt32(bitPattern: pointerX))
++            body.writeU32(UInt32(bitPattern: pointerY))
++        case let .displaySelected(r):
++            body.writeU32(r.requestedID)
++            body.writeU8(r.status.rawValue)
++            body.writeU32(r.displayID)
++            body.writeU32(UInt32(bitPattern: r.x))
++            body.writeU32(UInt32(bitPattern: r.y))
++            body.writeU16(r.width)
++            body.writeU16(r.height)
++            body.writeU16(r.pictureWidth)
++            body.writeU16(r.pictureHeight)
++            body.writeU8(r.pointerPlaced ? 1 : 0)
++            body.writeU32(UInt32(bitPattern: r.pointerX))
++            body.writeU32(UInt32(bitPattern: r.pointerY))
+         }
+         return body.bytes
+     }
+@@ -735,6 +882,44 @@ public enum ControlMessage: Equatable, Sendable {
+         case 0x1E:
+             guard let reason = r.readU8() else { return nil }
+             return .viewerBye(reason: reason)
++        case 0x60:
++            // Every screen is ≥ 26 bytes: bound the reservation by the body.
++            guard let count = r.readU8(), Int(count) <= r.remaining / 26 else { return nil }
++            var displays: [WireDisplay] = []
++            displays.reserveCapacity(Int(count))
++            for _ in 0..<count {
++                guard let id = r.readU32(),
++                      let nameLen = r.readVarint(), let name = unsafe r.readBytes(Int(nameLen)),
++                      let x = r.readU32(), let y = r.readU32(),
++                      let w = r.readU16(), let h = r.readU16(),
++                      let ppp = r.readU16(), let rot = r.readU16(),
++                      let flags = r.readU8(), let fmt = r.readU8(), fmt <= 2,
++                      let tw = r.readU16(), let th = r.readU16(),
++                      let thumbLen = r.readVarint(), let thumb = unsafe r.readBytes(Int(thumbLen))
++                else { return nil }
++                unsafe displays.append(WireDisplay(
++                    displayID: id, name: String(decoding: name, as: UTF8.self),
++                    x: Int32(bitPattern: x), y: Int32(bitPattern: y), width: w, height: h,
++                    pixelsPerPoint100: ppp, rotation: rot,
++                    isMain: flags & 1 != 0, isShown: flags & 2 != 0,
++                    thumbFormat: fmt, thumbWidth: tw, thumbHeight: th, thumb: [UInt8](thumb)))
++            }
++            return .displayList(displays: displays)
++        case 0x61:
++            guard let id = r.readU32(), let place = r.readU8(), place <= 1,
++                  let x = r.readU32(), let y = r.readU32() else { return nil }
++            return .displaySelect(displayID: id, placePointer: place == 1,
++                                  pointerX: Int32(bitPattern: x), pointerY: Int32(bitPattern: y))
++        case 0x62:
++            guard let req = r.readU32(), let raw = r.readU8(), let status = WireDisplaySelection.Status(rawValue: raw),
++                  status != .connectionLost, let id = r.readU32(),
++                  let x = r.readU32(), let y = r.readU32(), let w = r.readU16(), let h = r.readU16(),
++                  let pw = r.readU16(), let ph = r.readU16(), let placed = r.readU8(), placed <= 1,
++                  let px = r.readU32(), let py = r.readU32() else { return nil }
++            return .displaySelected(WireDisplaySelection(
++                requestedID: req, status: status, displayID: id, x: Int32(bitPattern: x), y: Int32(bitPattern: y),
++                width: w, height: h, pictureWidth: pw, pictureHeight: ph, pointerPlaced: placed == 1,
++                pointerX: Int32(bitPattern: px), pointerY: Int32(bitPattern: py)))
+         default:
+             return nil
+         }
+@@ -743,7 +928,7 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Known TLV types. Everything beyond is skipped by the deframer
+     /// using its declared length.
+     public static func isKnownType(_ t: UInt8) -> Bool {
+-        (0x01...0x1E).contains(t)
++        (0x01...0x1E).contains(t) || (0x60...0x62).contains(t) // Duo Screens build (multi-screen)
+     }
+ }
+ 
+diff --git a/Sources/GlassActWire/Video.swift b/Sources/GlassActWire/Video.swift
+index 1143f23..08660cc 100644
+--- a/Sources/GlassActWire/Video.swift
++++ b/Sources/GlassActWire/Video.swift
+@@ -54,6 +54,10 @@ public enum WireCaps {
+     /// TEXT_INPUT, AGENT_STATE, UI_TREE_REQUEST and agent-flagged INPUT, and
+     /// answers with AGENT_SCOPE / UI_TREE.
+     public static let agentControl: UInt32 = 1 << 11
++    /// Duo Screens build (multi-screen): the host lists its screens
++    /// (DISPLAY_LIST) and shares the one the viewer picks (DISPLAY_SELECT).
++    /// A high bit, far from upstream's, so a future upstream bit cannot clash.
++    public static let displayList: UInt32 = 1 << 31
+ 
+     /// Caps bit advertising support for a given region codec id. The rig-only
+     /// mock ids map onto the real bits (0x7F → HEVC bit, 0x7E → AV1 bit) so
+diff --git a/Sources/glassact-testhost/main.swift b/Sources/glassact-testhost/main.swift
+index a8a8435..9295331 100644
+--- a/Sources/glassact-testhost/main.swift
++++ b/Sources/glassact-testhost/main.swift
+@@ -5,6 +5,8 @@ import GlassActCore
+ import GlassActHybridVideo
+ import GlassActTransport
+ import GlassActWire
++import ImageIO // Duo Screens build (multi-screen): screen pictures
++import UniformTypeIdentifiers
+ 
+ // `glassact-testhost`: a Host with a synthetic screen, for developing a
+ // Viewer without sharing a real one. It speaks the real protocol (QUIC,
+@@ -33,6 +35,9 @@ struct Options {
+     /// viewer's geometry settles, send the picture at W x H while the screen keeps its size, as the Host's
+     /// auto-scale does on a slow link (`HostController.handleScalePressureConstrained`).
+     var pictureSteps: [(at: Double, w: Int, h: Int)] = []
++    /// Duo Screens build (multi-screen): `--displays` fakes four screens of different shapes, laid out as
++    /// on a desk with a gap, offered by DISPLAY_LIST and switched by DISPLAY_SELECT.
++    var displays = false
+ 
+     static func parse(_ args: [String]) -> Options {
+         var o = Options()
+@@ -49,6 +54,7 @@ struct Options {
+             case "--still": o.motion = false
+             case "--sign-in-password": o.signInPassword = next()
+             case "--ask-after": o.askAfter = next().flatMap(Double.init)
++            case "--displays": o.displays = true
+             case "--picture-steps":
+                 o.pictureSteps = (next() ?? "").split(separator: ",").compactMap { step in
+                     let ts = step.split(separator: ":")
+@@ -93,6 +99,9 @@ final class Scene {
+     private var dragPoints = 0
+     private var scrollTotal = (x: 0, y: 0)
+     private var startUS = MonotonicClock.nowUS
++    /// Duo Screens build (multi-screen): the fake screen's name in the header, and a tint per screen.
++    var screenName = ""
++    var tint: (r: CGFloat, g: CGFloat, b: CGFloat) = (0.12, 0.16, 0.20)
+ 
+     init(width: Int, height: Int, motion: Bool) {
+         self.width = width
+@@ -102,6 +111,12 @@ final class Scene {
+         pointer = (width / 2, height / 2)
+     }
+ 
++    /// Duo Screens build (multi-screen): the pointer placed by a screen switch, in this screen's pixels.
++    func placePointer(x: Int, y: Int) {
++        pointer = (min(max(x, 0), width - 1), min(max(y, 0), height - 1))
++        trail.removeAll()
++    }
++
+     func resize(width: Int, height: Int) {
+         self.width = width
+         self.height = height
+@@ -254,7 +269,7 @@ final class Scene {
+ 
+     private func draw(in ctx: CGContext, nowUS: UInt64) {
+         let w = CGFloat(width), h = CGFloat(height)
+-        ctx.setFillColor(red: 0.12, green: 0.16, blue: 0.20, alpha: 1)
++        ctx.setFillColor(red: tint.r, green: tint.g, blue: tint.b, alpha: 1) // Duo Screens build (multi-screen)
+         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+         // A 64 px grid: one line per tile edge.
+         ctx.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 0.06)
+@@ -266,7 +281,7 @@ final class Scene {
+         ctx.setFillColor(red: 0.05, green: 0.08, blue: 0.10, alpha: 1)
+         ctx.fill(CGRect(x: 0, y: 0, width: w, height: 44))
+         let clock = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+-        text(ctx, "Glass Act test host · \(width)×\(height) · \(clock)", x: 16, y: 30, size: 20, bold: true)
++        text(ctx, "Glass Act test host · \(screenName.isEmpty ? "" : screenName + " · ")\(width)×\(height) · \(clock)", x: 16, y: 30, size: 20, bold: true)
+ 
+         // Fine text to judge sharpness.
+         let panel = CGRect(x: 24, y: 68, width: min(760, w - 48), height: min(330, h - 100))
+@@ -398,10 +413,32 @@ final class TestHost: @unchecked Sendable {
+     var settledAt: Date?
+     var stepsDone = 0
+     var pictureSize: (w: Int, h: Int) { picture ?? (scene.width, scene.height) }
++    // Duo Screens build (multi-screen): the fake screens, the one shown, and the viewer's last Scale request.
++    struct FakeScreen {
++        let id: UInt32, name: String, x: Int32, y: Int32, w: Int, h: Int, ppp: Int, rotation: Int
++        let tint: (r: CGFloat, g: CGFloat, b: CGFloat)
++        var rect: DisplayChoice.Rect { .init(x: Double(x), y: Double(y), width: Double(w), height: Double(h)) }
++    }
++    /// Main 16:9 at 0,0; a 16:10 on its left; a portrait on its right with a 40-point gap; "Top", the same
++    /// size as Main, right above it (two EQUAL-sized screens: a switch between them changes no picture
++    /// size, so only DISPLAY_SELECTED says it happened — the reviewer P1). Sizes in points.
++    static let fakeScreens: [FakeScreen] = [
++        FakeScreen(id: 1, name: "Main", x: 0, y: 0, w: 1920, h: 1080, ppp: 200, rotation: 0, tint: (0.12, 0.16, 0.20)),
++        FakeScreen(id: 2, name: "Left 16:10", x: -1680, y: 30, w: 1680, h: 1050, ppp: 200, rotation: 0, tint: (0.10, 0.22, 0.14)),
++        FakeScreen(id: 3, name: "Portrait", x: 1960, y: -420, w: 1080, h: 1920, ppp: 100, rotation: 90, tint: (0.24, 0.12, 0.12)),
++        FakeScreen(id: 4, name: "Top", x: 0, y: -1080, w: 1920, h: 1080, ppp: 200, rotation: 0, tint: (0.18, 0.12, 0.26)),
++    ]
++    var shownScreen: UInt32 = 1
++    var scaleRequest: (w: Int, h: Int)?
+ 
+     init(options: Options) {
+         self.options = options
+         scene = Scene(width: options.width, height: options.height, motion: options.motion)
++        if options.displays { // Duo Screens build (multi-screen): start on Main, at its own size
++            showScreen(Self.fakeScreens[0])
++            Scene.log("faking \(Self.fakeScreens.count) screens: " + Self.fakeScreens.map {
++                "\($0.id) \($0.name) \($0.w)×\($0.h) at \($0.x),\($0.y)" }.joined(separator: "; "))
++        }
+     }
+ 
+     /// `--ask-after`: refuse `fp` until `wait` seconds after its first dial,
+@@ -489,6 +526,7 @@ final class TestHost: @unchecked Sendable {
+         self.transport = transport
+         geometrySettled = false
+         picture = nil // Duo Screens build (picture size): a new session starts at the screen's size
++        if options.displays, shownScreen != 1 { showScreen(Self.fakeScreens[0]) } // a new session: main
+         settledAt = nil
+         stepsDone = 0
+         transport.onControl = { [weak self] data in self?.engine?.handleControl(data, nowUS: MonotonicClock.nowUS) }
+@@ -519,6 +557,13 @@ final class TestHost: @unchecked Sendable {
+             startFrameSeq: startFrameSeq,
+             clock: { MonotonicClock.nowUS })
+         engine.extraHelloCaps = (geometrySettled ? WireCaps.geometryFinal : 0) | WireCaps.virtualDisplay
++            | (options.displays ? WireCaps.displayList : 0) // Duo Screens build (multi-screen)
++        if options.displays {
++            engine.onDisplaySelect = { [weak self] id, place, x, y in
++                self?.selectDisplay(id, place: place ? (Double(x), Double(y)) : nil)
++            }
++            engine.onFirstVideoFrame = { [weak self] _, _, _ in self?.noteSwitchFirstFrame() }
++        }
+         engine.onInput = { [weak self] kind, x, y, a, b in
+             guard let self else { return }
+             // Duo Screens build (picture size): the Host's mapping (`injectInput`: point = pixel / (capture
+@@ -558,7 +603,12 @@ final class TestHost: @unchecked Sendable {
+             return
+         }
+         let s = max(1, min(scale, 3))
+-        let width = max(320, min(w * s, 4096)), height = max(240, min(h * s, 4096))
++        var width = max(320, min(w * s, 4096)), height = max(240, min(h * s, 4096))
++        if options.displays { // Duo Screens build (multi-screen): Scale fits the shown screen into the request
++            scaleRequest = (width, height)
++            let scr = Self.fakeScreens.first { $0.id == shownScreen } ?? Self.fakeScreens[0]
++            (width, height) = DisplayChoice.scaledSize(screen: (scr.w, scr.h), request: (width, height))
++        }
+         geometrySettled = true
+         settledAt = Date() // Duo Screens build (picture size)
+         picture = nil
+@@ -574,6 +624,113 @@ final class TestHost: @unchecked Sendable {
+         if let previous { engine?.continueSession(from: previous) }
+     }
+ 
++    // MARK: Duo Screens build (multi-screen)
++
++    private var switchStartUS: UInt64 = 0
++    private var switchAnsweredFromUS: UInt64 = 0
++    private var switchName = ""
++
++    private func showScreen(_ scr: FakeScreen) {
++        shownScreen = scr.id
++        scene.screenName = scr.name
++        scene.tint = scr.tint
++        let size: (w: Int, h: Int) = scaleRequest.map { DisplayChoice.scaledSize(screen: (scr.w, scr.h), request: $0) } ?? (scr.w, scr.h)
++        if size.w != scene.width || size.h != scene.height { scene.resize(width: size.w, height: size.h) }
++    }
++
++    /// DISPLAY_SELECT: 0 sends the list; otherwise switch in session (re-HELLO, no reconnect), as the Host.
++    private func selectDisplay(_ id: UInt32, place: (x: Double, y: Double)?) {
++        guard id != 0 else { sendDisplayList(); return }
++        let offered = Self.fakeScreens.map(\.id)
++        let chosen = DisplayChoice.screenToShare(requested: id, offered: offered, main: 1)
++        guard let scr = Self.fakeScreens.first(where: { $0.id == chosen }) else { return }
++        guard chosen == id else { // refused: nothing changes (DISPLAY_SELECTED says so)
++            Scene.log("screen \(id) is not offered: refused, still on \(shownScreen)")
++            let cur = Self.fakeScreens.first { $0.id == shownScreen } ?? Self.fakeScreens[0]
++            engine?.sendDisplaySelected(selection(requested: id, status: .notOffered, cur, pointer: nil))
++            return
++        }
++        switchStartUS = MonotonicClock.nowUS
++        switchAnsweredFromUS = switchStartUS
++        switchName = scr.name
++        let keepPicture = picture.map { pic in (pic.w * 100 / max(1, scene.width)) } // half size kept
++        showScreen(scr)
++        if let pct = keepPicture, pct < 100 { picture = (scene.width * pct / 100 & ~1, scene.height * pct / 100 & ~1) }
++        else { picture = nil }
++        let p = DisplayChoice.pointerPlacement(asked: place, on: scr.rect)
++        scene.placePointer(x: Int((p.x - Double(scr.x)) * Double(scene.width) / Double(scr.w)),
++                           y: Int((p.y - Double(scr.y)) * Double(scene.height) / Double(scr.h)))
++        let seed = engine?.currentFrameSeq ?? 1
++        if let old = engine { old.onFailed = nil }
++        let previous = engine
++        makeEngine(startFrameSeq: seed)
++        if let previous { engine?.continueSession(from: previous) }
++        let helloMS = Double(MonotonicClock.nowUS - switchStartUS) / 1000
++        listPending = true // sent once the rebuilt session is running (tick)
++        pendingResult = selection(requested: id, status: .ok, scr, pointer: p)
++        Scene.log(String(format: "screen → %u %@ %d×%d, pointer placed at %.0f,%.0f (global points)%@; new HELLO after %.1f ms",
++                         scr.id, scr.name, pictureSize.w, pictureSize.h, p.x, p.y,
++                         place == nil ? " (middle)" : "", helloMS))
++    }
++    private var listPending = false
++    private var pendingResult: WireDisplaySelection?
++
++    private func selection(requested: UInt32, status: WireDisplaySelection.Status, _ scr: FakeScreen,
++                           pointer: (x: Double, y: Double)?) -> WireDisplaySelection {
++        WireDisplaySelection(requestedID: requested, status: status, displayID: scr.id, x: scr.x, y: scr.y,
++                             width: UInt16(scr.w), height: UInt16(scr.h),
++                             pictureWidth: UInt16(pictureSize.w), pictureHeight: UInt16(pictureSize.h),
++                             pointerPlaced: pointer != nil,
++                             pointerX: Int32((pointer?.x ?? 0).rounded()), pointerY: Int32((pointer?.y ?? 0).rounded()))
++    }
++
++    private func noteSwitchFirstFrame() {
++        guard switchStartUS != 0 else { return }
++        let ms = Double(MonotonicClock.nowUS - switchStartUS) / 1000
++        Scene.log(String(format: "screen → %@: first video frame of the new screen sent %.1f ms after the choice",
++                         switchName, ms))
++        switchStartUS = 0
++    }
++
++    private func sendDisplayList() {
++        let list = Self.fakeScreens.map { scr -> WireDisplay in
++            let thumb = Self.thumbnail(scr)
++            return WireDisplay(displayID: scr.id, name: scr.name, x: scr.x, y: scr.y,
++                               width: UInt16(scr.w), height: UInt16(scr.h),
++                               pixelsPerPoint100: UInt16(scr.ppp), rotation: UInt16(scr.rotation),
++                               isMain: scr.id == 1, isShown: scr.id == shownScreen,
++                               thumbFormat: thumb?.format ?? 0,
++                               thumbWidth: UInt16(thumb?.w ?? 0), thumbHeight: UInt16(thumb?.h ?? 0),
++                               thumb: thumb?.bytes ?? [])
++        }
++        engine?.sendDisplayList(list)
++        Scene.log("sent screen list: " + list.map { "\($0.displayID) \($0.name) [picture \($0.thumbWidth)×\($0.thumbHeight) \($0.thumb.count) B] \($0.width)×\($0.height) at \($0.x),\($0.y)\($0.isMain ? " main" : "")\($0.isShown ? " shown" : "")" }.joined(separator: "; "))
++    }
++
++    /// A small WebP of the screen's tint with its name (at most 320 x 200), like the Host's window pictures.
++    private static func thumbnail(_ scr: FakeScreen) -> (w: Int, h: Int, format: UInt8, bytes: [UInt8])? {
++        let f = min(320.0 / Double(scr.w), 200.0 / Double(scr.h))
++        let w = max(2, Int(Double(scr.w) * f) & ~1), h = max(2, Int(Double(scr.h) * f) & ~1)
++        let space = CGColorSpace(name: CGColorSpace.sRGB)!
++        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
++                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
++                                    | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
++        ctx.setFillColor(red: scr.tint.r, green: scr.tint.g, blue: scr.tint.b, alpha: 1)
++        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
++        ctx.setFillColor(red: 0.96, green: 0.96, blue: 0.94, alpha: 1)
++        ctx.fill(CGRect(x: w / 10, y: h / 3, width: w * 8 / 10, height: h / 3))
++        guard let image = ctx.makeImage() else { return nil }
++        // As the Host's `encodeThumbnail`: WebP (1), else AVIF (2), else JPEG; the format is advisory.
++        for (type, format) in [(UTType.webP, UInt8(1)), (UTType("public.avif") ?? .heic, UInt8(2)), (.jpeg, UInt8(2))] {
++            let data = NSMutableData()
++            guard let dst = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { continue }
++            CGImageDestinationAddImage(dst, image, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
++            guard CGImageDestinationFinalize(dst), data.length > 0 else { continue }
++            return (w, h, format, [UInt8](data as Data))
++        }
++        return nil
++    }
++
+     /// Duo Screens build (picture size): the next `--picture-steps` change, in session (re-HELLO, no
+     /// reconnect), as the Host's `restartCapture(inSession: true)`.
+     private func runPictureSteps() {
+@@ -613,6 +770,14 @@ final class TestHost: @unchecked Sendable {
+ 
+     private func tick() {
+         if engine?.state == .running { runPictureSteps() } // Duo Screens build (picture size)
++        if let r = pendingResult, engine?.state == .running { // multi-screen: the answer, then the list
++            pendingResult = nil
++            engine?.sendDisplaySelected(r)
++            Scene.log(String(format: "screen → %u answered: shown %u, picture %u×%u, pointer at %d,%d, %.1f ms after the choice",
++                             r.requestedID, r.displayID, r.pictureWidth, r.pictureHeight, r.pointerX, r.pointerY,
++                             Double(MonotonicClock.nowUS - switchAnsweredFromUS) / 1000))
++        }
++        if listPending, engine?.state == .running { listPending = false; sendDisplayList() } // multi-screen
+         guard let engine else { return }
+         let now = MonotonicClock.nowUS
+         if engine.state == .running {
+diff --git a/Tests/CoreTests/DisplayChoiceTests.swift b/Tests/CoreTests/DisplayChoiceTests.swift
+new file mode 100644
+index 0000000..0cdbcb5
+--- /dev/null
++++ b/Tests/CoreTests/DisplayChoiceTests.swift
+@@ -0,0 +1,44 @@
++// Duo Screens build (multi-screen): the Host's screen-choice rules.
++import XCTest
++@testable import GlassActCore
++
++final class DisplayChoiceTests: XCTestCase {
++    func testOlderAppGetsMain() {
++        // An app that never sends DISPLAY_SELECT (builds up to 24): main, as today.
++        XCTAssertEqual(DisplayChoice.screenToShare(requested: nil, offered: [5, 3, 9], main: 3), 3)
++    }
++    func testPickedScreenWhenOffered() {
++        XCTAssertEqual(DisplayChoice.screenToShare(requested: 9, offered: [5, 3, 9], main: 3), 9)
++    }
++    func testUnknownOrGoneScreenFallsBackToMainNeverFirstListed() {
++        XCTAssertEqual(DisplayChoice.screenToShare(requested: 7, offered: [5, 3, 9], main: 3), 3)
++        XCTAssertEqual(DisplayChoice.screenToShare(requested: 0, offered: [5, 3, 9], main: 3), 3)
++    }
++    func testPointerPlacedInsideTheNewScreen() {
++        let left = DisplayChoice.Rect(x: -1680, y: 30, width: 1680, height: 1050)
++        let p = DisplayChoice.pointerPlacement(asked: (x: 5, y: 500), on: left) // pushed off Main's left edge
++        XCTAssertEqual(p.x, -1)
++        XCTAssertEqual(p.y, 500)
++        let mid = DisplayChoice.pointerPlacement(asked: nil, on: left)
++        XCTAssertEqual(mid.x, -840)
++        XCTAssertEqual(mid.y, 555)
++        let low = DisplayChoice.pointerPlacement(asked: (x: -100, y: 5000), on: left)
++        XCTAssertEqual(low.y, 30 + 1050 - 1)
++    }
++    func testInputClampedToShownScreen() {
++        XCTAssertTrue(DisplayChoice.clampToCanvas(x: 3840, y: 500, width: 1920, height: 1080) == (1919, 500))
++        XCTAssertTrue(DisplayChoice.clampToCanvas(x: 10, y: 1080, width: 1920, height: 1080) == (10, 1079))
++    }
++    func testResolutionAndVirtualDisplayModesRefused() {
++        XCTAssertEqual(DisplayChoice.allowedGeometryMode(1), 2)
++        XCTAssertEqual(DisplayChoice.allowedGeometryMode(4), 2)
++        XCTAssertEqual(DisplayChoice.allowedGeometryMode(2), 2)
++        XCTAssertEqual(DisplayChoice.allowedGeometryMode(3), 3)
++        XCTAssertEqual(DisplayChoice.allowedGeometryMode(0), 0)
++    }
++    func testScaleFitsShapes() {
++        XCTAssertTrue(DisplayChoice.scaledSize(screen: (3440, 1440), request: (1920, 1080)) == (1920, 802))
++        XCTAssertTrue(DisplayChoice.scaledSize(screen: (1080, 1920), request: (1920, 1080)) == (606, 1080))
++        XCTAssertTrue(DisplayChoice.scaledSize(screen: (1280, 720), request: (1920, 1080)) == (1280, 720))
++    }
++}
+diff --git a/Tests/SessionTests/DisplaySwitchLiveTests.swift b/Tests/SessionTests/DisplaySwitchLiveTests.swift
+new file mode 100644
+index 0000000..dad385a
+--- /dev/null
++++ b/Tests/SessionTests/DisplaySwitchLiveTests.swift
+@@ -0,0 +1,113 @@
++// Duo Screens build (multi-screen), M2 acceptance: the app's connection class
++// (ViewerController, the one Duo Desktop's SessionModel uses) against a running
++// `glassact-testhost --displays`. Skipped unless GLASSACT_TESTHOST_PORT is set
++// (in the iOS simulator: SIMCTL_CHILD_GLASSACT_TESTHOST_PORT / TEST_RUNNER_ prefix).
++import XCTest
++import GlassActCore
++import GlassActSession
++import GlassActTransport
++import GlassActWire
++
++final class DisplaySwitchLiveTests: XCTestCase {
++    @MainActor
++    func testFourScreensThenSwitchToScreen3OnSameConnection() throws {
++        guard let portText = ProcessInfo.processInfo.environment["GLASSACT_TESTHOST_PORT"],
++              let port = UInt16(portText) else { throw XCTSkip("no test host (GLASSACT_TESTHOST_PORT)") }
++        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("duo-multiscreen-test", isDirectory: true)
++        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++        let identity = try QUICIdentity.loadOrCreate(directory: dir, name: "viewer-identity", commonName: "duo-multiscreen-test")
++        let controller = ViewerController(host: "127.0.0.1", port: port, fingerprint: "", identity: identity,
++                                          deviceName: "duo-multiscreen-test")
++        var sizes: [(Int, Int)] = []
++        var lists: [[WireDisplay]] = []
++        var failures = 0
++        var results: [WireDisplaySelection] = []
++        controller.onDisplaySelected = { results.append($0) }
++        var resizedAt: Date?
++        controller.onGeometryChanged = { w, h in sizes.append((w, h)); resizedAt = resizedAt ?? Date() }
++        controller.onDisplayList = { lists.append($0) }
++        controller.onConnectionFailed = { failures += 1 }
++        // As Duo Desktop asks: Scale into 1920 x 1080 (SessionModel), so screens fit the request.
++        controller.setRequestedGeometry(mode: 2, widthPoints: 1920, heightPoints: 1080, scale: 1)
++        controller.start()
++        defer { controller.stop() }
++
++        func spin(_ seconds: Double, until done: () -> Bool) {
++            let end = Date().addingTimeInterval(seconds)
++            while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
++        }
++        spin(10) { controller.hostSupportsDisplayList() }
++        XCTAssertTrue(controller.hostSupportsDisplayList(), "host advertises the screen list")
++        spin(5) { controller.configuredGrid()?.width == 1920 }
++        let startSize = (controller.configuredGrid()?.width ?? 0, controller.configuredGrid()?.height ?? 0)
++        XCTAssertTrue(startSize == (1920, 1080), "starts on Main")
++
++        controller.selectDisplay(0)
++        spin(5) { !lists.isEmpty }
++        let first = try XCTUnwrap(lists.first, "screen list arrived")
++        XCTAssertEqual(first.count, 4)
++        let main = try XCTUnwrap(first.first { $0.displayID == 1 }), top = try XCTUnwrap(first.first { $0.displayID == 4 })
++        XCTAssertTrue(main.width == top.width && main.height == top.height, "screens 1 and 4 are the same size")
++        XCTAssertEqual(first.filter(\.isMain).map(\.displayID), [1])
++        XCTAssertEqual(first.filter(\.isShown).map(\.displayID), [1])
++        XCTAssertTrue(first.allSatisfy { $0.thumbFormat != 0 && !$0.thumb.isEmpty }, "each has a small picture")
++        print("duo-multiscreen: list " + first.map { "\($0.displayID) \($0.name) \($0.width)x\($0.height) at \($0.x),\($0.y)" }.joined(separator: "; "))
++
++        let asked = Date()
++        controller.selectDisplay(3, pointerAt: (x: 2500, y: 0))
++        spin(5) { !sizes.isEmpty && lists.count >= 2 }
++        let ms = (resizedAt ?? Date()).timeIntervalSince(asked) * 1000
++        let size = try XCTUnwrap(sizes.last, "picture changed size on the same connection")
++        XCTAssertTrue(size == (606, 1080), "portrait screen 3 fitted into 1920 x 1080, got \(size)")
++        XCTAssertEqual(lists.last?.filter(\.isShown).map(\.displayID), [3])
++        XCTAssertEqual(failures, 0, "no reconnect")
++        print(String(format: "duo-multiscreen: start %dx%d, screen 3 picture %dx%d after %.0f ms (viewer side)",
++                     startSize.0, startSize.1, size.0, size.1, ms))
++        spin(5) { results.count >= 1 }
++        XCTAssertEqual(results.first?.displayID, 3)
++        XCTAssertEqual(results.first?.status, .ok)
++
++        // Reviewer P1: two EQUAL-sized screens. Back to Main, then to Top (same size): no geometry
++        // callback can tell these apart; only DISPLAY_SELECTED does. Sent back to back, so the
++        // second is serialized behind the first.
++        controller.selectDisplay(1)
++        controller.selectDisplay(4, pointerAt: (x: 100, y: -500))
++        spin(0.05) { false }
++        XCTAssertTrue(controller.displaySelectPending(), "a choice is waiting for its answer")
++        let sizesBefore = sizes.count
++        spin(5) { results.count >= 3 }
++        XCTAssertEqual(results.count, 3)
++        let toMain = results[1], toTop = results[2]
++        XCTAssertEqual(toMain.requestedID, 1); XCTAssertEqual(toMain.displayID, 1); XCTAssertEqual(toMain.status, .ok)
++        XCTAssertEqual(toTop.requestedID, 4); XCTAssertEqual(toTop.displayID, 4); XCTAssertEqual(toTop.status, .ok)
++        XCTAssertEqual(toTop.y, -1080); XCTAssertEqual(toTop.width, 1920); XCTAssertEqual(toTop.height, 1080)
++        XCTAssertEqual(toTop.pictureWidth, 1920); XCTAssertEqual(toTop.pictureHeight, 1080)
++        XCTAssertTrue(toTop.pointerPlaced); XCTAssertEqual(toTop.pointerX, 100); XCTAssertEqual(toTop.pointerY, -500)
++        XCTAssertFalse(controller.displaySelectPending())
++        // Main → Top changed no picture size; the app still knows it is on Top, and carries on there:
++        spin(5) { lists.last?.filter(\.isShown).map(\.displayID) == [4] }
++        XCTAssertEqual(lists.last?.filter(\.isShown).map(\.displayID), [4])
++        XCTAssertTrue(controller.configuredGrid()?.width == 1920 && controller.configuredGrid()?.height == 1080)
++        print("duo-multiscreen: equal-size switch 1 → 4: geometry callbacks during it \(sizes.count - sizesBefore) "
++              + "(size \(sizes.last.map { "\($0.0)x\($0.1)" } ?? "-")); answer: shown \(toTop.displayID) at "
++              + "\(toTop.x),\(toTop.y) \(toTop.width)x\(toTop.height), picture \(toTop.pictureWidth)x\(toTop.pictureHeight), "
++              + "pointer \(toTop.pointerX),\(toTop.pointerY)")
++        // Carries on on Top: a click at the picture's middle (the test host logs it after "screen → 4").
++        controller.sendInput(kind: 1, x: 960, y: 540, a: 0, b: 0)
++        controller.sendInput(kind: 2, x: 960, y: 540, a: 1, b: 0)
++        controller.sendInput(kind: 3, x: 960, y: 540, a: 1, b: 0)
++        var picture = false
++        controller.hasPicture { picture = $0 }
++        spin(3) { picture }
++        XCTAssertTrue(picture, "a picture after the switch")
++
++        // A screen that is not offered: refused, nothing changes.
++        controller.selectDisplay(99)
++        spin(5) { results.count >= 4 }
++        XCTAssertEqual(results.last?.requestedID, 99)
++        XCTAssertEqual(results.last?.status, .notOffered)
++        XCTAssertEqual(results.last?.displayID, 4, "still on Top")
++        XCTAssertEqual(failures, 0, "no reconnect")
++        print("duo-multiscreen: answers " + results.map { "\($0.requestedID)→\($0.displayID) \($0.status)" }.joined(separator: ", "))
++    }
++}
+diff --git a/Tests/SessionTests/RealHostTwoScreensProofTests.swift b/Tests/SessionTests/RealHostTwoScreensProofTests.swift
+new file mode 100644
+index 0000000..e703eab
+--- /dev/null
++++ b/Tests/SessionTests/RealHostTwoScreensProofTests.swift
+@@ -0,0 +1,188 @@
++// Duo Screens build (multi-screen), M3 proof on this Mac's two real screens: this Mac's own
++// Glass Act Host (127.0.0.1:4433), a tiles-only viewer (every pixel exact, so the picture can be
++// compared with a screenshot of the display taken at the same moment). Skipped unless
++// GLASSACT_REALHOST_PORT is set. GLASSACT_PROOF_DIR: the viewer key and the evidence pictures.
++import XCTest
++import CoreGraphics
++import ImageIO
++import UniformTypeIdentifiers
++import GlassActCore
++@testable import GlassActSession
++import GlassActTransport
++import GlassActWire
++
++final class RealHostTwoScreensProofTests: XCTestCase {
++    var dir: URL!
++
++    func identity() throws -> SecIdentity {
++        let path = ProcessInfo.processInfo.environment["GLASSACT_PROOF_DIR"] ?? NSTemporaryDirectory()
++        dir = URL(fileURLWithPath: path, isDirectory: true)
++        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++        let id = try QUICIdentity.loadOrCreate(directory: dir, name: "proof-viewer-identity", commonName: "duo-proof")
++        print("proof: viewer fingerprint \(try QUICIdentity.fingerprint(of: id))")
++        return id
++    }
++
++    @MainActor
++    func spin(_ seconds: Double, until done: () -> Bool) {
++        let end = Date().addingTimeInterval(seconds)
++        while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
++    }
++
++    /// `screencapture -D n` (1 = main), as a CGImage.
++    func screenshot(display n: Int, name: String) throws -> CGImage {
++        let url = dir.appendingPathComponent(name)
++        let p = Process()
++        p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
++        p.arguments = ["-x", "-D", String(n), url.path]
++        try p.run(); p.waitUntilExit()
++        let src = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
++        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
++    }
++
++    func save(_ image: CGImage, _ name: String) {
++        let url = dir.appendingPathComponent(name)
++        guard let dst = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
++        CGImageDestinationAddImage(dst, image, nil)
++        CGImageDestinationFinalize(dst)
++    }
++
++    /// Mean absolute grey difference (0–255) of two pictures shrunk to 96 × 54.
++    func difference(_ a: CGImage, _ b: CGImage) -> Double {
++        func grey(_ i: CGImage) -> [UInt8] {
++            var px = [UInt8](repeating: 0, count: 96 * 54)
++            px.withUnsafeMutableBytes { buf in
++                let ctx = CGContext(data: buf.baseAddress, width: 96, height: 54, bitsPerComponent: 8, bytesPerRow: 96,
++                                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
++                ctx.interpolationQuality = .medium
++                ctx.draw(i, in: CGRect(x: 0, y: 0, width: 96, height: 54))
++            }
++            return px
++        }
++        let ga = grey(a), gb = grey(b)
++        return Double(zip(ga, gb).map { abs(Int($0) - Int($1)) }.reduce(0, +)) / Double(ga.count)
++    }
++
++    func picture(_ session: ViewerSession) -> CGImage? {
++        session.queue.sync { ScreenFrame.capture(session.engine) }?.image()
++    }
++
++    func pointer() -> CGPoint { CGEvent(source: nil)?.location ?? .zero }
++
++    @MainActor
++    func testTwoRealScreens() throws {
++        let id = try identity()
++        guard let portText = ProcessInfo.processInfo.environment["GLASSACT_REALHOST_PORT"],
++              let port = UInt16(portText) else { throw XCTSkip("no real host (GLASSACT_REALHOST_PORT)") }
++
++        // 1. An old-style connection: no screen choice at all → the main screen.
++        do {
++            let old = ViewerSession(host: "127.0.0.1", port: port, fingerprint: "", identity: id,
++                                    options: .init(cursorMetadata: true, video: false, deviceName: "duo-proof-old"))
++            old.setRequestedGeometry(mode: 2, widthPoints: 1920, heightPoints: 1200, scale: 1)
++            old.start()
++            var has = false
++            spin(15) { old.hasPicture { has = $0 }; return has && old.configuredGrid() != nil }
++            spin(3) { false } // let the tiles settle
++            let grid = try XCTUnwrap(old.configuredGrid(), "old-style session got a picture")
++            let pic = try XCTUnwrap(picture(old))
++            let shotMain = try screenshot(display: 1, name: "old-style-main-screenshot.png")
++            let shot2 = try screenshot(display: 2, name: "old-style-second-screenshot.png")
++            save(pic, "old-style-viewer-picture.png")
++            let dMain = difference(pic, shotMain), d2 = difference(pic, shot2)
++            print(String(format: "proof: old-style (no choice): picture %dx%d; differs from main screenshot by %.1f, from second by %.1f",
++                         grid.width, grid.height, dMain, d2))
++            XCTAssertLessThan(dMain, d2, "an old-style session shows the main screen")
++            old.stop()
++            spin(2) { false }
++        }
++
++        // 2. A new-style connection.
++        let session = ViewerSession(host: "127.0.0.1", port: port, fingerprint: "", identity: id,
++                                    options: .init(cursorMetadata: true, video: false, deviceName: "duo-proof"))
++        var lists: [[WireDisplay]] = []
++        var results: [WireDisplaySelection] = []
++        session.onDisplayList = { lists.append($0) }
++        session.onDisplaySelected = { results.append($0) }
++        session.setRequestedGeometry(mode: 2, widthPoints: 1920, heightPoints: 1200, scale: 1)
++        session.start()
++        spin(15) { session.hostSupportsDisplayList() && session.configuredGrid() != nil }
++        XCTAssertTrue(session.hostSupportsDisplayList(), "the Host offers the screen list")
++        XCTAssertFalse(session.hostSupportsVirtualDisplay(), "the Host no longer offers a virtual display")
++
++        session.selectDisplay(0)
++        spin(10) { !lists.isEmpty }
++        let list = try XCTUnwrap(lists.first, "screen list arrived")
++        var ids = [CGDirectDisplayID](repeating: 0, count: 8); var n: UInt32 = 0
++        CGGetActiveDisplayList(8, &ids, &n)
++        print("proof: list " + list.map { "\($0.displayID) \"\($0.name)\" \($0.width)x\($0.height) at \($0.x),\($0.y) ppp \($0.pixelsPerPoint100)\($0.isMain ? " main" : "")\($0.isShown ? " shown" : "") [picture \($0.thumbWidth)x\($0.thumbHeight)]" }.joined(separator: "; "))
++        print("proof: macOS says " + ids.prefix(Int(n)).map { let b = CGDisplayBounds($0); return "\($0) \(Int(b.width))x\(Int(b.height)) at \(Int(b.minX)),\(Int(b.minY))\(CGDisplayIsMain($0) != 0 ? " main" : "")" }.joined(separator: "; "))
++        XCTAssertEqual(list.count, Int(n), "every screen offered")
++        for d in list {
++            let b = CGDisplayBounds(d.displayID)
++            XCTAssertEqual(Int(d.x), Int(b.minX)); XCTAssertEqual(Int(d.y), Int(b.minY))
++            XCTAssertEqual(Int(d.width), Int(b.width)); XCTAssertEqual(Int(d.height), Int(b.height))
++        }
++        let main = try XCTUnwrap(list.first { $0.isMain }), second = try XCTUnwrap(list.first { !$0.isMain })
++        XCTAssertTrue(main.isShown)
++
++        // 3. Choose the second screen.
++        session.selectDisplay(second.displayID)
++        spin(10) { !results.isEmpty }
++        let r = try XCTUnwrap(results.first, "an answer")
++        print("proof: choose \(second.displayID): answer \(r.status) shown \(r.displayID) at \(r.x),\(r.y) \(r.width)x\(r.height), picture \(r.pictureWidth)x\(r.pictureHeight), pointer \(r.pointerX),\(r.pointerY); pointer now \(pointer())")
++        XCTAssertEqual(r.status, .ok); XCTAssertEqual(r.displayID, second.displayID)
++        XCTAssertEqual(Int(r.x), Int(second.x)); XCTAssertEqual(Int(r.width), Int(second.width))
++        XCTAssertTrue(CGDisplayBounds(second.displayID).contains(pointer()), "the Host put the pointer on the second screen")
++        spin(10) { session.configuredGrid()?.width == Int(r.pictureWidth) && session.configuredGrid()?.height == Int(r.pictureHeight) }
++        spin(4) { false }
++        let pic2 = try XCTUnwrap(picture(session))
++        let s2 = try screenshot(display: 2, name: "second-screenshot.png")
++        let s1 = try screenshot(display: 1, name: "second-chosen-main-screenshot.png")
++        save(pic2, "second-viewer-picture.png")
++        let d2 = difference(pic2, s2), d1 = difference(pic2, s1)
++        print(String(format: "proof: on second: picture %dx%d differs from the second screen's screenshot by %.1f, from main's by %.1f",
++                     pic2.width, pic2.height, d2, d1))
++        XCTAssertLessThan(d2, d1, "the picture is the second screen's")
++        XCTAssertLessThan(d2, 12, "the picture matches the second screen")
++
++        // 4. A move and a move far past the picture's edge while on the second screen: both stay on it.
++        session.sendInput(kind: 1, x: 200, y: 150, a: 0, b: 0)
++        spin(0.6) { false }
++        let p1 = pointer()
++        session.sendInput(kind: 1, x: 99_999, y: 150, a: 0, b: 0)
++        spin(0.6) { false }
++        let p2 = pointer()
++        let b2 = CGDisplayBounds(second.displayID)
++        print("proof: move to picture 200,150 → pointer \(p1); move to picture 99999,150 → pointer \(p2); second screen \(b2)")
++        XCTAssertTrue(b2.contains(p1)); XCTAssertTrue(b2.contains(p2), "a move past the edge stays on the shown screen")
++
++        // 5. The forbidden modes, asked on the second screen: refused in the Host (log), the handshake finishes.
++        session.requestResize(mode: 1, widthPoints: 1280, heightPoints: 800, scale: 1)
++        spin(3) { false }
++        session.requestResize(mode: 4, widthPoints: 1280, heightPoints: 800, scale: 2)
++        spin(3) { false }
++        print("proof: after modes 1 and 4: grid \(session.configuredGrid().map { "\($0.width)x\($0.height)" } ?? "-"); second bounds \(CGDisplayBounds(second.displayID)); main bounds \(CGDisplayBounds(main.displayID))")
++        XCTAssertEqual(Int(CGDisplayBounds(main.displayID).width), Int(main.width), "main display mode unchanged")
++        XCTAssertEqual(Int(CGDisplayBounds(second.displayID).width), Int(second.width), "second display mode unchanged")
++
++        // 6. Back to main.
++        session.selectDisplay(main.displayID)
++        spin(10) { results.count >= 2 }
++        let back = try XCTUnwrap(results.dropFirst().first)
++        print("proof: choose \(main.displayID): answer \(back.status) shown \(back.displayID), picture \(back.pictureWidth)x\(back.pictureHeight), pointer \(back.pointerX),\(back.pointerY); pointer now \(pointer())")
++        XCTAssertEqual(back.status, .ok); XCTAssertEqual(back.displayID, main.displayID)
++        spin(10) { session.configuredGrid()?.width == Int(back.pictureWidth) && session.configuredGrid()?.height == Int(back.pictureHeight) }
++        spin(4) { false }
++        let pic1 = try XCTUnwrap(picture(session))
++        let m1 = try screenshot(display: 1, name: "back-main-screenshot.png")
++        let m2 = try screenshot(display: 2, name: "back-second-screenshot.png")
++        save(pic1, "back-main-viewer-picture.png")
++        let e1 = difference(pic1, m1), e2 = difference(pic1, m2)
++        print(String(format: "proof: back on main: picture %dx%d differs from main's screenshot by %.1f, from second's by %.1f",
++                     pic1.width, pic1.height, e1, e2))
++        XCTAssertLessThan(e1, e2, "the picture is main's again")
++        session.stop()
++        spin(1) { false }
++    }
++}
+diff --git a/Tests/WireTests/DisplayMessagesTests.swift b/Tests/WireTests/DisplayMessagesTests.swift
+new file mode 100644
+index 0000000..b9e2d74
+--- /dev/null
++++ b/Tests/WireTests/DisplayMessagesTests.swift
+@@ -0,0 +1,47 @@
++// Duo Screens build (multi-screen): DISPLAY_LIST / DISPLAY_SELECT on the wire.
++import XCTest
++@testable import GlassActWire
++
++final class DisplayMessagesTests: XCTestCase {
++    func testDisplayListRoundTrips() throws {
++        let list = ControlMessage.displayList(displays: [
++            WireDisplay(displayID: 1, name: "Main", x: 0, y: 0, width: 1920, height: 1080,
++                        pixelsPerPoint100: 200, isMain: true, isShown: true),
++            WireDisplay(displayID: 3, name: "Portrait ✓", x: 1960, y: -420, width: 1080, height: 1920,
++                        rotation: 90, isMain: false, isShown: false,
++                        thumbFormat: 1, thumbWidth: 112, thumbHeight: 200, thumb: [1, 2, 3, 4]),
++        ])
++        var d = ControlDeframer()
++        d.append(list.encoded())
++        XCTAssertEqual(d.next(), .message(list))
++    }
++
++    func testDisplaySelectRoundTripsWithNegativePoint() {
++        let sel = ControlMessage.displaySelect(displayID: 2, placePointer: true, pointerX: -1, pointerY: -400)
++        XCTAssertEqual(sel.tlvType, 0x61)
++        var d = ControlDeframer()
++        d.append(sel.encoded())
++        XCTAssertEqual(d.next(), .message(sel))
++    }
++
++    func testNewTypesAreKnownAndOldTypesUnchanged() {
++        XCTAssertTrue(ControlMessage.isKnownType(0x60))
++        XCTAssertTrue(ControlMessage.isKnownType(0x61))
++        XCTAssertFalse(ControlMessage.isKnownType(0x5F))
++        XCTAssertEqual(WireCaps.displayList, 1 << 31)
++    }
++
++    func testDisplaySelectedRoundTrips() throws {
++        let r = WireDisplaySelection(requestedID: 4, status: .ok, displayID: 4, x: 0, y: -1080, width: 1920, height: 1080,
++                                     pictureWidth: 960, pictureHeight: 540, pointerPlaced: true, pointerX: 100, pointerY: -500)
++        let msg = ControlMessage.displaySelected(r)
++        XCTAssertEqual(msg.tlvType, 0x62)
++        let refused = ControlMessage.displaySelected(WireDisplaySelection(requestedID: 9, status: .notOffered, displayID: 1))
++        var d = ControlDeframer()
++        d.append(msg.encoded())
++        d.append(refused.encoded())
++        XCTAssertEqual(d.next(), .message(msg))
++        XCTAssertEqual(d.next(), .message(refused))
++        XCTAssertTrue(ControlMessage.isKnownType(0x62))
++    }
++}

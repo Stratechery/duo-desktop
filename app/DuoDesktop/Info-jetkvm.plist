@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Same as Info.plist (keep the two in step); used only by the DUO_JETKVM build (project-jetkvm.yml). -->
+	<!-- Add Mac browses for Glass Act Hosts on the home network (TN3179: browsed Bonjour types must be listed). -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_glassact._udp</string>
+	</array>
+	<!-- The JetKVM serves its login over plain http:// and its signaling over plain ws://. Allowed only for:
+	     local-network names and addresses (NSAllowsLocalNetworking: .local names and private IPs), and Tailscale
+	     MagicDNS names (*.ts.net), where the tailnet itself encrypts the traffic. Nothing else may use plain HTTP. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>100.64.0.0/10</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

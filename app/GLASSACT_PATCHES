@@ -1,0 +1,11 @@
+# Patches applied, in this order, on top of GLASSACT_COMMIT in vendor/glassact (the copy the app builds
+# against since build 25). scripts/check-glassact.sh proves the copy is exactly the pin plus these, nothing else.
+testhost-input-log-and-release.patch
+testhost-picture-size.patch
+host-main-display-only.patch
+glassact-multiscreen-M2.patch
+host-multiscreen-M3.patch
+glassact-typing-notices.patch
+glassact-overview-snapshots.patch
+glassact-auto-unlock.patch
+duo-terminal-key-install-on-main.patch

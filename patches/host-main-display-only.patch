@@ -1,0 +1,121 @@
+diff --git a/Apps/Host/HostApp.swift b/Apps/Host/HostApp.swift
+index 3d05087..8ecb111 100644
+--- a/Apps/Host/HostApp.swift
++++ b/Apps/Host/HostApp.swift
+@@ -337,7 +337,7 @@ final class HostAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NS
+             }
+         }
+         header.update(symbol: symbol, tint: tint, title: title, subtitle: subtitle)
+-        chooseDisplayItem?.isHidden = controller.isRunning
++        chooseDisplayItem?.isHidden = true // Duo Screens build: main display only
+     }
+ 
+     private static let relative: RelativeDateTimeFormatter = {
+@@ -401,7 +401,7 @@ final class HostAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NS
+             // What the next session shares (not while capture runs).
+             let choose = item("Choose Display…", symbol: "display", action: #selector(chooseDisplay),
+                               subtitle: "The display a viewer sees when it connects")
+-            choose.isHidden = controller.isRunning
++            choose.isHidden = true // Duo Screens build: main display only, no choice
+             chooseDisplayItem = choose
+             menu.addItem(choose)
+             menu.addItem(.separator())
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index bb344b6..51ee40a 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -483,7 +483,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+     /// The physical display the Host shares: the one capture started on,
+     /// or the main display before that (main-thread).
+     private var physicalDisplay: CGDirectDisplayID {
+-        sharedDisplayID != 0 && CGDisplayIsOnline(sharedDisplayID) != 0 ? sharedDisplayID : CGMainDisplayID()
++        // Duo Screens build (duo-screens/patches/host-main-display-only.patch): the main display only.
++        // No retained or picked display, no other display. The upstream line was:
++        // sharedDisplayID != 0 && CGDisplayIsOnline(sharedDisplayID) != 0 ? sharedDisplayID : CGMainDisplayID()
++        CGMainDisplayID()
+     }
+ 
+     /// Log every display mode change with its new size — the host's own
+@@ -694,16 +697,13 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             onPermissionProblem()
+             return
+         }
+-        if let preferredFilter {
+-            start(filter: preferredFilter)
+-            return
+-        }
++        // Duo Screens build: a picked display (preferredFilter) is never used; main display only.
+         Task {
+             do {
+                 let content = try await SCShareableContent.excludingDesktopWindows(
+                     false, onScreenWindowsOnly: false)
+-                guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+-                        ?? content.displays.first else {
++                // Duo Screens build: the main display or nothing. Never fall back to another display.
++                guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {
+                     // Asleep (or locked): nothing to capture yet. Wake it and
+                     // try again while the viewer (or the recording) waits.
+                     self.retryDefaultDisplay(after: 2, reason: "no display available to capture")
+@@ -744,18 +744,8 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+ 
+     /// Choose the display the next session shares (not while one runs).
+     func presentPicker() {
+-        guard !isRunning, identity != nil else { return }
+-        // Accessory (menu-bar) apps are never active; without this the system
+-        // picker panel can appear behind other windows. (Menu action: main.)
+-        MainActor.assumeIsolated { NSApp.activate() }
+-        let picker = SCContentSharingPicker.shared
+-        var configuration = SCContentSharingPickerConfiguration()
+-        configuration.allowedPickerModes = [.singleDisplay]
+-        picker.configuration = configuration
+-        picker.add(self)
+-        picker.isActive = true
+-        picker.present(using: .display)
+-        onStatus("choose the display to share in the picker…")
++        // Duo Screens build: no display choice; the Host shares the main display only.
++        onStatus("this build shares the main display only")
+     }
+ 
+     // SCContentSharingPickerObserver (callbacks arrive off-main)
+@@ -767,9 +757,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             let picker = SCContentSharingPicker.shared
+             picker.isActive = false
+             picker.remove(self)
+-            preferredFilter = boxed.value
+-            onStatus("display chosen — shared when a viewer connects")
+-            if captureWanted && !isRunning { start(filter: boxed.value) }
++            // Duo Screens build: a picked display is ignored and never kept.
++            _ = boxed
++            preferredFilter = nil
++            onStatus("this build shares the main display only — choice ignored")
+         }
+     }
+ 
+@@ -830,6 +821,13 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             onPermissionProblem()
+         case let .recovered(_, filter, displayID):
+             lastFilter = filter
++            if virtualDisplay == nil, let displayID, displayID != CGMainDisplayID() {
++                // Duo Screens build: recovery landed on a display that is not main. End the session
++                // rather than share it.
++                disconnectViewer(status: "capture recovered onto a non-main display — ending the session")
++                stopCaptureIfIdle(force: true)
++                return
++            }
+             if virtualDisplay == nil, let displayID {
+                 // The shared display may have gone (unplugged): follow the
+                 // one capture fell back to.
+diff --git a/Sources/GlassActShare/ScreenCaptureKitBackend.swift b/Sources/GlassActShare/ScreenCaptureKitBackend.swift
+index d83686a..122f2fd 100644
+--- a/Sources/GlassActShare/ScreenCaptureKitBackend.swift
++++ b/Sources/GlassActShare/ScreenCaptureKitBackend.swift
+@@ -18,7 +18,8 @@ public struct ScreenCaptureKitBackend: CaptureBackend {
+             }
+             return CaptureContent(filter: SCContentFilter(desktopIndependentWindow: window), displayID: nil)
+         case let .display(wanted):
+-            guard let display = content.displays.first(where: { $0.displayID == wanted }) ?? content.displays.first
++            // Duo Screens build: the wanted display or nothing; never the first display listed.
++            guard let display = content.displays.first(where: { $0.displayID == wanted })
+             else { throw CaptureError.noDisplay }
+             return CaptureContent(filter: SCContentFilter(display: display, excludingWindows: []),
+                                   displayID: display.displayID)

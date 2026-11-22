@@ -1,0 +1,7 @@
+# Glass Act checkout (fetched by app/scripts/fetch-glassact.sh) and build output
+/vendor/
+app/DuoDesktop.xcodeproj/
+app/build/
+DerivedData/
+.DS_Store
+app/private-names.local.txt

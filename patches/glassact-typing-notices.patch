@@ -1,0 +1,644 @@
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index 13a7c9d..b003cbc 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -98,6 +98,8 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+     private var transport: QUICTransport?
+     private var tickTimer: DispatchSourceTimer?
+     private var engine: HostEngine? // encodeQueue-confined
++    /// Duo Desktop build: lock state and where typing goes, for the phone.
++    private let typingWatch = TypingWatch()
+     /// encodeQueue-confined mirror of the transport the engine talks to (for
+     /// in-session engine rebuilds, which run on encodeQueue).
+     private var sessionTransport: QUICTransport?
+@@ -676,6 +678,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+     /// capture would see nothing.
+     func startListening() {
+         watchDisplayReconfiguration()
++        // Duo Desktop build: lock state and where typing goes, for the phone.
++        let encodeQueue = encodeQueue
++        typingWatch.perform = { [weak self] body in
++            guard let self else { return }; encodeQueue.async { body(self.engine) }
++        }
++        typingWatch.log = { [weak self] msg in DispatchQueue.main.async { self?.onStatus(msg) } }
+         guard !isListening, identity != nil else { return }
+         // Preflight, not request: asking is the setup window's job (one
+         // place, with context), not a bare system alert at launch.
+@@ -1164,6 +1172,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             let button: CGMouseButton = b == 1 ? .right : (b == 2 ? .center : .left)
+             let bit = 1 << b
+             if kind == 2 { mouseButtonsDown |= bit } else { mouseButtonsDown &= ~bit }
++            if kind == 3 { typingWatch.poke() } // Duo Desktop build: focus may have moved
+             let type: CGEventType
+             switch (kind, button) {
+             case (2, .left): type = .leftMouseDown
+@@ -1185,7 +1194,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+                 ev.post(tap: .cghidEventTap)
+             }
+         case 5, 6: // key down / up
+-            if kind == 5 { keysDown.insert(canvasX) } else { keysDown.remove(canvasX) }
++            if kind == 5 { keysDown.insert(canvasX) } else { keysDown.remove(canvasX); typingWatch.poke() }
+             if let ev = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(canvasX),
+                                 keyDown: kind == 5) {
+                 // Keep the flags a key carries itself (numeric pad and
+@@ -2855,6 +2864,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         engine.onInput = { [weak self] kind, cx, cy, a, b in
+             self?.injectInput(kind: kind, canvasX: cx, canvasY: cy, a: a, b: b)
+         }
++        typingWatch.viewerConnected() // Duo Desktop build: lock + focus for the new viewer
+         engine.onClipboard = { [weak self] format, data in
+             guard let self else { return }
+             let agent = self.agentAccess.agentDriving
+diff --git a/Apps/Host/TypingWatch.swift b/Apps/Host/TypingWatch.swift
+new file mode 100644
+index 0000000..2183174
+--- /dev/null
++++ b/Apps/Host/TypingWatch.swift
+@@ -0,0 +1,195 @@
++// Duo Desktop build (text focus + lock): tells the phone where typing goes on
++// this Mac and whether its screen is locked.
++//
++// Privacy rule (the owner's order): only role-level facts and frames are read. No
++// value, title, description, selected text or any other string of the element
++// is read or sent. The wire message (TEXT_FOCUS) has no string field at all.
++//
++// Lock: `CGSessionCopyCurrentDictionary()` is public API (documented keys:
++// kCGSessionOnConsoleKey, kCGSessionLoginDoneKey). The "CGSSessionScreenIsLocked"
++// key in that dictionary and the "com.apple.screenIsLocked" / "…Unlocked"
++// distributed notifications are NOT documented by Apple; they are what macOS
++// has used for years and what this Mac shows. A 2 s check backs the
++// notifications up, and "not on console" (login window, other user) counts as
++// locked for typing purposes.
++import AppKit
++import ApplicationServices
++import Foundation
++import GlassActCore
++import GlassActWire
++
++final class TypingWatch: @unchecked Sendable {
++    private let queue = DispatchQueue(label: "duo.typing-watch")
++    /// Runs a block with the engine on the queue that owns it (the Host's
++    /// encode queue); nil = no viewer.
++    /// Set once by the Host right after it is made.
++    var perform: (@escaping @Sendable (HostEngine?) -> Void) -> Void = { _ in }
++    private var lastFocus: WireTextFocus?
++    private var lastQueryAt: TimeInterval = 0
++    private var queryPending = false
++    private var timer: DispatchSourceTimer?
++    private var lockTimer: DispatchSourceTimer?
++    private var lastLock: UInt8?
++    private static let minGap: TimeInterval = 0.15
++
++    var log: (String) -> Void = { _ in }
++
++    init() {
++        let dnc = DistributedNotificationCenter.default()
++        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
++            dnc.addObserver(forName: Notification.Name(name), object: nil, queue: nil) { [weak self] _ in
++                guard let self else { return }; self.queue.async { self.checkLock() }
++            }
++        }
++        NSWorkspace.shared.notificationCenter.addObserver(
++            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
++        ) { [weak self] _ in self?.poke() }
++        let t = DispatchSource.makeTimerSource(queue: queue)
++        t.schedule(deadline: .now() + 1, repeating: 1.0)
++        t.setEventHandler { [weak self] in self?.tick() }
++        t.resume()
++        timer = t
++        let l = DispatchSource.makeTimerSource(queue: queue)
++        l.schedule(deadline: .now() + 0.5, repeating: 2.0)
++        l.setEventHandler { [weak self] in self?.checkLock() }
++        l.resume()
++        lockTimer = l
++    }
++
++    /// A new viewer connected: the engine resends the lock on connect; the focus
++    /// is sent afresh.
++    func viewerConnected() {
++        queue.async {
++            self.lastFocus = nil
++            self.checkLock()
++        }
++        poke()
++    }
++
++    /// The viewer clicked (button up) or typed (key up): look again shortly
++    /// after, when the app has moved its focus.
++    func poke() {
++        queue.async {
++            guard !self.queryPending else { return }
++            self.queryPending = true
++            let wait = max(0.08, Self.minGap - (Date().timeIntervalSince1970 - self.lastQueryAt))
++            self.queue.asyncAfter(deadline: .now() + wait) {
++                self.queryPending = false
++                self.query()
++            }
++        }
++    }
++
++    // MARK: - queue
++
++    private func tick() {
++        // Focus can move with no input from the phone (a dialog opens).
++        query()
++    }
++
++    private func checkLock() {
++        let locked = Self.screenLocked()
++        let code = locked ? ScreenLock.locked : ScreenLock.unlocked
++        if code != lastLock {
++            lastLock = code
++            log("screen \(locked ? "locked" : "unlocked") — telling the viewer")
++        }
++        perform { $0?.setScreenLock(code) }
++    }
++
++    private func query() {
++        perform { [weak self] engine in
++            guard let self else { return }
++            let running = engine?.isRunning ?? false
++            self.queue.async {
++                guard running else { self.lastFocus = nil; return }
++                self.lastQueryAt = Date().timeIntervalSince1970
++                let focus = Self.currentFocus()
++                guard focus != self.lastFocus else { return }
++                self.lastFocus = focus
++                self.perform { $0?.sendTextFocus(focus) }
++            }
++        }
++    }
++
++    // MARK: - reading (no strings)
++
++    static func screenLocked() -> Bool {
++        guard let d = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
++        if let locked = d["CGSSessionScreenIsLocked"] as? Bool, locked { return true }
++        if let onConsole = d[kCGSessionOnConsoleKey as String] as? Bool, !onConsole { return true }
++        return false
++    }
++
++    /// Roles that take typed text.
++    static let textRoles: Set<String> = [
++        kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String, "AXSearchField",
++        "AXWebArea" /* only with a caret: contenteditable in a browser */,
++    ]
++
++    static func currentFocus() -> WireTextFocus {
++        let system = AXUIElementCreateSystemWide()
++        AXUIElementSetMessagingTimeout(system, 0.3)
++        guard let el = copyElement(system, kAXFocusedUIElementAttribute as String) else { return .none }
++        AXUIElementSetMessagingTimeout(el, 0.3)
++        // The role is an Apple constant naming the kind of element, never its contents.
++        let role = copyString(el, kAXRoleAttribute as String) ?? ""
++        let caret = caretFrame(el)
++        let takesText = textRoles.contains(role) && (role != "AXWebArea" || caret != nil)
++            || (caret != nil && isEditable(el))
++        guard takesText else { return .none }
++        let field = frame(el) ?? .zero
++        let c = caret ?? .zero
++        return WireTextFocus(hasText: true,
++                             fieldX: clampI(field.minX), fieldY: clampI(field.minY),
++                             fieldW: clampU(field.width), fieldH: clampU(field.height),
++                             caretX: clampI(c.minX), caretY: clampI(c.minY),
++                             caretW: clampU(max(c.width, caret == nil ? 0 : 1)), caretH: clampU(c.height))
++    }
++
++    private static func isEditable(_ el: AXUIElement) -> Bool {
++        var settable: DarwinBoolean = false
++        return AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
++    }
++
++    private static func copyElement(_ el: AXUIElement, _ attr: String) -> AXUIElement? {
++        var v: CFTypeRef?
++        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let v,
++              CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
++        return (v as! AXUIElement)
++    }
++
++    private static func copyString(_ el: AXUIElement, _ attr: String) -> String? {
++        var v: CFTypeRef?
++        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success else { return nil }
++        return v as? String
++    }
++
++    private static func frame(_ el: AXUIElement) -> CGRect? {
++        var p: CFTypeRef?, s: CFTypeRef?
++        guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &p) == .success,
++              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &s) == .success,
++              let p, let s, CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
++        var pt = CGPoint.zero, sz = CGSize.zero
++        guard AXValueGetValue((p as! AXValue), .cgPoint, &pt),
++              AXValueGetValue((s as! AXValue), .cgSize, &sz) else { return nil }
++        return CGRect(origin: pt, size: sz)
++    }
++
++    /// The insertion point: the bounds of the selected range (a range, not its text).
++    private static func caretFrame(_ el: AXUIElement) -> CGRect? {
++        var r: CFTypeRef?
++        guard AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &r) == .success,
++              let r, CFGetTypeID(r) == AXValueGetTypeID() else { return nil }
++        var b: CFTypeRef?
++        guard AXUIElementCopyParameterizedAttributeValue(el, kAXBoundsForRangeParameterizedAttribute as CFString, r, &b) == .success,
++              let b, CFGetTypeID(b) == AXValueGetTypeID() else { return nil }
++        var rect = CGRect.zero
++        guard AXValueGetValue((b as! AXValue), .cgRect, &rect),
++              rect.height > 0, rect.height < 400 else { return nil }
++        return rect
++    }
++
++    private static func clampI(_ v: CGFloat) -> Int32 { Int32(max(-1_000_000, min(1_000_000, v.rounded()))) }
++    private static func clampU(_ v: CGFloat) -> UInt16 { UInt16(max(0, min(65_535, v.rounded()))) }
++}
+diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
+index c8021f6..2618b98 100644
+--- a/Sources/GlassActCore/HostEngine.swift
++++ b/Sources/GlassActCore/HostEngine.swift
+@@ -642,6 +642,8 @@ public final class HostEngine: @unchecked Sendable {
+     /// What the viewer is told about the host (`HostNotice`), kept so a
+     /// viewer that connects while one is in force hears it too.
+     private var hostNotice = HostNotice.none
++    /// Duo Desktop build: the console lock state (nil = never told), resent on connect.
++    private var screenLock: UInt8?
+     /// Agents: UI_TREE_REQUEST — the app answers with `sendUITree`.
+     public var onUITreeRequest: ((_ requestID: UInt32, _ windowID: UInt32, _ maxNodes: Int) -> Void)?
+     /// Agents: answer a UI_TREE_REQUEST. A tree too big for one control
+@@ -673,6 +675,26 @@ public final class HostEngine: @unchecked Sendable {
+         sendControl(.hostNotice(code: code))
+     }
+ 
++    /// Duo Desktop build: tell the viewer (now, and any that connects later)
++    /// whether the console screen is locked (`ScreenLock`). Sent only on a change.
++    public func setScreenLock(_ lock: UInt8) {
++        guard lock != screenLock else { return }
++        screenLock = lock
++        guard state == .running else { return }
++        sendControl(.screenLock(state: lock))
++    }
++
++    /// Duo Desktop build: where typing goes (TEXT_FOCUS). Nothing is sent
++    /// while no viewer is running.
++    public func sendTextFocus(_ focus: WireTextFocus) {
++        guard state == .running else { return }
++        sendControl(.textFocus(focus))
++    }
++
++    /// Whether a viewer session is running (the Host skips Accessibility
++    /// queries otherwise).
++    public var isRunning: Bool { state == .running }
++
+     public func sendSharedWindowClosed() {
+         sendControl(.windowControl(action: WindowAction.endSession, width: 0, height: 0))
+     }
+@@ -920,6 +942,7 @@ public final class HostEngine: @unchecked Sendable {
+                     }
+                     lastPingUS = nowUS
+                     if hostNotice != HostNotice.none { sendControl(.hostNotice(code: hostNotice)) }
++                    if let screenLock { sendControl(.screenLock(state: screenLock)) }
+                 }
+             case let .ack(frameSeq, dgramCnt, bitmap):
+                 lastControlNowUS = nowUS
+@@ -991,7 +1014,8 @@ public final class HostEngine: @unchecked Sendable {
+                 linkEstimate.noteReceived(bytes: bytes, viewerTUS: tUS, nowUS: nowUS, queued: queued)
+             case let .syncRequest(region, generation):
+                 noteSyncRequest(region: region, generation: generation)
+-            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected:
++            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
++                 .screenLock, .textFocus:
+                 break // host-originated / not addressed to the host
+             }
+         }
+diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
+index 880bcb4..41398d8 100644
+--- a/Sources/GlassActCore/ViewerEngine.swift
++++ b/Sources/GlassActCore/ViewerEngine.swift
+@@ -273,6 +273,9 @@ public final class ViewerEngine: @unchecked Sendable {
+     public var onVideoCodecChanged: ((UInt8?) -> Void)?
+     /// The host's `HostNotice` changed (`HostNotice.none`: nothing to show).
+     public var onHostNotice: ((UInt8) -> Void)?
++    /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS.
++    public var onScreenLock: ((UInt8) -> Void)?
++    public var onTextFocus: ((WireTextFocus) -> Void)?
+     /// Connect milestones (see SessionMilestones). Engine-queue.
+     public private(set) var milestones = SessionMilestones()
+     /// `nowUS` of the datagram being applied (tile milestones).
+@@ -496,6 +499,10 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onUITree?(requestID, status, json)
+             case let .hostNotice(code):
+                 onHostNotice?(code)
++            case let .screenLock(state):
++                onScreenLock?(state)
++            case let .textFocus(focus):
++                onTextFocus?(focus)
+             case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
+                  .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
+                  .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect:
+diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
+index 9ace4f8..71472f2 100644
+--- a/Sources/GlassActSession/ViewerController.swift
++++ b/Sources/GlassActSession/ViewerController.swift
+@@ -168,12 +168,21 @@ public final class ViewerController: @unchecked Sendable {
+         engine.onHostNotice = { [weak self] code in
+             DispatchQueue.main.async { self?.onHostNotice?(code) }
+         }
++        engine.onScreenLock = { [weak self] lock in
++            DispatchQueue.main.async { self?.onScreenLock?(lock) }
++        }
++        engine.onTextFocus = { [weak self] focus in
++            DispatchQueue.main.async { self?.onTextFocus?(focus) }
++        }
+     }
+ 
+     /// Auto-reconnect hook (main thread): fired when the transport dies.
+     public var onConnectionFailed: (() -> Void)?
+     /// The host's HOST_NOTICE changed (main thread).
+     public var onHostNotice: ((UInt8) -> Void)?
++    /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS (main thread).
++    public var onScreenLock: ((UInt8) -> Void)?
++    public var onTextFocus: ((WireTextFocus) -> Void)?
+ 
+     // MARK: - Clipboard sync (main thread)
+ 
+diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
+index 3493000..efae586 100644
+--- a/Sources/GlassActWire/Control.swift
++++ b/Sources/GlassActWire/Control.swift
+@@ -176,6 +176,33 @@ public enum GeometryMode {
+     public static let virtualDisplay: UInt8 = 4
+ }
+ 
++/// Duo Desktop build (text focus) — host → viewer, TEXT_FOCUS (type 0x64):
++/// where typing goes on the host. Numbers only: no text, value, title or
++/// selection of the element ever crosses the wire. `hasText` false = the
++/// focused element does not take text (or nothing is focused). Frames are in
++/// global points (top-left of the menu-bar screen); width 0 = not known.
++public struct WireTextFocus: Equatable, Sendable {
++    public var hasText: Bool
++    public var fieldX: Int32, fieldY: Int32, fieldW: UInt16, fieldH: UInt16
++    public var caretX: Int32, caretY: Int32, caretW: UInt16, caretH: UInt16
++    public init(hasText: Bool, fieldX: Int32 = 0, fieldY: Int32 = 0, fieldW: UInt16 = 0, fieldH: UInt16 = 0,
++                caretX: Int32 = 0, caretY: Int32 = 0, caretW: UInt16 = 0, caretH: UInt16 = 0) {
++        self.hasText = hasText
++        self.fieldX = fieldX; self.fieldY = fieldY; self.fieldW = fieldW; self.fieldH = fieldH
++        self.caretX = caretX; self.caretY = caretY; self.caretW = caretW; self.caretH = caretH
++    }
++    public static let none = WireTextFocus(hasText: false)
++    /// Body is always this many bytes: 1 flag + 2 × (4 + 4 + 2 + 2).
++    public static let bodyLength = 25
++}
++
++/// Duo Desktop build — SCREEN_LOCK (type 0x63) states, host → viewer.
++public enum ScreenLock {
++    public static let unlocked: UInt8 = 0
++    /// The console session's screen is locked or at the login window.
++    public static let locked: UInt8 = 1
++}
++
+ /// §3.5 — control-stream messages (reliable, ordered). TLV framing:
+ /// `{type u8, len varint, body}`.
+ /// HOST_NOTICE codes (§3.5).
+@@ -357,6 +384,12 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Duo Screens build (multi-screen) — host → viewer: the answer to one
+     /// DISPLAY_SELECT (not to 0, which is answered by DISPLAY_LIST). Type 0x62.
+     case displaySelected(WireDisplaySelection)
++    /// Duo Desktop build — host → viewer: the console screen is locked or not
++    /// (`ScreenLock`). Sent on connect and on change. Type 0x63.
++    case screenLock(state: UInt8)
++    /// Duo Desktop build — host → viewer: where typing goes (`WireTextFocus`).
++    /// Type 0x64.
++    case textFocus(WireTextFocus)
+     /// Single-window mode — viewer → host: a window-chrome action on the
+     /// shared window:
+     ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
+@@ -481,6 +514,8 @@ public enum ControlMessage: Equatable, Sendable {
+         case .displayList: 0x60
+         case .displaySelect: 0x61
+         case .displaySelected: 0x62
++        case .screenLock: 0x63
++        case .textFocus: 0x64
+         }
+     }
+ 
+@@ -688,6 +723,14 @@ public enum ControlMessage: Equatable, Sendable {
+             body.writeU8(placePointer ? 1 : 0)
+             body.writeU32(UInt32(bitPattern: pointerX))
+             body.writeU32(UInt32(bitPattern: pointerY))
++        case let .screenLock(state):
++            body.writeU8(state)
++        case let .textFocus(f):
++            body.writeU8(f.hasText ? 1 : 0)
++            body.writeU32(UInt32(bitPattern: f.fieldX)); body.writeU32(UInt32(bitPattern: f.fieldY))
++            body.writeU16(f.fieldW); body.writeU16(f.fieldH)
++            body.writeU32(UInt32(bitPattern: f.caretX)); body.writeU32(UInt32(bitPattern: f.caretY))
++            body.writeU16(f.caretW); body.writeU16(f.caretH)
+         case let .displaySelected(r):
+             body.writeU32(r.requestedID)
+             body.writeU8(r.status.rawValue)
+@@ -920,6 +963,17 @@ public enum ControlMessage: Equatable, Sendable {
+                 requestedID: req, status: status, displayID: id, x: Int32(bitPattern: x), y: Int32(bitPattern: y),
+                 width: w, height: h, pictureWidth: pw, pictureHeight: ph, pointerPlaced: placed == 1,
+                 pointerX: Int32(bitPattern: px), pointerY: Int32(bitPattern: py)))
++        case 0x63:
++            guard let state = r.readU8() else { return nil }
++            return .screenLock(state: state)
++        case 0x64:
++            guard let flag = r.readU8(), flag <= 1,
++                  let fx = r.readU32(), let fy = r.readU32(), let fw = r.readU16(), let fh = r.readU16(),
++                  let cx = r.readU32(), let cy = r.readU32(), let cw = r.readU16(), let ch = r.readU16()
++            else { return nil }
++            return .textFocus(WireTextFocus(
++                hasText: flag == 1, fieldX: Int32(bitPattern: fx), fieldY: Int32(bitPattern: fy), fieldW: fw, fieldH: fh,
++                caretX: Int32(bitPattern: cx), caretY: Int32(bitPattern: cy), caretW: cw, caretH: ch))
+         default:
+             return nil
+         }
+@@ -928,7 +982,7 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Known TLV types. Everything beyond is skipped by the deframer
+     /// using its declared length.
+     public static func isKnownType(_ t: UInt8) -> Bool {
+-        (0x01...0x1E).contains(t) || (0x60...0x62).contains(t) // Duo Screens build (multi-screen)
++        (0x01...0x1E).contains(t) || (0x60...0x64).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus)
+     }
+ }
+ 
+diff --git a/Tests/SessionTests/RealHostTextFocusProofTests.swift b/Tests/SessionTests/RealHostTextFocusProofTests.swift
+new file mode 100644
+index 0000000..dd37f40
+--- /dev/null
++++ b/Tests/SessionTests/RealHostTextFocusProofTests.swift
+@@ -0,0 +1,121 @@
++// Duo Desktop build (text focus + lock), proof on this Mac's own Host (127.0.0.1:4433): a viewer clicks
++// into apps and prints the TEXT_FOCUS and SCREEN_LOCK notices the Host sends. Skipped unless
++// GLASSACT_REALHOST_PORT is set. GLASSACT_PROOF_DIR: the viewer key. Never types anything.
++import XCTest
++import AppKit
++import CoreGraphics
++import GlassActCore
++@testable import GlassActSession
++import GlassActTransport
++import GlassActWire
++
++final class RealHostTextFocusProofTests: XCTestCase {
++    @MainActor
++    func spin(_ seconds: Double, until done: () -> Bool = { false }) {
++        let end = Date().addingTimeInterval(seconds)
++        while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
++    }
++
++    /// The largest on-screen window of an app (CGWindowList bounds: no permission needed).
++    func window(of owner: String) -> CGRect? {
++        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
++        return list.filter { ($0[kCGWindowOwnerName as String] as? String) == owner && ($0[kCGWindowLayer as String] as? Int) == 0 }
++            .compactMap { w -> CGRect? in
++                guard let b = w[kCGWindowBounds as String] as? NSDictionary else { return nil }
++                return CGRect(dictionaryRepresentation: b)
++            }
++            .max { $0.width * $0.height < $1.width * $1.height }
++    }
++
++    func describe(_ f: WireTextFocus?) -> String {
++        guard let f else { return "nothing received" }
++        guard f.hasText else { return "none (not a text place)" }
++        return "text: field \(f.fieldX),\(f.fieldY) \(f.fieldW)x\(f.fieldH); caret \(f.caretX),\(f.caretY) \(f.caretW)x\(f.caretH)"
++    }
++
++    @MainActor
++    func testTextFocusAndLock() throws {
++        guard let portText = ProcessInfo.processInfo.environment["GLASSACT_REALHOST_PORT"],
++              let port = UInt16(portText) else { throw XCTSkip("no real host (GLASSACT_REALHOST_PORT)") }
++        let dir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["GLASSACT_PROOF_DIR"] ?? NSTemporaryDirectory())
++        let id = try QUICIdentity.loadOrCreate(directory: dir, name: "proof-viewer-identity", commonName: "duo-proof")
++        print("proof: viewer fingerprint \(try QUICIdentity.fingerprint(of: id))")
++
++        let session = ViewerSession(host: "127.0.0.1", port: port, fingerprint: "", identity: id,
++                                    options: .init(cursorMetadata: true, video: false, deviceName: "duo-proof"))
++        let lock = NSLock()
++        var focuses: [WireTextFocus] = []
++        var locks: [UInt8] = []
++        session.engine.onTextFocus = { f in lock.lock(); focuses.append(f); lock.unlock() }
++        session.engine.onScreenLock = { s in lock.lock(); locks.append(s); lock.unlock() }
++        func latest() -> WireTextFocus? { lock.lock(); defer { lock.unlock() }; return focuses.last }
++        func count() -> Int { lock.lock(); defer { lock.unlock() }; return focuses.count }
++        let main = CGDisplayBounds(CGMainDisplayID())
++        session.setRequestedGeometry(mode: 2, widthPoints: Int(main.width), heightPoints: Int(main.height), scale: 1)
++        session.start()
++        spin(15) { session.configuredGrid() != nil }
++        let grid = try XCTUnwrap(session.configuredGrid(), "connected")
++        spin(3)
++        lock.lock(); let lockSeen = locks; lock.unlock()
++        print("proof: SCREEN_LOCK on connect: \(lockSeen) (0 = unlocked, 1 = locked)")
++        XCTAssertEqual(lockSeen.last, ScreenLock.unlocked, "an unlocked Mac reports unlocked on connect")
++
++        func click(_ p: CGPoint) {
++            let x = Int((p.x - main.minX) / main.width * CGFloat(grid.width))
++            let y = Int((p.y - main.minY) / main.height * CGFloat(grid.height))
++            session.sendInput(kind: 1, x: x, y: y, a: 0, b: 0)
++            spin(0.15)
++            session.sendInput(kind: 2, x: x, y: y, a: 1, b: 0)
++            spin(0.08)
++            session.sendInput(kind: 3, x: x, y: y, a: 1, b: 0)
++        }
++        func after(_ label: String, _ action: () -> Void) -> WireTextFocus? {
++            let before = count()
++            action()
++            spin(2.5) { count() > before }
++            spin(0.5)
++            let f = latest()
++            print("proof: \(label): \(describe(count() > before ? f : nil)) [latest overall: \(describe(f))]")
++            return count() > before ? f : f
++        }
++
++        // TextEdit: a new plain document, click in the middle of its window.
++        let doc = dir.appendingPathComponent("textfocus-proof.txt")
++        try "".write(to: doc, atomically: true, encoding: .utf8)
++        NSWorkspace.shared.open([doc], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
++                                configuration: NSWorkspace.OpenConfiguration())
++        spin(3) { window(of: "TextEdit") != nil }
++        let te = try XCTUnwrap(window(of: "TextEdit"), "TextEdit window")
++        print("proof: TextEdit window \(te)")
++        let t = after("click into TextEdit's text") { click(CGPoint(x: te.midX, y: te.midY)) }
++        XCTAssertEqual(t?.hasText, true, "TextEdit reports a text place")
++        if let t, t.hasText {
++            let field = CGRect(x: CGFloat(t.fieldX), y: CGFloat(t.fieldY), width: CGFloat(t.fieldW), height: CGFloat(t.fieldH))
++            XCTAssertTrue(te.insetBy(dx: -2, dy: -2).contains(field.insetBy(dx: 1, dy: 1)) || te.intersects(field), "field is inside the window")
++            XCTAssertTrue(te.contains(CGPoint(x: CGFloat(t.caretX), y: CGFloat(t.caretY))), "caret is inside the window")
++        }
++
++        // The desktop: a spot no window covers (bottom-left of the main screen, below the windows).
++        let d = after("click on the desktop") { click(CGPoint(x: main.minX + 60, y: main.maxY - 40)) }
++        XCTAssertEqual(d?.hasText, false, "the desktop is not a text place")
++
++        // Other apps: activated, then a click in the middle of their window (Terminal) or no click (Claude,
++        // Chrome: their focus is whatever they had; we only report what they answer).
++        for (app, owner, doClick) in [("Terminal", "Terminal", true), ("Google Chrome", "Google Chrome", false),
++                                      ("Claude", "Claude", false)] {
++            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: [
++                "Terminal": "com.apple.Terminal", "Google Chrome": "com.google.Chrome", "Claude": "com.anthropic.claudefordesktop",
++            ][app]!)
++            guard let url else { print("proof: \(app): not installed"); continue }
++            _ = after("\(app) activated" + (doClick ? " and clicked in its window" : "")) {
++                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
++                spin(2)
++                if doClick, let w = window(of: owner) { click(CGPoint(x: w.midX, y: w.midY)) }
++            }
++        }
++
++        // Close the proof document's TextEdit window without saving anything typed (nothing was typed).
++        session.stop()
++        spin(1)
++    }
++}
+diff --git a/Tests/WireTests/TypingNoticesTests.swift b/Tests/WireTests/TypingNoticesTests.swift
+new file mode 100644
+index 0000000..6727bad
+--- /dev/null
++++ b/Tests/WireTests/TypingNoticesTests.swift
+@@ -0,0 +1,48 @@
++// Duo Desktop build: SCREEN_LOCK (0x63) and TEXT_FOCUS (0x64) on the wire.
++import XCTest
++@testable import GlassActWire
++
++final class TypingNoticesTests: XCTestCase {
++    func testBothRoundTrip() {
++        let f = ControlMessage.textFocus(WireTextFocus(hasText: true, fieldX: -1900, fieldY: 118, fieldW: 656, fieldH: 384,
++                                                       caretX: 223, caretY: 130, caretW: 1, caretH: 13))
++        let none = ControlMessage.textFocus(.none)
++        let lock = ControlMessage.screenLock(state: ScreenLock.locked)
++        XCTAssertEqual(f.tlvType, 0x64); XCTAssertEqual(lock.tlvType, 0x63)
++        var d = ControlDeframer()
++        d.append(f.encoded()); d.append(none.encoded()); d.append(lock.encoded())
++        XCTAssertEqual(d.next(), .message(f))
++        XCTAssertEqual(d.next(), .message(none))
++        XCTAssertEqual(d.next(), .message(lock))
++    }
++
++    /// An older peer doesn't know the types: it skips them by length and the next message still arrives.
++    /// Simulated by re-typing the same bodies to a type nobody knows (0x7E).
++    func testOlderPeerSkipsThem() {
++        XCTAssertFalse(ControlMessage.isKnownType(0x7E))
++        var stale = ControlMessage.textFocus(WireTextFocus(hasText: true, fieldW: 10, fieldH: 10)).encoded()
++        stale[0] = 0x7E
++        var lock = ControlMessage.screenLock(state: 1).encoded()
++        lock[0] = 0x7E
++        let after = ControlMessage.hostNotice(code: HostNotice.none)
++        var d = ControlDeframer()
++        d.append(stale); d.append(lock); d.append(after.encoded())
++        XCTAssertEqual(d.next(), .skippedUnknown(type: 0x7E))
++        XCTAssertEqual(d.next(), .skippedUnknown(type: 0x7E))
++        XCTAssertEqual(d.next(), .message(after))
++        XCTAssertFalse(d.isMalformed)
++    }
++
++    /// No text content can cross the wire: the notice has only numbers and a flag, and its body is a
++    /// fixed 25 bytes whatever is focused.
++    func testTextFocusCarriesNoString() {
++        for child in Mirror(reflecting: WireTextFocus(hasText: true)).children {
++            XCTAssertTrue(child.value is Int32 || child.value is UInt16 || child.value is Bool,
++                          "\(child.label ?? "?") is \(type(of: child.value)), not a number")
++        }
++        for f in [WireTextFocus.none, WireTextFocus(hasText: true, fieldX: 1, fieldY: 2, fieldW: 3, fieldH: 4)] {
++            let bytes = ControlMessage.textFocus(f).encoded()
++            XCTAssertEqual(bytes.count, 2 + WireTextFocus.bodyLength) // type + 1-byte varint length + body
++        }
++    }
++}

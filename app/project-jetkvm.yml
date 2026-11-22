@@ -1,0 +1,27 @@
+# The JetKVM view (the owner 2026-11-21: "a choice at build to incorporate either the JetKVM or the terminal or both").
+# Included by project.yml only when xcodegen runs with DUO_JETKVM=YES in its environment:
+#   DUO_JETKVM=YES xcodegen generate     → JetKVM in, WebRTC.framework linked and embedded
+#   xcodegen generate                    → no JetKVM code, no WebRTC
+packages:
+  # Our own JetKVM client (MIT); WebRTC exact 158.0.0 is pinned in its Package.swift.
+  JetKVMClient:
+    path: ../jetkvm-client
+targets:
+  DuoDesktop:
+    dependencies:
+      - package: JetKVMClient
+        product: JetKVMClient
+    settings:
+      base:
+        DUO_JETKVM_FLAG: DUO_JETKVM
+        # Info-jetkvm.plist = Info.plist plus the App Transport Security exception the JetKVM needs (its login is
+        # plain http:// and its signaling plain ws://; see the plist).
+        DUO_INFOPLIST_NAME: Info-jetkvm.plist
+        # Apple refused builds 41 and 42 (ITMS-90683, mail 2026-11-21): WebRTC.framework refers to the camera and
+        # microphone APIs, so a purpose string is required even though the app never uses either. Truthful texts.
+        INFOPLIST_KEY_NSCameraUsageDescription: $(DUO_APP_NAME) does not use the camera. A video library it includes for the JetKVM view refers to it.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: $(DUO_APP_NAME) does not use the microphone. A video library it includes for the JetKVM view refers to it.
+  DuoDesktopTests:
+    settings:
+      base:
+        DUO_JETKVM_FLAG: DUO_JETKVM

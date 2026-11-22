@@ -1,0 +1,187 @@
+import Foundation
+import UIKit
+
+/// Simulator-only switches for scripted checks against Glass Act's test host, which a headless Simulator cannot
+/// otherwise drive (no Simulator.app to unfold the Duo or tap). Compiled out of device builds.
+enum SimulatorSwitches {
+    #if targetEnvironment(simulator)
+    private static let args = CommandLine.arguments
+    private static let env = ProcessInfo.processInfo.environment
+
+    /// `--outer-picture PATH`: the outer view draws this image over the live picture, at the picture's place and
+    /// size (a lock-screen picture for screenshots; the test host cannot show the Mac's lock screen).
+    static let outerPicture: UIImage? = {
+        guard let i = args.firstIndex(of: "--outer-picture"), i + 1 < args.count else { return nil }
+        return UIImage(contentsOfFile: args[i + 1])
+    }()
+
+    /// `--force-open-layout`: show the open-screen UI even in compact width (the folded Duo).
+    static let forceOpenLayout = args.contains("--force-open-layout")
+
+    /// `--no-app-lock`: this run skips the Touch ID lock (on by default), so scripted runs and UI tests can reach
+    /// the Macs. Device builds have no such switch.
+    static let noAppLock = args.contains("--no-app-lock")
+
+    /// `--slide-slowdown N`: the crossing slide runs N times slower, so a screenshot can catch it mid-way.
+    static var slideSlowdown: Double {
+        guard let i = args.firstIndex(of: "--slide-slowdown"), i + 1 < args.count, let n = Double(args[i + 1]) else { return 1 }
+        return max(1, n)
+    }
+
+    /// `--test-unlock-word WORD`: at launch, "Unlock Automatically" is turned on for "Test host" with this MADE-UP
+    /// word (the auto-unlock proof against the test host; never a real password).
+    static var testUnlockWord: String? {
+        guard let i = args.firstIndex(of: "--test-unlock-word"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    /// `--keyboard-up`: horizontal, raise the system keyboard (with its Mac keys row) once in session.
+    static let keyboardUp = args.contains("--keyboard-up")
+
+    /// `--show-key-info`: on the Mac list, opens the key reference panel, for a screenshot.
+    static let showKeyInfo = args.contains("--show-key-info")
+
+    /// `--hold-command-shift`: once in session, taps Command and Shift (held for the next key or click, as two
+    /// taps by hand would), so the held look can be screenshotted.
+    static let holdCommandShift = args.contains("--hold-command-shift")
+
+    /// `--open-app-switcher`: once in session (upright), taps the Apps key, so the app switcher's held look
+    /// (Apps and Command held) can be screenshotted.
+    static let openAppSwitcher = args.contains("--open-app-switcher")
+
+    /// `--open-overview`: once the Mac's screen list shows more than one screen, open All Screens (for the
+    /// snapshot proof's screenshot).
+    static let openOverview = args.contains("--open-overview")
+
+    /// `--more-on`: once in session (upright), turns "…" on, so the "more" keys can be screenshotted.
+    static let moreOn = args.contains("--more-on")
+
+    /// `--top-row-name "<Mac>|<Screen>"`: the session's top row shows this name (and this screen, with the menu
+    /// indicator, when given), for screenshots of long real names the test host does not have.
+    static var topRowPreview: (mac: String, screen: String?)? {
+        guard let i = args.firstIndex(of: "--top-row-name"), i + 1 < args.count else { return nil }
+        let parts = args[i + 1].split(separator: "|", maxSplits: 1).map(String.init)
+        return (parts[0], parts.count > 1 ? parts[1] : nil)
+    }
+
+    /// `--leave-after S`: S seconds into the session, leaves it the way the Leave button does (the release-path
+    /// check: does a held Command go up on a normal leave).
+    static var leaveAfter: Double? {
+        guard let i = args.firstIndex(of: "--leave-after"), i + 1 < args.count else { return nil }
+        return Double(args[i + 1])
+    }
+
+    /// `--keyboard-inset N`: upright, lay out as if the system keyboard reached N pt above the bottom safe area
+    /// (the owner's real Duo: 293, which gives the 3 x 8 grid; this simulator's keyboard is 277). Layout only; the
+    /// simulator's own keyboard stays as it is, so the band ends a little above it.
+    static var keyboardInset: CGFloat? {
+        guard let i = args.firstIndex(of: "--keyboard-inset"), i + 1 < args.count, let v = Double(args[i + 1])
+        else { return nil }
+        return CGFloat(v)
+    }
+
+    /// `--add-mac`: the Mac list opens with Add Mac showing, for a screenshot. `--add-mac-address A`: types A.
+    static let showAddMac = args.contains("--add-mac")
+    static var addMacAddress: String? {
+        guard let i = args.firstIndex(of: "--add-mac-address"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    /// `--choose-view NAME` (a `SessionView` raw value): the session switches to that view after it opens.
+    static var chooseView: SessionView? {
+        guard let i = args.firstIndex(of: "--choose-view"), i + 1 < args.count else { return nil }
+        return SessionView(rawValue: args[i + 1])
+    }
+
+    /// `--mac-settings NAME`: the Mac list opens on that Mac's settings, for a screenshot.
+    @MainActor static var showMacSettings: String? {
+        guard let i = args.firstIndex(of: "--mac-settings"), i + 1 < args.count else { return nil }
+        return MacStore.shared.macs.first { $0.name == args[i + 1] }?.id
+    }
+
+    /// `DUO_TEST_SIGNIN=user:password` (set with SIMCTL_CHILD_): signs in to the test host without typing.
+    static var testSignIn: (String, String)? {
+        guard let v = env["DUO_TEST_SIGNIN"], let i = v.firstIndex(of: ":") else { return nil }
+        return (String(v[..<i]), String(v[v.index(after: i)...]))
+    }
+
+    /// `--input-demo`: once in session, drives the keyboard and trackpad engines (not touches) through the
+    /// acceptance list: "Hi!", a Command-latched key, a click, a right click, a scroll and a drag.
+    @MainActor static var inputDemo: ((SessionModel) -> Void)? {
+        guard args.contains("--input-demo") else { return nil }
+        return { model in
+            guard let controller = model.controller else { return }
+            let keys = MacKeyboardEngine(sink: controller)
+            let pad = TrackpadEngine(sink: controller)
+            pad.modifierWrap = { keys.withModifiers($0) }
+            if let g = model.grid { pad.setCanvas(width: g.width, height: g.height) }
+            pad.hostPointer(x: 400, y: 400)
+            func key(_ id: String, _ rows: [[MacKey]] = MacKeyboardLayout.letters) -> MacKey {
+                rows.joined().first { $0.id == id }!
+            }
+            func tap(_ k: MacKey) { keys.keyDown(k); keys.keyUp(k) }
+            let steps: [() -> Void] = [
+                { keys.tapModifier(.shift); tap(key("h")) },
+                { tap(key("i")) },
+                { tap(key("!", MacKeyboardLayout.symbols)) },
+                { keys.tapModifier(.command); tap(key("s")) },
+                { pad.move(dx: 100, dy: 50, dt: 1) },
+                { pad.tap(button: 0, at: .zero, time: 20) },
+                { pad.move(dx: 100, dy: 0, dt: 1); pad.tap(button: 1, at: .zero, time: 30) },
+                { for _ in 0..<10 { pad.scroll(dx: 0, dy: -12) } },
+                { pad.beginDrag() },
+                { pad.move(dx: 60, dy: 40, dt: 1) },
+                { pad.move(dx: 60, dy: 40, dt: 1) },
+                { pad.endDrag() },
+            ]
+            for (i, step) in steps.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(i) * 0.4) {
+                    model.note("input demo step \(i)")
+                    step()
+                }
+            }
+        }
+    }
+
+    /// `--screen-tour`: once in session, the shape proof (project notes): choose screen 2, choose it
+    /// again, open and close All Screens, choose screen 1, choose 2 again; the log shows one decision per change.
+    @MainActor static var screenTour: ((SessionModel) -> Void)? {
+        guard args.contains("--screen-tour") else { return nil }
+        return { model in
+            let steps: [(Double, String, () -> Void)] = [
+                (3, "choose screen 2", { model.chooseScreen(2) }),
+                (5, "choose screen 2 again", { model.chooseScreen(2) }),
+                (7, "open All Screens", { model.showOverview() }),
+                (9, "close All Screens on screen 2", { model.chooseScreen(2) }),
+                (11, "choose screen 1", { model.chooseScreen(1) }),
+                (13, "choose screen 2", { model.chooseScreen(2) }),
+            ]
+            for (at, name, step) in steps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + at) { model.note("screen tour: \(name)"); step() }
+            }
+        }
+    }
+    #else
+    @MainActor static var screenTour: ((SessionModel) -> Void)? { nil }
+    static let openOverview = false
+    static let outerPicture: UIImage? = nil
+    static let showAddMac = false
+    static let addMacAddress: String? = nil
+    static let showMacSettings: String? = nil
+    static let chooseView: SessionView? = nil
+    static let forceOpenLayout = false
+    static let noAppLock = false
+    static let slideSlowdown: Double = 1
+    static let testUnlockWord: String? = nil
+    static let testSignIn: (String, String)? = nil
+    static let keyboardUp = false
+    static let showKeyInfo = false
+    static let holdCommandShift = false
+    static let openAppSwitcher = false
+    static let moreOn = false
+    static let topRowPreview: (mac: String, screen: String?)? = nil
+    static let leaveAfter: Double? = nil
+    static let keyboardInset: CGFloat? = nil
+    @MainActor static var inputDemo: ((SessionModel) -> Void)? { nil }
+    #endif
+}

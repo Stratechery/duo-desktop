@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Add Mac browses for Glass Act Hosts on the home network (TN3179: browsed Bonjour types must be listed). -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_glassact._udp</string>
+	</array>
+</dict>
+</plist>

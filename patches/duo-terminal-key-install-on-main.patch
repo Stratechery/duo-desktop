@@ -1,0 +1,1369 @@
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index fc643bd..3a9c892 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -405,6 +405,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+     }
+ 
++    /// Duo Desktop build (review fixes). Main thread: `t` is the live viewer session's transport.
++    func isLiveSession(_ t: QUICTransport?) -> Bool {
++        guard let t else { return false }
++        return viewerSessionLive && transport === t
++    }
++
+     /// The key of the viewer connected right now, if any (main thread).
+     var connectedViewerFingerprint: String? {
+         viewerSessionLive ? transport?.peerCertificate?.fingerprint : nil
+@@ -3085,22 +3091,51 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             }
+             DispatchQueue.main.async { self.handleWindowSelect(windowID) }
+         }
+-        engine.onDisplaySelect = { [weak self] displayID, place, x, y in // Duo Screens build (multi-screen)
++        // Duo Desktop build (review fixes): every Duo message below is bound to `transport`, the one
++        // this engine was made on and the only one whose bytes reach it (`HostControlDelivery` in
++        // `onControl`). After a hop to main, each re-checks that transport is still the live session.
++        engine.onDisplaySelect = { [weak self, weak transport] displayID, place, x, y in // Duo Screens build (multi-screen)
+             guard let self else { return }
+             if displayID != 0, let denial = self.agentAccess.admit(agentInput: self.agentAccess.agentDriving) {
+                 self.agentAudit.denied("screen select", denial.reason)
+                 return
+             }
+             DispatchQueue.main.async {
++                guard self.isLiveSession(transport) else { return }
+                 self.handleDisplaySelect(displayID, pointer: place ? CGPoint(x: Int(x), y: Int(y)) : nil)
+             }
+         }
+-        engine.onDisplaySnapshotRequest = { [weak self] maxSide in // Duo Desktop build (overview snapshots)
+-            DispatchQueue.main.async { self?.sendDisplaySnapshots(maxSide: Int(maxSide)) }
++        engine.onDisplaySnapshotRequest = { [weak self, weak transport] maxSide in // Duo Desktop build (overview snapshots)
++            DispatchQueue.main.async {
++                guard let self, self.isLiveSession(transport) else { return }
++                self.sendDisplaySnapshots(maxSide: Int(maxSide))
++            }
+         }
+         engine.unlockAvailable = true // Duo Desktop build (auto-unlock)
+-        engine.onUnlockType = { [weak self] password in
+-            DispatchQueue.main.async { self?.typeUnlockPassword(password) }
++        engine.onUnlockType = { [weak self, weak transport] password in
++            DispatchQueue.main.async {
++                var bytes = password
++                defer { for i in bytes.indices { bytes[i] = 0 } }
++                guard let self, self.isLiveSession(transport) else { return }
++                // The password is typed input: refused, like any input, for a view-only key and
++                // for an agent whose control is off (it was not checked before these fixes).
++                if let denial = self.agentAccess.admit(agentInput: self.agentAccess.sessionIsAgent) {
++                    self.agentAudit.denied("unlock", denial.reason)
++                    self.onStatus("unlock request: refused (\(denial.reason)), nothing typed")
++                    self.encodeQueue.async { self.engine?.sendUnlockState(UnlockState.failed) }
++                    return
++                }
++                self.typeUnlockPassword(bytes)
++            }
++        }
++        engine.onTerminalKeyInstall = { [weak self, weak engine, weak transport] requestID, keyLine in // Duo Desktop build (terminal key)
++            // Engine queue, inside this engine's handleControl: the bytes came on `transport`
++            // (HostControlDelivery), so the asking viewer is that transport's peer, never the
++            // session that happens to be current.
++            guard let self, let transport, self.sessionTransport === transport else { return }
++            self.handleTerminalKeyInstall(requestID: requestID, keyLine: keyLine,
++                                          peer: transport.peerCertificate,
++                                          send: { [weak self] result in self?.encodeQueue.async { engine?.sendTerminalKeyResult(result) } })
+         }
+         engine.onWindowControl = { [weak self] action, width, height in
+             guard let self else { return }
+@@ -3243,7 +3278,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+         // Route control through self.engine (not a captured engine) so an
+         // in-session geometry rebuild (§4.10) swaps the engine transparently.
+-        transport.onControl = { [weak self] data in
++        transport.onControl = { [weak self, weak transport] data in
+             guard let self else { return }
+             // Stamp ARRIVAL, on the transport queue: read after the hop, a
+             // message that lands during a slow encode tick (a cold start,
+@@ -3252,7 +3287,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             // auto-scale read as a congested path.
+             let arrivedUS = MonotonicClock.nowUS
+             self.encodeQueue.async {
+-                guard let engine = self.engine else { return }
++                // Duo Desktop build (review fixes): only the engine made on the transport that
++                // delivered these bytes reads them; a stale delivery (an earlier viewer's bytes
++                // arriving after a new viewer was adopted) is dropped before any deframer.
++                guard let engine = HostControlDelivery.engine(current: self.engine,
++                                                              sessionTransport: self.sessionTransport,
++                                                              deliveredBy: transport) else { return }
+                 let wasRunning = engine.state == .running
+                 engine.handleControl(data, nowUS: arrivedUS)
+                 if !wasRunning && engine.state == .running {
+@@ -3260,9 +3300,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+                 }
+             }
+         }
+-        transport.onVideoReset = { [weak self] in
++        transport.onVideoReset = { [weak self, weak transport] in
+             guard let self else { return }
+-            self.encodeQueue.async { self.engine?.videoChannelReset() }
++            self.encodeQueue.async {
++                HostControlDelivery.engine(current: self.engine, sessionTransport: self.sessionTransport,
++                                           deliveredBy: transport)?.videoChannelReset()
++            }
+         }
+         transport.onState = { [weak self, weak transport] state in
+             DispatchQueue.main.async {
+diff --git a/Apps/Host/TerminalKeyHost.swift b/Apps/Host/TerminalKeyHost.swift
+new file mode 100644
+index 0000000..637202f
+--- /dev/null
++++ b/Apps/Host/TerminalKeyHost.swift
+@@ -0,0 +1,98 @@
++import AppKit
++import Foundation
++import GlassActCore
++import GlassActTransport
++import GlassActWire
++
++/// Duo Desktop build (terminal key): TERMINAL_KEY_INSTALL. The viewer of this
++/// session (approved by this Mac as a person's viewer, allowed to control) asks
++/// that its phone's SSH public key be added to this account's
++/// `~/.ssh/authorized_keys`, so its terminal signs in with no password. The
++/// line is checked strictly and appended; nothing is removed, no other account
++/// is touched, nothing from the request is run. One log line per request:
++/// fingerprint and viewer name, never the key.
++extension HostController {
++    /// Engine queue.
++    func handleTerminalKeyInstall(requestID: UInt32, keyLine: String, peer: QUICTransport.PeerCertificate?,
++                                  send: @escaping @Sendable (WireTerminalKeyResult) -> Void) {
++        let viewer: String = {
++            guard let fp = peer?.fingerprint else { return "unknown" }
++            let entry = authorizedViewers.all.first { $0.fingerprint == fp }
++            let name = [entry?.name, entry?.device].compactMap { $0 }.first { !$0.isEmpty }
++            return name ?? QUICIdentity.abbreviatedKeyString(fp)
++        }()
++        // Duo Desktop build (review fixes 2): an approval from before the Host recorded what it
++        // approved a key as. Ask this Mac's user once, record the answer, then decide as usual.
++        if authorizedViewers.needsSSHKeyQuestion(for: peer), let fp = peer?.fingerprint {
++            send(WireTerminalKeyResult(requestID: requestID, status: .askingOnMac, remoteLoginOn: false,
++                                       tmuxPresent: false, userName: NSUserName()))
++            DispatchQueue.main.async { [weak self] in
++                guard let self else { return }
++                guard SSHKeyQuestion.begin(fp) else {
++                    send(WireTerminalKeyResult(requestID: requestID, status: .refused, remoteLoginOn: false,
++                                               tmuxPresent: false, userName: NSUserName(),
++                                               reason: "this Mac is already asking about this device"))
++                    return
++                }
++                defer { SSHKeyQuestion.end(fp) }
++                // Asked only while nothing has decided it meanwhile (the list could change under the alert).
++                if self.authorizedViewers.needsSSHKeyQuestion(for: peer) {
++                    self.onStatus("viewer \"\(viewer)\" asks to add an SSH key: asking on this Mac")
++                    let allow = MainActor.assumeIsolated { SSHKeyQuestion.run(device: viewer) }
++                    do {
++                        try self.authorizedViewers.decideSSHKeys(fp, allow: allow)
++                        self.onStatus("SSH keys for viewer \"\(viewer)\": \(allow ? "allowed" : "not allowed") on this Mac")
++                    } catch {
++                        self.onStatus("could not save the SSH-key answer for \"\(viewer)\": \(error)")
++                    }
++                }
++                self.answerTerminalKeyInstall(requestID: requestID, keyLine: keyLine, peer: peer,
++                                              viewer: viewer, send: send)
++            }
++            return
++        }
++        answerTerminalKeyInstall(requestID: requestID, keyLine: keyLine, peer: peer, viewer: viewer, send: send)
++    }
++
++    private func answerTerminalKeyInstall(requestID: UInt32, keyLine: String, peer: QUICTransport.PeerCertificate?,
++                                          viewer: String, send: @escaping @Sendable (WireTerminalKeyResult) -> Void) {
++        let refusal = authorizedViewers.sshKeyRefusal(for: peer) // Duo Desktop build (review fixes)
++        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
++            let outcome: TerminalKeyInstaller.Outcome = refusal.map { .refused(reason: $0) }
++                ?? TerminalKeyInstaller.forCurrentUser().install(keyLine)
++            let result = TerminalKeyMacState.result(
++                requestID: requestID, outcome: outcome, userName: NSUserName(),
++                remoteLoginOn: TerminalKeyMacState.listening(port: 22),
++                tmuxPresent: TerminalKeyMacState.tmuxPresent())
++            let line = TerminalKeyMacState.logLine(outcome, viewer: viewer)
++            DispatchQueue.main.async { self?.onStatus(line) }
++            send(result)
++        }
++    }
++}
++
++/// Duo Desktop build (review fixes 2): the one-time question for an approval made before the
++/// Host recorded SSH-key permission. A standard alert (HIG): the question as the title, what it
++/// means below, "Don't Allow" as the safe default. One question per device at a time. Main thread.
++enum SSHKeyQuestion {
++    nonisolated(unsafe) private static var open: Set<String> = []
++
++    static func begin(_ fingerprint: String) -> Bool { open.insert(fingerprint).inserted }
++    static func end(_ fingerprint: String) { open.remove(fingerprint) }
++
++    @MainActor static func run(device: String) -> Bool {
++        NSApp.activate()
++        let alert = NSAlert()
++        alert.alertStyle = .warning
++        alert.messageText = "Allow \(device) to add its SSH key to this Mac?"
++        alert.informativeText = """
++            \(device) can already see and control this Mac. Its SSH key would also let its Terminal \
++            sign in to this account without a password.
++            """
++        let deny = alert.addButton(withTitle: "Don’t Allow")
++        deny.keyEquivalent = "\r" // the safe answer is the default
++        alert.addButton(withTitle: "Allow").keyEquivalent = ""
++        alert.window.initialFirstResponder = deny
++        return alert.runModal() == .alertSecondButtonReturn
++    }
++}
+diff --git a/Sources/GlassActCore/HostControlDelivery.swift b/Sources/GlassActCore/HostControlDelivery.swift
+new file mode 100644
+index 0000000..37b1448
+--- /dev/null
++++ b/Sources/GlassActCore/HostControlDelivery.swift
+@@ -0,0 +1,18 @@
++import Foundation
++
++/// Duo Desktop build (review fixes, review finding 2). Control bytes are authorized by the
++/// transport that DELIVERED them, not by whichever session is current when they are read.
++/// A transport's control callback can run, be delayed, and reach the engine queue after a
++/// new viewer was adopted; its bytes must then go nowhere: not to the new engine (which
++/// would act on them as the new viewer: a key install, the Mac password, input).
++public enum HostControlDelivery {
++    /// Engine queue. The engine that may read bytes delivered by `transport`: the current
++    /// one, only while `transport` is the session's transport and the engine was made on it.
++    /// nil = stale delivery; drop the bytes before any deframer sees them.
++    public static func engine(current: HostEngine?, sessionTransport: AnyObject?,
++                              deliveredBy transport: AnyObject?) -> HostEngine? {
++        guard let current, let transport, let sessionTransport, sessionTransport === transport,
++              current.isBound(to: transport) else { return nil }
++        return current
++    }
++}
+diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
+index 6e15469..3dd6854 100644
+--- a/Sources/GlassActCore/HostEngine.swift
++++ b/Sources/GlassActCore/HostEngine.swift
+@@ -631,6 +631,19 @@ public final class HostEngine: @unchecked Sendable {
+     public var unlockAvailable = false
+     /// Duo Desktop build (auto-unlock): UNLOCK_TYPE — the password bytes. Never log them.
+     public var onUnlockType: (([UInt8]) -> Void)?
++    /// Duo Desktop build (terminal key): TERMINAL_KEY_INSTALL — the viewer asks
++    /// that this OpenSSH public key line be added for the Host's account. Only
++    /// after the handshake (`waitsForHandshake`). The app checks, installs and
++    /// answers with `sendTerminalKeyResult`.
++    public var onTerminalKeyInstall: ((_ requestID: UInt32, _ keyLine: String) -> Void)?
++    /// Duo Desktop build (review fixes): this engine was made on `other`, the transport whose
++    /// bytes it may read. The Host checks it before feeding delivered bytes (`HostControlDelivery`).
++    public func isBound(to other: AnyObject) -> Bool { (transport as AnyObject) === other }
++    /// Duo Desktop build (terminal key): answer one TERMINAL_KEY_INSTALL.
++    public func sendTerminalKeyResult(_ result: WireTerminalKeyResult) {
++        guard state == .running else { return }
++        sendControl(.terminalKeyResult(result))
++    }
+     /// Single-window mode: the viewer issued a window-chrome action (see
+     /// WindowAction). The app drives the host window via Accessibility
+     /// (fullscreen / resize) or ends the single-window session.
+@@ -1015,6 +1028,8 @@ public final class HostEngine: @unchecked Sendable {
+                 onDisplaySnapshotRequest?(maxSide)
+             case let .unlockType(password): // Duo Desktop build (auto-unlock)
+                 onUnlockType?(password)
++            case let .terminalKeyInstall(requestID, keyLine): // Duo Desktop build (terminal key)
++                onTerminalKeyInstall?(requestID, keyLine)
+             case let .windowControl(action, width, height):
+                 onWindowControl?(action, width, height)
+             case let .viewerLog(name, offset, total, data):
+@@ -1039,7 +1054,8 @@ public final class HostEngine: @unchecked Sendable {
+             case let .syncRequest(region, generation):
+                 noteSyncRequest(region: region, generation: generation)
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+-                 .screenLock, .textFocus, .displaySnapshot, .unlockState:
++                 .screenLock, .textFocus, .displaySnapshot, .unlockState,
++                 .terminalKeyResult: // Duo Desktop build (terminal key)
+                 break // host-originated / not addressed to the host
+             }
+         }
+@@ -1083,6 +1099,8 @@ public final class HostEngine: @unchecked Sendable {
+             return action != WindowAction.endSession
+         case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect, .displaySnapshotRequest, .unlockType:
+             return true
++        case .terminalKeyInstall: // Duo Desktop build (terminal key)
++            return true
+         default:
+             return false
+         }
+diff --git a/Sources/GlassActCore/TerminalKeyInstall.swift b/Sources/GlassActCore/TerminalKeyInstall.swift
+new file mode 100644
+index 0000000..0e28560
+--- /dev/null
++++ b/Sources/GlassActCore/TerminalKeyInstall.swift
+@@ -0,0 +1,255 @@
++// Duo Desktop build (terminal key). The Host side of TERMINAL_KEY_INSTALL:
++// check one OpenSSH public key line strictly and append it to
++// `<home>/.ssh/authorized_keys` of the account running the Host. It never
++// removes or rewrites a line, never touches another account and never runs
++// anything. Pure file work on a given home folder, so tests drive it against
++// a made-up one.
++
++public import Foundation
++public import GlassActWire
++import CryptoKit
++#if os(macOS)
++import Darwin
++#endif
++
++public enum TerminalKeyLine {
++    /// Key types accepted (the first field of the line).
++    public static let knownTypes: Set<String> = [
++        "ssh-ed25519", "ssh-rsa",
++        "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
++        "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com",
++    ]
++
++    /// A checked line: its type, key text (base64) and the decoded key.
++    public struct Parsed: Equatable, Sendable {
++        public var type: String
++        public var base64: String
++        public var blob: Data
++        /// The normalised line written to the file: `type base64[ comment]`.
++        public var line: String
++        /// `SHA256:…` as `ssh-keygen -l` prints it.
++        public var fingerprint: String {
++            "SHA256:" + Data(SHA256.hash(data: blob)).base64EncodedString().replacingOccurrences(of: "=", with: "")
++        }
++    }
++
++    /// Checks one line. Returns the parsed key, or a plain reason it was refused.
++    /// Accepted: `type base64` or `type base64 comment`, single spaces, a known
++    /// type, a base64 body that decodes and names the same type inside, a
++    /// comment of plain characters, at most `ControlMessage.maxTerminalKeyLineBytes`.
++    /// Refused: anything else, including options, quotes, tabs, line ends and
++    /// leading or trailing spaces.
++    public static func check(_ line: String) -> Result<Parsed, Refusal> {
++        let bytes = Array(line.utf8)
++        guard !bytes.isEmpty else { return .failure(Refusal("the key line is empty")) }
++        guard bytes.count <= ControlMessage.maxTerminalKeyLineBytes else {
++            return .failure(Refusal("the key line is too long"))
++        }
++        // Printable ASCII and single spaces only: no line ends, tabs, NULs,
++        // quotes or backslashes (nothing a shell or sshd option could use).
++        for b in bytes {
++            if b == 0x0A || b == 0x0D { return .failure(Refusal("the key line has a line break")) }
++            if b == 0x22 || b == 0x27 || b == 0x60 || b == 0x5C {
++                return .failure(Refusal("the key line has quotes or a backslash"))
++            }
++            if b < 0x20 || b > 0x7E { return .failure(Refusal("the key line has characters that are not allowed")) }
++        }
++        let fields = line.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
++        guard !fields.contains(where: \.isEmpty) else {
++            return .failure(Refusal("the key line has extra spaces"))
++        }
++        guard knownTypes.contains(fields[0]) else {
++            return .failure(Refusal("the key type is not known (options are not accepted)"))
++        }
++        guard fields.count == 2 || fields.count == 3 else {
++            return .failure(Refusal("the key line is not one key (type, key, optional name)"))
++        }
++        let type = fields[0], body = fields[1]
++        guard body.utf8.allSatisfy({ isBase64Byte($0) }), body.utf8.count % 4 == 0,
++              let blob = Data(base64Encoded: body), blob.count >= 4 + type.utf8.count else {
++            return .failure(Refusal("the key is not valid base64"))
++        }
++        // The blob starts with the same type: uint32 length + name.
++        let n = Int(blob[blob.startIndex]) << 24 | Int(blob[blob.startIndex + 1]) << 16
++            | Int(blob[blob.startIndex + 2]) << 8 | Int(blob[blob.startIndex + 3])
++        guard n == type.utf8.count,
++              blob.subdata(in: blob.startIndex + 4 ..< blob.startIndex + 4 + n) == Data(type.utf8) else {
++            return .failure(Refusal("the key does not match its type"))
++        }
++        // Then at least one more field: a length that fits, and some key bytes.
++        let rest = blob.startIndex + 4 + n
++        guard blob.endIndex - rest >= 5 else { return .failure(Refusal("the key is incomplete")) }
++        let m = Int(blob[rest]) << 24 | Int(blob[rest + 1]) << 16 | Int(blob[rest + 2]) << 8 | Int(blob[rest + 3])
++        guard m > 0, m <= blob.endIndex - rest - 4 else { return .failure(Refusal("the key is incomplete")) }
++        if fields.count == 3 {
++            guard fields[2].utf8.allSatisfy({ isCommentByte($0) }) else {
++                return .failure(Refusal("the key name has characters that are not allowed"))
++            }
++        }
++        return .success(Parsed(type: type, base64: body, blob: blob, line: fields.joined(separator: " ")))
++    }
++
++    public struct Refusal: Error, Equatable, Sendable {
++        public var reason: String
++        public init(_ reason: String) { self.reason = reason }
++    }
++
++    private static func isBase64Byte(_ b: UInt8) -> Bool {
++        (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) || (b >= 0x30 && b <= 0x39)
++            || b == 0x2B || b == 0x2F || b == 0x3D
++    }
++
++    private static func isCommentByte(_ b: UInt8) -> Bool {
++        (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) || (b >= 0x30 && b <= 0x39)
++            || b == 0x2D || b == 0x2E || b == 0x5F || b == 0x40 || b == 0x3A || b == 0x2B
++    }
++
++    /// True when `fileText` already holds this key (same type and key text,
++    /// whatever the comment or options in front of it).
++    public static func alreadyPresent(_ key: Parsed, in fileText: String) -> Bool {
++        for raw in fileText.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
++            let fields = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
++            guard let i = fields.firstIndex(where: { knownTypes.contains($0) }), i + 1 < fields.count else { continue }
++            if fields[i] == key.type && fields[i + 1] == key.base64 { return true }
++        }
++        return false
++    }
++}
++
++/// Appends a checked key to `<home>/.ssh/authorized_keys`.
++public struct TerminalKeyInstaller: Sendable {
++    public enum Outcome: Equatable, Sendable {
++        case installed(fingerprint: String)
++        case alreadyThere(fingerprint: String)
++        case refused(reason: String)
++    }
++
++    public var home: URL
++
++    public init(home: URL) { self.home = home }
++
++    #if os(macOS)
++    /// The account running this process.
++    public static func forCurrentUser() -> TerminalKeyInstaller {
++        TerminalKeyInstaller(home: FileManager.default.homeDirectoryForCurrentUser)
++    }
++    #endif
++
++    public func install(_ line: String) -> Outcome {
++        let key: TerminalKeyLine.Parsed
++        switch TerminalKeyLine.check(line) {
++        case let .success(k): key = k
++        case let .failure(r): return .refused(reason: r.reason)
++        }
++        let fm = FileManager.default
++        let ssh = home.appendingPathComponent(".ssh", isDirectory: true)
++        let file = ssh.appendingPathComponent("authorized_keys")
++        var isDir: ObjCBool = false
++        if fm.fileExists(atPath: ssh.path, isDirectory: &isDir) {
++            guard isDir.boolValue else { return .refused(reason: "~/.ssh is not a folder") }
++        } else {
++            do {
++                try fm.createDirectory(at: ssh, withIntermediateDirectories: false,
++                                       attributes: [.posixPermissions: 0o700])
++            } catch {
++                return .refused(reason: "could not make ~/.ssh")
++            }
++        }
++        // Never follow a link at the file itself.
++        if let type = try? fm.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType,
++           type != .typeRegular {
++            return .refused(reason: "~/.ssh/authorized_keys is not a plain file")
++        }
++        let existing: Data
++        if fm.fileExists(atPath: file.path) {
++            guard let d = fm.contents(atPath: file.path) else {
++                return .refused(reason: "could not read ~/.ssh/authorized_keys")
++            }
++            existing = d
++        } else {
++            existing = Data()
++            guard fm.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
++                return .refused(reason: "could not make ~/.ssh/authorized_keys")
++            }
++        }
++        if TerminalKeyLine.alreadyPresent(key, in: String(decoding: existing, as: UTF8.self)) {
++            return .alreadyThere(fingerprint: key.fingerprint)
++        }
++        var add = Data()
++        if let last = existing.last, last != 0x0A { add.append(0x0A) }
++        add.append(contentsOf: Array(key.line.utf8))
++        add.append(0x0A)
++        // Append only: every byte already there stays as it was.
++        guard let h = try? FileHandle(forWritingTo: file) else {
++            return .refused(reason: "could not open ~/.ssh/authorized_keys")
++        }
++        defer { try? h.close() }
++        do {
++            try h.seekToEnd()
++            try h.write(contentsOf: add)
++        } catch {
++            return .refused(reason: "could not write ~/.ssh/authorized_keys")
++        }
++        return .installed(fingerprint: key.fingerprint)
++    }
++}
++
++/// What the app needs to know besides the key: is the SSH port listening, is tmux here.
++public enum TerminalKeyMacState {
++    /// Usual places tmux is installed (Homebrew on Apple silicon and Intel,
++    /// MacPorts, the system).
++    public static let tmuxPaths = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux",
++                                   "/usr/bin/tmux"]
++
++    public static func tmuxPresent(paths: [String] = tmuxPaths) -> Bool {
++        paths.contains { FileManager.default.isExecutableFile(atPath: $0) }
++    }
++
++    /// True when something accepts a TCP connection on 127.0.0.1:`port`
++    /// (Remote Login listens on 22). Only connects and closes; sends nothing.
++    public static func listening(port: UInt16 = 22) -> Bool {
++        #if os(macOS)
++        let fd = socket(AF_INET, SOCK_STREAM, 0)
++        guard fd >= 0 else { return false }
++        defer { close(fd) }
++        var addr = sockaddr_in()
++        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
++        addr.sin_family = sa_family_t(AF_INET)
++        addr.sin_port = port.bigEndian
++        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
++        let r = withUnsafePointer(to: &addr) {
++            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
++                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
++            }
++        }
++        return r == 0
++        #else
++        return false
++        #endif
++    }
++
++    /// The answer to one request, from an installer outcome.
++    public static func result(requestID: UInt32, outcome: TerminalKeyInstaller.Outcome, userName: String,
++                              remoteLoginOn: Bool, tmuxPresent: Bool) -> WireTerminalKeyResult {
++        switch outcome {
++        case .installed:
++            WireTerminalKeyResult(requestID: requestID, status: .installed, remoteLoginOn: remoteLoginOn,
++                                  tmuxPresent: tmuxPresent, userName: userName)
++        case .alreadyThere:
++            WireTerminalKeyResult(requestID: requestID, status: .alreadyThere, remoteLoginOn: remoteLoginOn,
++                                  tmuxPresent: tmuxPresent, userName: userName)
++        case let .refused(reason):
++            WireTerminalKeyResult(requestID: requestID, status: .refused, remoteLoginOn: remoteLoginOn,
++                                  tmuxPresent: tmuxPresent, userName: userName, reason: reason)
++        }
++    }
++
++    /// One log line, never the key body.
++    public static func logLine(_ outcome: TerminalKeyInstaller.Outcome, viewer: String) -> String {
++        switch outcome {
++        case let .installed(fp): "terminal key \(fp) installed for viewer \"\(viewer)\""
++        case let .alreadyThere(fp): "terminal key \(fp) already there for viewer \"\(viewer)\""
++        case let .refused(reason): "terminal key refused for viewer \"\(viewer)\": \(reason)"
++        }
++    }
++}
+diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
+index c83c6de..9f5c68d 100644
+--- a/Sources/GlassActCore/ViewerEngine.swift
++++ b/Sources/GlassActCore/ViewerEngine.swift
+@@ -114,6 +114,14 @@ public final class ViewerEngine: @unchecked Sendable {
+     public var onDisplayList: ((_ displays: [WireDisplay]) -> Void)?
+     /// Duo Screens build (multi-screen): host → viewer, the answer to a DISPLAY_SELECT.
+     public var onDisplaySelected: ((_ result: WireDisplaySelection) -> Void)?
++    /// Duo Desktop build (terminal key): the Host's TERMINAL_KEY_RESULT.
++    public var onTerminalKeyResult: ((_ result: WireTerminalKeyResult) -> Void)?
++    /// Duo Desktop build (terminal key): ask the Host to add this OpenSSH public
++    /// key line for its account. An older Host never answers.
++    public func sendTerminalKeyInstall(requestID: UInt32, keyLine: String) {
++        guard state == .running else { return }
++        sendControl(.terminalKeyInstall(requestID: requestID, keyLine: keyLine))
++    }
+     /// The host ended the session on purpose (someone at the Mac disconnected
+     /// this viewer, or in single-window mode the shared window closed). The
+     /// app shows why and does NOT redial.
+@@ -499,6 +507,8 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onDisplayList?(displays)
+             case let .displaySelected(result):
+                 onDisplaySelected?(result)
++            case let .terminalKeyResult(result): // Duo Desktop build (terminal key)
++                onTerminalKeyResult?(result)
+             case let .windowControl(action, _, _):
+                 // Host → viewer endSession: the session is over, not interrupted —
+                 // someone at the Mac disconnected this viewer, or the shared window
+@@ -523,7 +533,8 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onUnlockState?(state)
+             case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
+                  .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
+-                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect, .displaySnapshotRequest, .unlockType:
++                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect, .displaySnapshotRequest, .unlockType,
++                 .terminalKeyInstall: // Duo Desktop build (terminal key)
+                 break // viewer-originated / not addressed to the viewer
+             }
+         }
+diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
+index b062101..c015f44 100644
+--- a/Sources/GlassActSession/ViewerController.swift
++++ b/Sources/GlassActSession/ViewerController.swift
+@@ -250,6 +250,14 @@ public final class ViewerController: @unchecked Sendable {
+     public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
+     /// Duo Desktop build (auto-unlock): UNLOCK_STATE (`UnlockState`), main queue. An older host never sends it.
+     public var onUnlockState: ((UInt8) -> Void)?
++    /// Duo Desktop build (terminal key): the Host's answer to `installTerminalKey`
++    /// (main thread). An older Host never answers.
++    public var onTerminalKeyResult: ((WireTerminalKeyResult) -> Void)?
++    /// Duo Desktop build (terminal key): ask the Host to add this OpenSSH public key
++    /// line to its account's authorized_keys. `sent` is false with no running session.
++    public func installTerminalKey(requestID: UInt32, keyLine: String, sent: @escaping @Sendable (Bool) -> Void) {
++        session.installTerminalKey(requestID: requestID, keyLine: keyLine, sent: sent)
++    }
+     /// Main thread: the host ended the session on purpose (shared window
+     /// closed) — show why, don't redial.
+     public var onHostEndedSession: ((String) -> Void)?
+@@ -467,6 +475,7 @@ public final class ViewerController: @unchecked Sendable {
+         session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
+         session.onDisplaySnapshot = { [weak self] snapshot in self?.onDisplaySnapshot?(snapshot) }
+         session.onUnlockState = { [weak self] state in self?.onUnlockState?(state) }
++        session.onTerminalKeyResult = { [weak self] result in self?.onTerminalKeyResult?(result) }
+         session.onWindowList = { [weak self] windows in
+             self?.agentDriver?.noteWindowList(windows)
+             self?.onWindowList?(windows)
+diff --git a/Sources/GlassActSession/ViewerSession.swift b/Sources/GlassActSession/ViewerSession.swift
+index 3cdd773..372c65f 100644
+--- a/Sources/GlassActSession/ViewerSession.swift
++++ b/Sources/GlassActSession/ViewerSession.swift
+@@ -82,6 +82,9 @@ public final class ViewerSession: @unchecked Sendable {
+     public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
+     /// Duo Desktop build (auto-unlock), main queue.
+     public var onUnlockState: ((UInt8) -> Void)?
++    /// Duo Desktop build (terminal key): the Host's answer to a key install
++    /// (main thread). An older Host never answers; the asker times out.
++    public var onTerminalKeyResult: ((WireTerminalKeyResult) -> Void)?
+     /// `queue`: the choice sent and not yet answered, and the one waiting behind
+     /// it (a newer one replaces an older waiting one). Selections are serialized.
+     private var displaySelectInFlight: (id: UInt32, point: (x: Int32, y: Int32)?)?
+@@ -189,6 +192,9 @@ public final class ViewerSession: @unchecked Sendable {
+         engine.onDisplayList = { [weak self] displays in
+             DispatchQueue.main.async { self?.onDisplayList?(displays) }
+         }
++        engine.onTerminalKeyResult = { [weak self] result in // Duo Desktop build (terminal key)
++            DispatchQueue.main.async { self?.onTerminalKeyResult?(result) }
++        }
+         engine.onDisplaySelected = { [weak self] result in // engine queue = `queue`
+             guard let self else { return }
+             self.displaySelectInFlight = nil
+@@ -345,6 +351,20 @@ public final class ViewerSession: @unchecked Sendable {
+         queue.async { [weak self] in self?.engine.sendClipboard(format: format, data: data) }
+     }
+ 
++    /// Duo Desktop build (terminal key): ask the Host to add this OpenSSH public
++    /// key line for its account. `sent` (main thread) is false when there is no
++    /// running session to carry it.
++    public func installTerminalKey(requestID: UInt32, keyLine: String, sent: @escaping @Sendable (Bool) -> Void) {
++        queue.async { [weak self] in
++            guard let self, self.engine.state == .running else {
++                DispatchQueue.main.async { sent(false) }
++                return
++            }
++            self.engine.sendTerminalKeyInstall(requestID: requestID, keyLine: keyLine)
++            DispatchQueue.main.async { sent(true) }
++        }
++    }
++
+     /// Ask the host to enumerate and send its window list.
+     public func requestWindowList() {
+         queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: 0) }
+diff --git a/Sources/GlassActTransport/Identity.swift b/Sources/GlassActTransport/Identity.swift
+index 37de999..2d0f6f6 100644
+--- a/Sources/GlassActTransport/Identity.swift
++++ b/Sources/GlassActTransport/Identity.swift
+@@ -193,7 +193,9 @@ public enum IdentityFiles {
+ 
+ /// The host's allowlist of viewer key IDs (`QUICIdentity.fingerprint`), persisted one per
+ /// line (file 0600): `<fingerprint>` then optional space-separated fields —
+-/// `view` (approved to watch only; offered for agents), `kind=agent|viewer`,
++/// `view` (approved to watch only; offered for agents), `kind=agent|viewer`
++/// (what it last presented), `as=agent|viewer` (Duo Desktop build: what the host's
++/// user approved it as; never changed by what it presents later),
+ /// `label=…` (an agent's name), `device=…` (the computer it said it runs
+ /// on), `name=…` (what the host's user called it), `addr=…` (where it last
+ /// connected from), `approved=…` / `seen=…` (Unix seconds). Values are
+@@ -206,6 +208,14 @@ public final class AuthorizedViewers: Sendable {
+         public var fingerprint: String
+         public var viewOnly = false
+         public var kind = Kind.unknown
++        /// Duo Desktop build (review fixes, review finding 1): what this key was approved AS, set
++        /// only by the host's own approval (`add`). `kind` follows the certificate the key
++        /// presents at each connection, which its holder can reissue with any name; this does
++        /// not. Permissions beyond viewing (adding an SSH key) read this.
++        public var approvedAs = Kind.unknown
++        /// Duo Desktop build (review fixes 2): the host's user answered "Don't Allow" when this
++        /// key asked to add an SSH key (`keys=no`). Never asked again; screen sharing unchanged.
++        public var sshKeysDenied = false
+         public var label = ""
+         /// The computer it runs on, as it reported (VIEWER_INFO).
+         public var device = ""
+@@ -221,6 +231,8 @@ public final class AuthorizedViewers: Sendable {
+             var fields = [fingerprint]
+             if viewOnly { fields.append("view") }
+             if kind != .unknown { fields.append("kind=\(kind.rawValue)") }
++            if approvedAs != .unknown { fields.append("as=\(approvedAs.rawValue)") }
++            if sshKeysDenied { fields.append("keys=no") }
+             if !label.isEmpty { fields.append("label=\(Self.encode(label))") }
+             if !device.isEmpty { fields.append("device=\(Self.encode(device))") }
+             if !name.isEmpty { fields.append("name=\(Self.encode(name))") }
+@@ -236,12 +248,23 @@ public final class AuthorizedViewers: Sendable {
+             let fp = QUICIdentity.normalize(String(first))
+             guard fp.count == 64, fp.allSatisfy(\.isHexDigit) else { return nil }
+             fingerprint = fp
++            var sawApprovedAs = false
++            defer {
++                // An approval saved before `as=` existed (review fixes 2, review): its recorded
++                // `kind` is only what it last presented, so it may only make things stricter. A
++                // recorded agent stays an agent; anything else stays `.unknown` (no SSH-key
++                // permission) until the host's user answers the one-time question
++                // (`decideSSHKeys`). Screen-sharing approval is unchanged either way.
++                if !sawApprovedAs, kind == .agent { approvedAs = .agent }
++            }
+             for field in fields.dropFirst() {
+                 if field == "view" { viewOnly = true; continue }
+                 guard let eq = field.firstIndex(of: "=") else { continue }
+                 let key = field[..<eq], value = String(field[field.index(after: eq)...])
+                 switch key {
+                 case "kind": kind = Kind(rawValue: value) ?? .unknown
++                case "as": approvedAs = Kind(rawValue: value) ?? .unknown; sawApprovedAs = true
++                case "keys": sshKeysDenied = value == "no"
+                 case "label": label = Self.decode(value)
+                 case "device": device = Self.decode(value)
+                 case "name": name = Self.decode(value)
+@@ -282,6 +305,61 @@ public final class AuthorizedViewers: Sendable {
+         entries.withLock { $0[QUICIdentity.normalize(fingerprint)]?.viewOnly ?? false }
+     }
+ 
++    /// Duo Desktop build (review fixes, review finding 1): may this key add an SSH key for the
++    /// host's account? Only an approved key the host's user approved as a person's viewer
++    /// (not an agent) with control (not view only). Decided by the host's own record alone:
++    /// nothing the key presents at a connection changes it.
++    public func mayAddSSHKeys(_ fingerprint: String) -> Bool {
++        entries.withLock { map in
++            guard let e = map[QUICIdentity.normalize(fingerprint)] else { return false }
++            return !e.viewOnly && e.approvedAs == .viewer && !e.sshKeysDenied
++        }
++    }
++
++    /// Duo Desktop build (review fixes 2): an approval from before `as=` existed, never yet
++    /// decided for SSH keys. The host asks its user once ("Allow … to add its SSH key to this
++    /// Mac?") instead of trusting the last certificate's name. Only for a person's viewer
++    /// certificate on a key with control; everything else is refused as before.
++    public func needsSSHKeyQuestion(for peer: QUICTransport.PeerCertificate?) -> Bool {
++        guard let peer, !peer.isAgent else { return false }
++        return entries.withLock { map in
++            guard let e = map[QUICIdentity.normalize(peer.fingerprint)] else { return false }
++            return !e.viewOnly && e.approvedAs == .unknown && !e.sshKeysDenied
++        }
++    }
++
++    /// Duo Desktop build (review fixes 2): the host's user answered the SSH-key question.
++    /// Allow records the Host-owned permission (`as=viewer`); Don't Allow records `keys=no`.
++    public func decideSSHKeys(_ fingerprint: String, allow: Bool) throws {
++        try update(QUICIdentity.normalize(fingerprint), create: false) { e in
++            if allow { e.approvedAs = .viewer; e.sshKeysDenied = false } else { e.sshKeysDenied = true }
++        }
++    }
++
++    /// Duo Desktop build (terminal key; review fixes): why a TERMINAL_KEY_INSTALL from the
++    /// viewer that presented `peer` (on the transport that delivered the request) is refused,
++    /// or nil to install. The certificate's name can only make it stricter: the permission is
++    /// `mayAddSSHKeys`, the host's own record.
++    public func sshKeyRefusal(for peer: QUICTransport.PeerCertificate?) -> String? {
++        guard let peer, contains(peer.fingerprint) else { return "this viewer is not approved on this Mac" }
++        if peer.isAgent { return "an agent cannot add SSH keys" }
++        if isViewOnly(peer.fingerprint) { return "this viewer is set to view only on this Mac" }
++        guard mayAddSSHKeys(peer.fingerprint) else {
++            if entries.withLock({ $0[QUICIdentity.normalize(peer.fingerprint)]?.sshKeysDenied ?? false }) {
++                return "this Mac's user did not allow this device to add SSH keys"
++            }
++            return approvedAs(peer.fingerprint) == .agent
++                ? "this key was approved as an agent on this Mac; an agent cannot add SSH keys"
++                : "this key was not approved as a person's viewer on this Mac"
++        }
++        return nil
++    }
++
++    /// What the host's user approved this key as (`.unknown` if not on the list).
++    public func approvedAs(_ fingerprint: String) -> Entry.Kind {
++        entries.withLock { $0[QUICIdentity.normalize(fingerprint)]?.approvedAs ?? .unknown }
++    }
++
+     public var count: Int { entries.withLock { $0.count } }
+ 
+     /// Every approval, most recently seen (else approved) first.
+@@ -300,7 +378,7 @@ public final class AuthorizedViewers: Sendable {
+         }
+         try update(normalized, create: true) { e in
+             e.viewOnly = viewOnly
+-            if kind != .unknown { e.kind = kind }
++            if kind != .unknown { e.kind = kind; e.approvedAs = kind; e.sshKeysDenied = false }
+             e.approvedAt = Date()
+         }
+     }
+diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
+index 058cdb7..dcc3e24 100644
+--- a/Sources/GlassActWire/Control.swift
++++ b/Sources/GlassActWire/Control.swift
+@@ -435,6 +435,11 @@ public enum ControlMessage: Equatable, Sendable {
+     case unlockType(password: [UInt8])
+     /// Duo Desktop build (auto-unlock) — host → viewer (`UnlockState`). Type 0x68.
+     case unlockState(state: UInt8)
++    /// Duo Desktop build (terminal key): viewer → host, add this OpenSSH
++    /// public key line to the Host account's authorized_keys. Type 0x70.
++    case terminalKeyInstall(requestID: UInt32, keyLine: String)
++    /// Duo Desktop build (terminal key): host → viewer, the answer. Type 0x71.
++    case terminalKeyResult(WireTerminalKeyResult)
+     /// Single-window mode — viewer → host: a window-chrome action on the
+     /// shared window:
+     ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
+@@ -565,6 +570,8 @@ public enum ControlMessage: Equatable, Sendable {
+         case .displaySnapshot: 0x66
+         case .unlockType: 0x67
+         case .unlockState: 0x68
++        case .terminalKeyInstall: 0x70 // Duo Desktop build (terminal key)
++        case .terminalKeyResult: 0x71
+         }
+     }
+ 
+@@ -807,6 +814,19 @@ public enum ControlMessage: Equatable, Sendable {
+             body.writeU8(r.pointerPlaced ? 1 : 0)
+             body.writeU32(UInt32(bitPattern: r.pointerX))
+             body.writeU32(UInt32(bitPattern: r.pointerY))
++        case let .terminalKeyInstall(requestID, keyLine): // Duo Desktop build (terminal key)
++            body.writeU32(requestID)
++            body.writeBytes(Array(keyLine.utf8Prefix(Self.maxTerminalKeyLineBytes).utf8))
++        case let .terminalKeyResult(r):
++            body.writeU32(r.requestID)
++            body.writeU8(r.status.rawValue)
++            body.writeU8((r.remoteLoginOn ? 1 : 0) | (r.tmuxPresent ? 2 : 0))
++            let user = Array(r.userName.utf8Prefix(Self.maxTerminalKeyUserBytes).utf8)
++            body.writeU8(UInt8(user.count))
++            body.writeBytes(user)
++            let reason = Array(r.reason.utf8Prefix(Self.maxTerminalKeyReasonBytes).utf8)
++            body.writeU8(UInt8(reason.count))
++            body.writeBytes(reason)
+         }
+         return body.bytes
+     }
+@@ -1053,6 +1073,22 @@ public enum ControlMessage: Equatable, Sendable {
+         case 0x68:
+             guard let state = r.readU8() else { return nil }
+             return .unlockState(state: state)
++        case 0x70: // Duo Desktop build (terminal key)
++            guard let req = r.readU32(), (1...Self.maxTerminalKeyLineBytes).contains(r.remaining),
++                  let bytes = unsafe r.readBytes(r.remaining),
++                  let line = unsafe String(validating: bytes, as: UTF8.self) else { return nil }
++            return .terminalKeyInstall(requestID: req, keyLine: line)
++        case 0x71:
++            guard let req = r.readU32(), let raw = r.readU8(),
++                  let status = WireTerminalKeyResult.Status(rawValue: raw),
++                  let flags = r.readU8(),
++                  let ulen = r.readU8(), let ubytes = unsafe r.readBytes(Int(ulen)),
++                  let user = unsafe String(validating: ubytes, as: UTF8.self),
++                  let rlen = r.readU8(), let rbytes = unsafe r.readBytes(Int(rlen)),
++                  let reason = unsafe String(validating: rbytes, as: UTF8.self) else { return nil }
++            return .terminalKeyResult(WireTerminalKeyResult(
++                requestID: req, status: status, remoteLoginOn: flags & 1 != 0, tmuxPresent: flags & 2 != 0,
++                userName: user, reason: reason))
+         default:
+             return nil
+         }
+@@ -1062,6 +1098,7 @@ public enum ControlMessage: Equatable, Sendable {
+     /// using its declared length.
+     public static func isKnownType(_ t: UInt8) -> Bool {
+         (0x01...0x1E).contains(t) || (0x60...0x68).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus; 0x67-0x68 unlock)
++            || (0x70...0x71).contains(t) // Duo Desktop build (terminal key)
+     }
+ }
+ 
+diff --git a/Sources/GlassActWire/TerminalKey.swift b/Sources/GlassActWire/TerminalKey.swift
+new file mode 100644
+index 0000000..58ad7b0
+--- /dev/null
++++ b/Sources/GlassActWire/TerminalKey.swift
+@@ -0,0 +1,48 @@
++// Duo Desktop build (terminal key) — TERMINAL_KEY_INSTALL (0x70, viewer → host)
++// and TERMINAL_KEY_RESULT (0x71, host → viewer). Additive: an older Host skips
++// 0x70 by its length and never answers, so the viewer falls back after a wait.
++
++/// What the Host answers to one TERMINAL_KEY_INSTALL.
++public struct WireTerminalKeyResult: Equatable, Sendable {
++    public enum Status: UInt8, Sendable {
++        /// The line was added to the account's `authorized_keys`.
++        case installed = 0
++        /// The same key (type and key text) was already there; nothing written.
++        case alreadyThere = 1
++        /// Refused; `reason` says why. Nothing written.
++        case refused = 2
++        /// Duo Desktop build (review fixes 2): not an answer yet. The Host is asking its user
++        /// whether this device may add its SSH key (an approval from before the Host recorded
++        /// that); the real answer follows with the same request ID.
++        case askingOnMac = 3
++    }
++    public var requestID: UInt32
++    public var status: Status
++    /// The SSH port is listening: something accepts on this Mac's port 22 (a hint, not proof of the Remote Login setting).
++    public var remoteLoginOn: Bool
++    /// A `tmux` binary is in one of the usual places.
++    public var tmuxPresent: Bool
++    /// The short name of the account running the Host (the SSH user).
++    public var userName: String
++    /// Plain words, empty unless refused.
++    public var reason: String
++
++    public init(requestID: UInt32, status: Status, remoteLoginOn: Bool, tmuxPresent: Bool,
++                userName: String, reason: String = "") {
++        self.requestID = requestID
++        self.status = status
++        self.remoteLoginOn = remoteLoginOn
++        self.tmuxPresent = tmuxPresent
++        self.userName = userName
++        self.reason = reason
++    }
++}
++
++extension ControlMessage {
++    /// Upper bound on the key line in TERMINAL_KEY_INSTALL (an RSA-8192 line
++    /// is about 1.4 KB; anything bigger is refused at parse).
++    public static let maxTerminalKeyLineBytes = 4096
++    /// Upper bounds on the strings in TERMINAL_KEY_RESULT.
++    public static let maxTerminalKeyUserBytes = 255
++    public static let maxTerminalKeyReasonBytes = 255
++}
+diff --git a/Sources/glassact-testhost/main.swift b/Sources/glassact-testhost/main.swift
+index b8fec53..b65fb8d 100644
+--- a/Sources/glassact-testhost/main.swift
++++ b/Sources/glassact-testhost/main.swift
+@@ -43,6 +43,10 @@ struct Options {
+     /// screen stays locked (a wrong password). Only the length is ever logged.
+     var locked = false
+     var lockedStays = false
++    /// Duo Desktop build (terminal key): `--terminal-key-home DIR` answers TERMINAL_KEY_INSTALL by adding the
++    /// key to DIR/.ssh/authorized_keys, as the Host does for its account's home. Without it the test host
++    /// ignores the request, as an older Host does.
++    var terminalKeyHome: String?
+ 
+     static func parse(_ args: [String]) -> Options {
+         var o = Options()
+@@ -62,6 +66,7 @@ struct Options {
+             case "--displays": o.displays = true
+             case "--locked": o.locked = true
+             case "--locked-stays": o.locked = true; o.lockedStays = true
++            case "--terminal-key-home": o.terminalKeyHome = next() // Duo Desktop build (terminal key)
+             case "--picture-steps":
+                 o.pictureSteps = (next() ?? "").split(separator: ",").compactMap { step in
+                     let ts = step.split(separator: ":")
+@@ -567,6 +572,16 @@ final class TestHost: @unchecked Sendable {
+             clock: { MonotonicClock.nowUS })
+         engine.extraHelloCaps = (geometrySettled ? WireCaps.geometryFinal : 0) | WireCaps.virtualDisplay
+             | (options.displays ? WireCaps.displayList : 0) // Duo Screens build (multi-screen)
++        if let home = options.terminalKeyHome { // Duo Desktop build (terminal key)
++            engine.onTerminalKeyInstall = { [weak engine] requestID, keyLine in
++                let outcome = TerminalKeyInstaller(home: URL(fileURLWithPath: home)).install(keyLine)
++                print("glassact-testhost: " + TerminalKeyMacState.logLine(outcome, viewer: "test viewer"))
++                engine?.sendTerminalKeyResult(TerminalKeyMacState.result(
++                    requestID: requestID, outcome: outcome, userName: NSUserName(),
++                    remoteLoginOn: TerminalKeyMacState.listening(port: 22),
++                    tmuxPresent: TerminalKeyMacState.tmuxPresent()))
++            }
++        }
+         if options.displays {
+             engine.onDisplaySelect = { [weak self] id, place, x, y in
+                 self?.selectDisplay(id, place: place ? (Double(x), Double(y)) : nil)
+diff --git a/Tests/CoreTests/HostControlDeliveryTests.swift b/Tests/CoreTests/HostControlDeliveryTests.swift
+new file mode 100644
+index 0000000..6178d79
+--- /dev/null
++++ b/Tests/CoreTests/HostControlDeliveryTests.swift
+@@ -0,0 +1,58 @@
++import Foundation
++import Testing
++@testable import GlassActCore
++import GlassActWire
++
++/// Duo Desktop build (review fixes, review finding 2). Control bytes are authorized by the
++/// transport that delivered them. The Host's `onControl` hops to the engine queue and asks
++/// `HostControlDelivery` for the engine; this replays the reviewer's schedule against it.
++@Suite struct HostControlDeliveryTests {
++    static func running(on t: CaptureTransport) -> HostEngine {
++        let host = HostEngine(width: 64, height: 64, transport: t)
++        host.start(nowUS: 0)
++        host.handleControl(Data(ControlMessage.helloOK(ver: WireVersion.current, caps: 0, geoMode: 0,
++                                                       geoWidth: 0, geoHeight: 0, geoScale: 0).encoded()), nowUS: 1_000)
++        return host
++    }
++
++    /// The focused check: A's control callback is entered, delayed before its engine-queue
++    /// hop; B is adopted and handshakes; A's key request is released. Nothing is handled as B.
++    @Test func anEarlierViewersDelayedBytesNeverReachTheNewViewersEngine() {
++        let tA = CaptureTransport(), tB = CaptureTransport()
++        let keyRequest = Data(ControlMessage.terminalKeyInstall(requestID: 7, keyLine: "ssh-ed25519 AAAA x").encoded())
++        let unlock = Data(ControlMessage.unlockType(password: Array("pw".utf8)).encoded())
++        // A is the session; its callback captured its bytes (and its transport) and is delayed.
++        var engine: HostEngine? = Self.running(on: tA)
++        var sessionTransport: AnyObject? = tA
++        let delayedFromA = [keyRequest, unlock]
++        // B adopted (engine and session transport replaced together) and past its handshake.
++        let engineB = Self.running(on: tB)
++        var heardByB: [String] = []
++        engineB.onTerminalKeyInstall = { id, _ in heardByB.append("key \(id)") }
++        engineB.onUnlockType = { _ in heardByB.append("unlock") }
++        engine = engineB
++        sessionTransport = tB
++        // A's bytes reach the engine queue now.
++        for bytes in delayedFromA {
++            HostControlDelivery.engine(current: engine, sessionTransport: sessionTransport, deliveredBy: tA)?
++                .handleControl(bytes, nowUS: 2_000)
++        }
++        #expect(heardByB.isEmpty)
++        #expect(HostControlDelivery.engine(current: engine, sessionTransport: sessionTransport, deliveredBy: tA) == nil)
++        // B's own request goes to B.
++        HostControlDelivery.engine(current: engine, sessionTransport: sessionTransport, deliveredBy: tB)?
++            .handleControl(keyRequest, nowUS: 3_000)
++        #expect(heardByB == ["key 7"])
++    }
++
++    @Test func anEngineNotMadeOnTheSessionTransportReadsNothing() {
++        let tA = CaptureTransport(), tB = CaptureTransport()
++        let engineA = Self.running(on: tA)
++        // Between adopt's two writes, or any mismatch: no engine.
++        #expect(HostControlDelivery.engine(current: engineA, sessionTransport: tB, deliveredBy: tB) == nil)
++        #expect(HostControlDelivery.engine(current: engineA, sessionTransport: tA, deliveredBy: tA) === engineA)
++        #expect(HostControlDelivery.engine(current: engineA, sessionTransport: tA, deliveredBy: nil) == nil)
++        #expect(HostControlDelivery.engine(current: nil, sessionTransport: tA, deliveredBy: tA) == nil)
++        #expect(HostControlDelivery.engine(current: engineA, sessionTransport: nil, deliveredBy: tA) == nil)
++    }
++}
+diff --git a/Tests/CoreTests/TerminalKeyInstallTests.swift b/Tests/CoreTests/TerminalKeyInstallTests.swift
+new file mode 100644
+index 0000000..a42ee1a
+--- /dev/null
++++ b/Tests/CoreTests/TerminalKeyInstallTests.swift
+@@ -0,0 +1,152 @@
++import Foundation
++import Testing
++import GlassActCore
++import GlassActWire
++
++/// Duo Desktop build (terminal key). Made-up keys (their private halves were
++/// thrown away); every file write goes to a made-up home folder.
++@Suite struct TerminalKeyInstallTests {
++    static let ed = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJtFYnnnurmhBwS76STVJmtpyWFw0g3TqaWtQvkJ17YB duo-desktop"
++    static let edFingerprint = "SHA256:0w0OY4RbCipRDHRI9tzIkmqitRcwce/2YVGfKbQ+ACU"
++    static let ecdsa = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLcoWin/AYwN3XTYxwOihv81y5nXJvtoQk1miV5XUIVQ5GfIWwjrTD97buqT8BHeMmQCap6c94jNiDEm6DRRPIM= duo-desktop"
++
++    private func madeUpHome() throws -> URL {
++        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("termkey-\(UUID().uuidString)")
++        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++        return dir
++    }
++
++    private func mode(_ url: URL) throws -> Int {
++        try (FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
++    }
++
++    @Test func goodLinesPass() throws {
++        for line in [Self.ed, Self.ecdsa, String(Self.ed.dropLast(" duo-desktop".count))] {
++            guard case let .success(k) = TerminalKeyLine.check(line) else {
++                Issue.record("refused \(line)"); continue
++            }
++            #expect(k.line == line)
++        }
++        guard case let .success(k) = TerminalKeyLine.check(Self.ed) else { return }
++        #expect(k.fingerprint == Self.edFingerprint) // as ssh-keygen -l prints it
++    }
++
++    static let ecdsaAsEd: String = ecdsa.replacingOccurrences(of: "ecdsa-sha2-nistp256 ", with: "ssh-ed25519 ")
++    static let badLines: [(String, String)] = {
++        var a: [(String, String)] = []
++        a.append(("", "empty"))
++        a.append((String(repeating: "a", count: 4097), "too long"))
++        a.append((Self.ed + "\nssh-ed25519 AAAA x", "line break"))
++        a.append((Self.ed + "\r", "line break"))
++        a.append(("command=\"/bin/sh\" " + Self.ed, "quotes"))
++        a.append(("no-pty " + Self.ed, "type is not known"))
++        a.append(("ssh-dss AAAAB3NzaC1kc3MAAAA x", "type is not known"))
++        a.append((Self.ed.replacingOccurrences(of: " duo", with: "\tduo"), "not allowed"))
++        a.append((" " + Self.ed, "extra spaces"))
++        a.append((Self.ed + " ", "extra spaces"))
++        a.append((Self.ed.replacingOccurrences(of: " duo-desktop", with: "  duo-desktop"), "extra spaces"))
++        a.append(("ssh-ed25519 AAAA$C3Nz x", "base64"))
++        a.append(("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 x", "incomplete"))
++        // An ecdsa body labelled ed25519.
++        a.append((ecdsaAsEd, "match"))
++        a.append((Self.ed + " more", "not one key"))
++        a.append((Self.ed.replacingOccurrences(of: "duo-desktop", with: "duo;rm"), "not allowed"))
++        a.append((Self.ed.replacingOccurrences(of: "duo-desktop", with: "duo\\x"), "backslash"))
++        a.append((Self.ed.replacingOccurrences(of: "duo-desktop", with: "dűo"), "not allowed"))
++        return a
++    }()
++
++    @Test(arguments: badLines)
++    func badLinesAreRefused(_ line: String, _ reasonPart: String) {
++        guard case let .failure(r) = TerminalKeyLine.check(line) else {
++            Issue.record("accepted \(line.debugDescription)"); return
++        }
++        #expect(r.reason.contains(reasonPart), "\(r.reason)")
++    }
++
++    @Test func createsFolderAndFileWithTightModes() throws {
++        let home = try madeUpHome()
++        defer { try? FileManager.default.removeItem(at: home) }
++        let out = TerminalKeyInstaller(home: home).install(Self.ed)
++        #expect(out == .installed(fingerprint: Self.edFingerprint))
++        let ssh = home.appendingPathComponent(".ssh"), file = ssh.appendingPathComponent("authorized_keys")
++        #expect(try mode(ssh) == 0o700)
++        #expect(try mode(file) == 0o600)
++        #expect(try String(contentsOf: file, encoding: .utf8) == Self.ed + "\n")
++    }
++
++    @Test func appendsOnceAndKeepsEverythingElse() throws {
++        let home = try madeUpHome()
++        defer { try? FileManager.default.removeItem(at: home) }
++        let ssh = home.appendingPathComponent(".ssh"), file = ssh.appendingPathComponent("authorized_keys")
++        try FileManager.default.createDirectory(at: ssh, withIntermediateDirectories: true,
++                                                attributes: [.posixPermissions: 0o755])
++        // Another key with options, a comment line, CRLF, and no final line end.
++        let before = "# mine\r\nfrom=\"10.0.0.1\" " + Self.ecdsa.replacingOccurrences(of: "duo-desktop", with: "laptop")
++        try Data(before.utf8).write(to: file)
++        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
++        let installer = TerminalKeyInstaller(home: home)
++        #expect(installer.install(Self.ed) == .installed(fingerprint: Self.edFingerprint))
++        // Same key, another comment: already there; and the ecdsa key with options in front: already there.
++        #expect(installer.install(Self.ed.replacingOccurrences(of: "duo-desktop", with: "other")) ==
++                .alreadyThere(fingerprint: Self.edFingerprint))
++        guard case .alreadyThere = installer.install(Self.ecdsa) else { Issue.record("ecdsa duplicated"); return }
++        let after = try Data(contentsOf: file)
++        #expect(after == Data((before + "\n" + Self.ed + "\n").utf8)) // old bytes untouched, one new line
++        #expect(try mode(ssh) == 0o755) // an existing folder and file keep their modes
++        #expect(try mode(file) == 0o644)
++    }
++
++    @Test func refusesALinkOrAFileInPlaceOfTheFolder() throws {
++        let home = try madeUpHome()
++        defer { try? FileManager.default.removeItem(at: home) }
++        try Data("x".utf8).write(to: home.appendingPathComponent(".ssh"))
++        guard case .refused = TerminalKeyInstaller(home: home).install(Self.ed) else { Issue.record("wrote"); return }
++
++        let home2 = try madeUpHome()
++        defer { try? FileManager.default.removeItem(at: home2) }
++        let ssh = home2.appendingPathComponent(".ssh")
++        try FileManager.default.createDirectory(at: ssh, withIntermediateDirectories: true)
++        let target = home2.appendingPathComponent("elsewhere")
++        try Data().write(to: target)
++        try FileManager.default.createSymbolicLink(at: ssh.appendingPathComponent("authorized_keys"),
++                                                   withDestinationURL: target)
++        guard case .refused = TerminalKeyInstaller(home: home2).install(Self.ed) else { Issue.record("followed link"); return }
++        #expect(try Data(contentsOf: target).isEmpty)
++    }
++
++    @Test func refusedLineWritesNothing() throws {
++        let home = try madeUpHome()
++        defer { try? FileManager.default.removeItem(at: home) }
++        guard case .refused = TerminalKeyInstaller(home: home).install("no-pty " + Self.ed) else {
++            Issue.record("accepted"); return
++        }
++        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".ssh").path))
++    }
++
++    @Test func logLineNeverCarriesTheKey() {
++        let line = TerminalKeyMacState.logLine(.installed(fingerprint: Self.edFingerprint), viewer: "Phone")
++        #expect(line.contains(Self.edFingerprint) && line.contains("Phone"))
++        #expect(!line.contains("AAAAC3Nza"))
++    }
++
++    @Test func wireRoundTripAndOlderPeersSkipIt() throws {
++        let install = ControlMessage.terminalKeyInstall(requestID: 7, keyLine: Self.ed)
++        let result = ControlMessage.terminalKeyResult(WireTerminalKeyResult(
++            requestID: 7, status: .refused, remoteLoginOn: true, tmuxPresent: false, userName: "someone",
++            reason: "the key line is empty"))
++        var d = ControlDeframer()
++        d.append(install.encoded())
++        d.append(result.encoded())
++        #expect(d.next() == .message(install))
++        #expect(d.next() == .message(result))
++        // An older peer: the same bytes under a type it does not know are skipped by length.
++        var stale = install.encoded()
++        stale[0] = 0x7E
++        var old = ControlDeframer()
++        old.append(stale)
++        old.append(ControlMessage.ping(nonce: 1, tUS: 2).encoded())
++        #expect(old.next() == .skippedUnknown(type: 0x7E))
++        #expect(old.next() == .message(.ping(nonce: 1, tUS: 2)))
++    }
++}
+diff --git a/Tests/SessionTests/RealHostTerminalKeyProofTests.swift b/Tests/SessionTests/RealHostTerminalKeyProofTests.swift
+new file mode 100644
+index 0000000..51c14a5
+--- /dev/null
++++ b/Tests/SessionTests/RealHostTerminalKeyProofTests.swift
+@@ -0,0 +1,51 @@
++import XCTest
++import Foundation
++import GlassActCore
++@testable import GlassActSession
++import GlassActTransport
++import GlassActWire
++
++/// Duo Desktop build (terminal key), live: a running host on this Mac
++/// (`GLASSACT_TERMKEY_PORT`) is asked over a real session to add the key line
++/// in `GLASSACT_TERMKEY_LINE`. Prints what it answered. With
++/// `GLASSACT_TERMKEY_EXPECT_SILENT=1` the host is expected not to answer (an
++/// older Host). Skipped unless the port is set.
++final class RealHostTerminalKeyProofTests: XCTestCase {
++    @MainActor
++    func spin(_ seconds: Double, until done: () -> Bool) {
++        let end = Date().addingTimeInterval(seconds)
++        while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
++    }
++
++    @MainActor
++    func testInstallOverARealSession() throws {
++        let env = ProcessInfo.processInfo.environment
++        guard let port = env["GLASSACT_TERMKEY_PORT"].flatMap(UInt16.init),
++              let line = env["GLASSACT_TERMKEY_LINE"] else { throw XCTSkip("no host (GLASSACT_TERMKEY_PORT)") }
++        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("termkey-proof")
++        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++        let id = try QUICIdentity.loadOrCreate(directory: dir, name: "proof-viewer-identity", commonName: "termkey-proof")
++        let session = ViewerSession(host: "127.0.0.1", port: port, fingerprint: "", identity: id,
++                                    options: .init(cursorMetadata: true, video: false, deviceName: "termkey-proof"))
++        var results: [WireTerminalKeyResult] = []
++        session.onTerminalKeyResult = { results.append($0) }
++        session.setRequestedGeometry(mode: 2, widthPoints: 1280, heightPoints: 800, scale: 1)
++        session.start()
++        defer { session.stop() }
++        spin(15) { session.configuredGrid() != nil }
++        XCTAssertNotNil(session.configuredGrid(), "session running")
++        final class Box: @unchecked Sendable { var sent: Bool? }
++        let box = Box()
++        session.installTerminalKey(requestID: 42, keyLine: line) { ok in box.sent = ok } // main thread
++        spin(5) { !results.isEmpty }
++        XCTAssertEqual(box.sent, true)
++        if env["GLASSACT_TERMKEY_EXPECT_SILENT"] == "1" {
++            XCTAssertTrue(results.isEmpty, "an older host does not answer")
++            print("proof: no answer in 5 s (older host)")
++            return
++        }
++        let r = try XCTUnwrap(results.first, "the host answered")
++        XCTAssertEqual(r.requestID, 42)
++        print("proof: answer status=\(r.status) user=\(r.userName) remoteLogin=\(r.remoteLoginOn) tmux=\(r.tmuxPresent) reason=\"\(r.reason)\"")
++    }
++}
+diff --git a/Tests/TransportTests/SSHKeyPermissionTests.swift b/Tests/TransportTests/SSHKeyPermissionTests.swift
+new file mode 100644
+index 0000000..7ce9016
+--- /dev/null
++++ b/Tests/TransportTests/SSHKeyPermissionTests.swift
+@@ -0,0 +1,117 @@
++import CryptoKit
++import Foundation
++import Security
++import Testing
++@testable import GlassActTransport
++
++/// Duo Desktop build (review fixes, review finding 1). Approval is keyed by the public key, but
++/// the agent/viewer name is the certificate's, which the key's holder can reissue at will. Who
++/// may add an SSH key is the Host's own record of what it approved the key AS.
++@Suite struct SSHKeyPermissionTests {
++    static func list() -> (AuthorizedViewers, URL) {
++        let url = FileManager.default.temporaryDirectory
++            .appendingPathComponent("duo-sshperm-\(UInt64.random(in: 0...UInt64.max))")
++        return (AuthorizedViewers(url: url), url)
++    }
++
++    /// The focused check: one P-256 key, an agent certificate then a viewer certificate.
++    @Test func anAgentApprovalStaysRefusedWhenTheSameKeyPresentsAViewerCertificate() throws {
++        let key = P256.Signing.PrivateKey()
++        let agentDER = try SelfSignedIdentity.makeCertificate(key: key, commonName: "glassact-agent", validFor: 30, now: Date())
++        let viewerDER = try SelfSignedIdentity.makeCertificate(key: key, commonName: "duo-viewer", validFor: 30, now: Date())
++        let agentCert = try #require(SecCertificateCreateWithData(nil, Data(agentDER) as CFData))
++        let viewerCert = try #require(SecCertificateCreateWithData(nil, Data(viewerDER) as CFData))
++        let fp = QUICIdentity.fingerprint(of: agentCert)
++        #expect(QUICIdentity.fingerprint(of: viewerCert) == fp) // same approval key
++        let asAgent = QUICTransport.PeerCertificate(fingerprint: fp, commonName: "glassact-agent")
++        let asViewer = QUICTransport.PeerCertificate(fingerprint: fp, commonName: "duo-viewer")
++        #expect(asAgent.isAgent && !asViewer.isAgent)
++
++        let (viewers, url) = Self.list()
++        defer { try? FileManager.default.removeItem(at: url) }
++        try viewers.add(fp, viewOnly: false, kind: .agent) // the Host's user approved an agent, with control
++        #expect(viewers.sshKeyRefusal(for: asAgent) == "an agent cannot add SSH keys")
++        // The same key reconnects with the viewer certificate; the Host notes what it presented.
++        viewers.noteSeen(fp, kind: .viewer, address: "")
++        #expect(viewers.all.first?.kind == .viewer)           // presented name followed
++        #expect(viewers.approvedAs(fp) == .agent)              // the approval did not
++        #expect(!viewers.mayAddSSHKeys(fp))
++        #expect(viewers.sshKeyRefusal(for: asViewer)
++                == "this key was approved as an agent on this Mac; an agent cannot add SSH keys")
++        // Saved and reloaded (a Host restart): still refused.
++        let reloaded = AuthorizedViewers(url: url)
++        #expect(reloaded.sshKeyRefusal(for: asViewer) != nil)
++        #expect(reloaded.approvedAs(fp) == .agent)
++    }
++
++    @Test func anApprovedControllingViewerMayAddAKeyOthersMayNot() throws {
++        let (viewers, url) = Self.list()
++        defer { try? FileManager.default.removeItem(at: url) }
++        let person = String(repeating: "a", count: 64), watcher = String(repeating: "b", count: 64)
++        let stranger = String(repeating: "c", count: 64)
++        try viewers.add(person, viewOnly: false, kind: .viewer)
++        try viewers.add(watcher, viewOnly: true, kind: .viewer)
++        func peer(_ fp: String) -> QUICTransport.PeerCertificate { .init(fingerprint: fp, commonName: "duo-viewer") }
++        #expect(viewers.sshKeyRefusal(for: peer(person)) == nil)
++        #expect(viewers.sshKeyRefusal(for: peer(watcher)) == "this viewer is set to view only on this Mac")
++        #expect(viewers.sshKeyRefusal(for: peer(stranger)) == "this viewer is not approved on this Mac")
++        #expect(viewers.sshKeyRefusal(for: nil) == "this viewer is not approved on this Mac")
++        // A viewer approval presenting an agent certificate is refused too (stricter only).
++        #expect(viewers.sshKeyRefusal(for: .init(fingerprint: person, commonName: "glassact-agent")) != nil)
++    }
++
++    /// Review fixes 2 (the reviewer's focused check): a list saved before `as=` existed. Its `kind` is
++    /// only what the key last presented, so it grants nothing. Screen sharing stays exactly as it
++    /// was; SSH-key permission waits for the Host's user to answer the one-time question.
++    @Test func anOlderListGrantsNoSSHKeysUntilTheHostsUserAnswers() throws {
++        let url = FileManager.default.temporaryDirectory
++            .appendingPathComponent("duo-sshperm-legacy-\(UInt64.random(in: 0...UInt64.max))")
++        defer { try? FileManager.default.removeItem(at: url) }
++        let person = String(repeating: "d", count: 64), agent = String(repeating: "e", count: 64)
++        let other = String(repeating: "f", count: 64), watcher = String(repeating: "1", count: 64)
++        // The reviewer's line: an agent approved by the old Host, last seen with a viewer certificate.
++        try "\(person) kind=viewer approved=1 seen=2\n\(agent) kind=agent approved=1\n\(other)\n\(watcher) view kind=viewer\n"
++            .write(to: url, atomically: true, encoding: .utf8)
++        func viewer(_ fp: String) -> QUICTransport.PeerCertificate { .init(fingerprint: fp, commonName: "duo-viewer") }
++        let viewers = AuthorizedViewers(url: url)
++        // Screen sharing unchanged.
++        for fp in [person, agent, other, watcher] { #expect(viewers.contains(fp)) }
++        #expect(!viewers.isViewOnly(person) && viewers.isViewOnly(watcher))
++        // No SSH-key permission from the old `kind`.
++        #expect(viewers.approvedAs(person) == .unknown)
++        #expect(!viewers.mayAddSSHKeys(person))
++        #expect(viewers.sshKeyRefusal(for: viewer(person)) != nil)
++        #expect(!viewers.mayAddSSHKeys(other))
++        // The Host asks its user, only for a person's viewer with control.
++        #expect(viewers.needsSSHKeyQuestion(for: viewer(person)))
++        #expect(viewers.needsSSHKeyQuestion(for: viewer(other)))
++        #expect(!viewers.needsSSHKeyQuestion(for: viewer(watcher)))           // view only: refused, no question
++        #expect(!viewers.needsSSHKeyQuestion(for: viewer(agent)))             // recorded agent stays an agent
++        let personAsAgent = QUICTransport.PeerCertificate(fingerprint: person, commonName: "glassact-agent")
++        #expect(viewers.needsSSHKeyQuestion(for: personAsAgent) == false)
++        #expect(viewers.sshKeyRefusal(for: viewer(agent))
++                == "this key was approved as an agent on this Mac; an agent cannot add SSH keys")
++        // Seeing it again changes nothing.
++        viewers.noteSeen(person, kind: .viewer, address: "")
++        #expect(!viewers.mayAddSSHKeys(person) && viewers.needsSSHKeyQuestion(for: viewer(person)))
++        #expect(!(try String(contentsOf: url, encoding: .utf8)).contains("\(person) kind=viewer as="))
++        // Allow: recorded as the Host's own permission, kept across a restart.
++        try viewers.decideSSHKeys(person, allow: true)
++        #expect(viewers.sshKeyRefusal(for: viewer(person)) == nil)
++        #expect(!viewers.needsSSHKeyQuestion(for: viewer(person)))
++        // Don't Allow: recorded, never asked again, screen sharing kept.
++        try viewers.decideSSHKeys(other, allow: false)
++        #expect(viewers.sshKeyRefusal(for: viewer(other)) == "this Mac's user did not allow this device to add SSH keys")
++        #expect(!viewers.needsSSHKeyQuestion(for: viewer(other)))
++        let text = try String(contentsOf: url, encoding: .utf8)
++        #expect(text.contains("\(person) kind=viewer as=viewer"))
++        #expect(text.contains("\(other) keys=no"))
++        let reloaded = AuthorizedViewers(url: url)
++        #expect(reloaded.mayAddSSHKeys(person))
++        #expect(!reloaded.mayAddSSHKeys(other) && !reloaded.needsSSHKeyQuestion(for: viewer(other)))
++        #expect(reloaded.contains(other) && !reloaded.isViewOnly(other))
++        // A fresh approval by the Host's user (dialog) still works as build 45 made it.
++        try reloaded.add(other, viewOnly: false, kind: .viewer)
++        #expect(reloaded.mayAddSSHKeys(other))
++    }
++}

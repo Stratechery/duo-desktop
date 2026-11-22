@@ -1,0 +1,476 @@
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index b003cbc..c877b58 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -1635,6 +1635,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+     }
+ 
++    /// Duo Desktop build (overview snapshots): a snapshot round is running.
++    private var snapshotInFlight = false
++
+     /// Main thread. DISPLAY_LIST: every display capture can see, with its place, size and a small
+     /// picture, the shown one marked.
+     private func sendDisplayList() {
+@@ -1674,6 +1677,47 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+     }
+ 
++    /// Duo Desktop build (overview snapshots). Main thread. DISPLAY_SNAPSHOT: a JPEG still of every screen
++    /// capture can see (long side at most `maxSide`, 64...960), one message each, with the capture permission
++    /// the Host already has. JPEG because every macOS can write it (macOS 15 writes neither WebP nor AVIF, so the
++    /// list's own small pictures come out empty there). The Mac's resolution is never touched. One request at a
++    /// time: a request while one is running is dropped (the app asks again in a few seconds).
++    private func sendDisplaySnapshots(maxSide: Int) {
++        guard !snapshotInFlight else { return }
++        snapshotInFlight = true
++        let side = CGFloat(min(max(maxSide, 64), 960))
++        Task {
++            defer { DispatchQueue.main.async { self.snapshotInFlight = false } }
++            guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
++            else { return }
++            var total = 0
++            for d in content.displays.prefix(16) {
++                let fw = max(CGFloat(d.width), 1), fh = max(CGFloat(d.height), 1)
++                let f = min(side / max(fw, fh), 1.0)
++                let config = SCStreamConfiguration()
++                config.width = max(2, Int(fw * f)) & ~1
++                config.height = max(2, Int(fh * f)) & ~1
++                config.pixelFormat = kCVPixelFormatType_32BGRA
++                config.colorSpaceName = CGColorSpace.sRGB
++                config.showsCursor = false
++                guard let cg = try? await SCScreenshotManager.captureImage(
++                        contentFilter: SCContentFilter(display: d, excludingWindows: []), configuration: config)
++                else { continue }
++                let data = NSMutableData()
++                guard let dst = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)
++                else { continue }
++                CGImageDestinationAddImage(dst, cg, [kCGImageDestinationLossyCompressionQuality: 0.5] as CFDictionary)
++                guard CGImageDestinationFinalize(dst), data.length > 0 else { continue }
++                let snap = WireDisplaySnapshot(displayID: d.displayID, format: WireDisplaySnapshot.jpeg,
++                                               width: UInt16(clamping: cg.width), height: UInt16(clamping: cg.height),
++                                               bytes: [UInt8](data as Data))
++                total += snap.bytes.count
++                self.encodeQueue.async { self.engine?.sendDisplaySnapshot(snap) }
++            }
++            self.onStatus("sent screen snapshots: \(content.displays.prefix(16).count) screens, \(total) bytes")
++        }
++    }
++
+     /// A small still of a whole display (at most 320 × 200), as the window list's pictures.
+     private static func displayThumbnail(_ display: SCDisplay) async -> (format: UInt8, width: Int, height: Int, bytes: [UInt8])? {
+         let fw = max(CGFloat(display.width), 1), fh = max(CGFloat(display.height), 1)
+@@ -3009,6 +3053,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+                 self.handleDisplaySelect(displayID, pointer: place ? CGPoint(x: Int(x), y: Int(y)) : nil)
+             }
+         }
++        engine.onDisplaySnapshotRequest = { [weak self] maxSide in // Duo Desktop build (overview snapshots)
++            DispatchQueue.main.async { self?.sendDisplaySnapshots(maxSide: Int(maxSide)) }
++        }
+         engine.onWindowControl = { [weak self] action, width, height in
+             guard let self else { return }
+             if action != WindowAction.endSession,
+diff --git a/Apps/Host/TypingWatch.swift b/Apps/Host/TypingWatch.swift
+index 2183174..5ab5461 100644
+--- a/Apps/Host/TypingWatch.swift
++++ b/Apps/Host/TypingWatch.swift
+@@ -134,7 +134,9 @@ final class TypingWatch: @unchecked Sendable {
+         AXUIElementSetMessagingTimeout(el, 0.3)
+         // The role is an Apple constant naming the kind of element, never its contents.
+         let role = copyString(el, kAXRoleAttribute as String) ?? ""
+-        let caret = caretFrame(el)
++        // Duo Desktop build: no usable caret (Terminal) → the end of the element's text, from its character count
++        // and the bounds of its last character; no text is read.
++        let caret = caretFrame(el) ?? endOfTextFrame(el)
+         let takesText = textRoles.contains(role) && (role != "AXWebArea" || caret != nil)
+             || (caret != nil && isEditable(el))
+         guard takesText else { return .none }
+@@ -190,6 +192,55 @@ final class TypingWatch: @unchecked Sendable {
+         return rect
+     }
+ 
++    /// Duo Desktop build: where the next typing lands when the element gives no caret: the end of its text, by
++    /// character count (`AXNumberOfCharacters`) and character bounds (`AXBoundsForRange`), else the last visible
++    /// character (`AXVisibleCharacterRange`). Terminal pads a fresh window with empty rows below the prompt; an
++    /// empty row's single character starts at the element's left edge and spans most of its width, so those are
++    /// stepped over (at most `maxEmptyRows`) to the row that ends the text: the prompt. Proof on agents' Mac: a fresh
++    /// window's last character was an empty bottom row (x 10, 840 wide of 860); a full one's started at the prompt's
++    /// end (x 262). Ranges and bounds only; the text itself is never read. Returned 1 point wide, as a caret.
++    static func endOfTextFrame(_ el: AXUIElement) -> CGRect? {
++        var n: CFTypeRef?
++        var last: Int?
++        if AXUIElementCopyAttributeValue(el, kAXNumberOfCharactersAttribute as CFString, &n) == .success,
++           let count = n as? Int, count > 0 {
++            last = count - 1
++        } else {
++            var v: CFTypeRef?
++            if AXUIElementCopyAttributeValue(el, kAXVisibleCharacterRangeAttribute as CFString, &v) == .success,
++               let v, CFGetTypeID(v) == AXValueGetTypeID() {
++                var visible = CFRange()
++                if AXValueGetValue((v as! AXValue), .cfRange, &visible), visible.length > 0 {
++                    last = visible.location + visible.length - 1
++                }
++            }
++        }
++        guard let last, var rect = bounds(el, CFRange(location: last, length: 1)) else { return nil }
++        if let field = frame(el), field.width > 0 {
++            var i = last
++            func emptyRow(_ r: CGRect) -> Bool { r.minX <= field.minX + 16 && r.width >= field.width * 0.8 }
++            while emptyRow(rect), i > 0, last - i < maxEmptyRows, let prev = bounds(el, CFRange(location: i - 1, length: 1)) {
++                i -= 1
++                rect = prev
++            }
++        }
++        return CGRect(x: rect.minX, y: rect.minY, width: 1, height: rect.height)
++    }
++
++    /// Empty rows stepped over looking for the end of the text (a tall window has about 60).
++    static let maxEmptyRows = 200
++
++    private static func bounds(_ el: AXUIElement, _ range: CFRange) -> CGRect? {
++        var range = range
++        guard let r = AXValueCreate(.cfRange, &range) else { return nil }
++        var b: CFTypeRef?
++        guard AXUIElementCopyParameterizedAttributeValue(el, kAXBoundsForRangeParameterizedAttribute as CFString, r, &b) == .success,
++              let b, CFGetTypeID(b) == AXValueGetTypeID() else { return nil }
++        var rect = CGRect.zero
++        guard AXValueGetValue((b as! AXValue), .cgRect, &rect), rect.height > 0, rect.height < 400 else { return nil }
++        return rect
++    }
++
+     private static func clampI(_ v: CGFloat) -> Int32 { Int32(max(-1_000_000, min(1_000_000, v.rounded()))) }
+     private static func clampU(_ v: CGFloat) -> UInt16 { UInt16(max(0, min(65_535, v.rounded()))) }
+ }
+diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
+index 2618b98..9a9d78c 100644
+--- a/Sources/GlassActCore/HostEngine.swift
++++ b/Sources/GlassActCore/HostEngine.swift
+@@ -624,6 +624,8 @@ public final class HostEngine: @unchecked Sendable {
+     /// Duo Screens build (multi-screen): DISPLAY_SELECT — share this screen
+     /// (0 = send the list), optionally placing the pointer (global points).
+     public var onDisplaySelect: ((_ displayID: UInt32, _ placePointer: Bool, _ x: Int32, _ y: Int32) -> Void)?
++    /// Duo Desktop build (overview snapshots): DISPLAY_SNAPSHOT_REQUEST.
++    public var onDisplaySnapshotRequest: ((_ maxSide: UInt16) -> Void)?
+     /// Single-window mode: the viewer issued a window-chrome action (see
+     /// WindowAction). The app drives the host window via Accessibility
+     /// (fullscreen / resize) or ends the single-window session.
+@@ -706,6 +708,12 @@ public final class HostEngine: @unchecked Sendable {
+         sendControl(.displayList(displays: displays))
+     }
+ 
++    /// Duo Desktop build (overview snapshots): one screen's still (DISPLAY_SNAPSHOT).
++    public func sendDisplaySnapshot(_ snapshot: WireDisplaySnapshot) {
++        guard state == .running else { return }
++        sendControl(.displaySnapshot(snapshot))
++    }
++
+     /// Duo Screens build (multi-screen): answer one DISPLAY_SELECT (DISPLAY_SELECTED).
+     public func sendDisplaySelected(_ result: WireDisplaySelection) {
+         guard state == .running else { return }
+@@ -991,6 +999,8 @@ public final class HostEngine: @unchecked Sendable {
+                 onWindowSelect?(windowID)
+             case let .displaySelect(displayID, place, x, y):
+                 onDisplaySelect?(displayID, place, x, y)
++            case let .displaySnapshotRequest(maxSide):
++                onDisplaySnapshotRequest?(maxSide)
+             case let .windowControl(action, width, height):
+                 onWindowControl?(action, width, height)
+             case let .viewerLog(name, offset, total, data):
+@@ -1015,7 +1025,7 @@ public final class HostEngine: @unchecked Sendable {
+             case let .syncRequest(region, generation):
+                 noteSyncRequest(region: region, generation: generation)
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+-                 .screenLock, .textFocus:
++                 .screenLock, .textFocus, .displaySnapshot:
+                 break // host-originated / not addressed to the host
+             }
+         }
+@@ -1057,7 +1067,7 @@ public final class HostEngine: @unchecked Sendable {
+             return k != 3 && k != 6 // mouse-up, key-up
+         case let .windowControl(action, _, _):
+             return action != WindowAction.endSession
+-        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect:
++        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect, .displaySnapshotRequest:
+             return true
+         default:
+             return false
+diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
+index 41398d8..cc4ee99 100644
+--- a/Sources/GlassActCore/ViewerEngine.swift
++++ b/Sources/GlassActCore/ViewerEngine.swift
+@@ -276,6 +276,13 @@ public final class ViewerEngine: @unchecked Sendable {
+     /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS.
+     public var onScreenLock: ((UInt8) -> Void)?
+     public var onTextFocus: ((WireTextFocus) -> Void)?
++    /// Duo Desktop build (overview snapshots): one screen's still (DISPLAY_SNAPSHOT).
++    public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
++    /// Duo Desktop build (overview snapshots): ask for a still of every screen.
++    public func sendDisplaySnapshotRequest(maxSide: UInt16) {
++        guard state == .running else { return }
++        sendControl(.displaySnapshotRequest(maxSide: maxSide))
++    }
+     /// Connect milestones (see SessionMilestones). Engine-queue.
+     public private(set) var milestones = SessionMilestones()
+     /// `nowUS` of the datagram being applied (tile milestones).
+@@ -503,9 +510,11 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onScreenLock?(state)
+             case let .textFocus(focus):
+                 onTextFocus?(focus)
++            case let .displaySnapshot(snapshot):
++                onDisplaySnapshot?(snapshot)
+             case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
+                  .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
+-                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect:
++                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect, .displaySnapshotRequest:
+                 break // viewer-originated / not addressed to the viewer
+             }
+         }
+diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
+index 71472f2..44ea0c2 100644
+--- a/Sources/GlassActSession/ViewerController.swift
++++ b/Sources/GlassActSession/ViewerController.swift
+@@ -246,6 +246,8 @@ public final class ViewerController: @unchecked Sendable {
+     /// (main thread): the screen now shared, its place, the picture size, the
+     /// pointer it placed, or a refusal. Choices are serialized until each answer.
+     public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
++    /// Duo Desktop build (overview snapshots): one screen's still, main queue.
++    public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
+     /// Main thread: the host ended the session on purpose (shared window
+     /// closed) — show why, don't redial.
+     public var onHostEndedSession: ((String) -> Void)?
+@@ -362,6 +364,9 @@ public final class ViewerController: @unchecked Sendable {
+     public func selectWindow(_ id: UInt32) { session.selectWindow(id) }
+     /// Duo Screens build (multi-screen). True when the host lists screens.
+     public func hostSupportsDisplayList() -> Bool { session.hostSupportsDisplayList() }
++    /// Duo Desktop build (overview snapshots): ask for a still of every screen (long
++    /// side at most `maxSide` px). An older host ignores it.
++    public func requestDisplaySnapshots(maxSide: UInt16 = 480) { session.requestDisplaySnapshots(maxSide: maxSide) }
+     /// Duo Screens build (multi-screen): a screen choice is waiting for its answer.
+     public func displaySelectPending() -> Bool { session.displaySelectPending() }
+     /// Duo Screens build (multi-screen): 0 = ask for the list; else share that screen,
+@@ -455,6 +460,7 @@ public final class ViewerController: @unchecked Sendable {
+         }
+         session.onDisplayList = { [weak self] displays in self?.onDisplayList?(displays) }
+         session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
++        session.onDisplaySnapshot = { [weak self] snapshot in self?.onDisplaySnapshot?(snapshot) }
+         session.onWindowList = { [weak self] windows in
+             self?.agentDriver?.noteWindowList(windows)
+             self?.onWindowList?(windows)
+diff --git a/Sources/GlassActSession/ViewerSession.swift b/Sources/GlassActSession/ViewerSession.swift
+index bc7a6b8..5fe6828 100644
+--- a/Sources/GlassActSession/ViewerSession.swift
++++ b/Sources/GlassActSession/ViewerSession.swift
+@@ -78,6 +78,8 @@ public final class ViewerSession: @unchecked Sendable {
+     /// thread), in order. A choice still waiting when the connection ends is
+     /// answered `.connectionLost`.
+     public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
++    /// Duo Desktop build (overview snapshots), main queue.
++    public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
+     /// `queue`: the choice sent and not yet answered, and the one waiting behind
+     /// it (a newer one replaces an older waiting one). Selections are serialized.
+     private var displaySelectInFlight: (id: UInt32, point: (x: Int32, y: Int32)?)?
+@@ -176,6 +178,9 @@ public final class ViewerSession: @unchecked Sendable {
+         engine.onClipboard = { [weak self] format, data in
+             DispatchQueue.main.async { self?.onClipboard?(format, data) }
+         }
++        engine.onDisplaySnapshot = { [weak self] snapshot in
++            DispatchQueue.main.async { self?.onDisplaySnapshot?(snapshot) }
++        }
+         engine.onDisplayList = { [weak self] displays in
+             DispatchQueue.main.async { self?.onDisplayList?(displays) }
+         }
+@@ -340,6 +345,11 @@ public final class ViewerSession: @unchecked Sendable {
+         queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: 0) }
+     }
+ 
++    /// Duo Desktop build (overview snapshots): ask for a still of every screen.
++    public func requestDisplaySnapshots(maxSide: UInt16) {
++        queue.async { [weak self] in self?.engine.sendDisplaySnapshotRequest(maxSide: maxSide) }
++    }
++
+     /// Duo Screens build (multi-screen): share this screen (0 = just send the
+     /// list); with a point, the host places the pointer there (global points).
+     /// A real screen choice is serialized: while one waits for its
+diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
+index efae586..872cc22 100644
+--- a/Sources/GlassActWire/Control.swift
++++ b/Sources/GlassActWire/Control.swift
+@@ -196,6 +196,23 @@ public struct WireTextFocus: Equatable, Sendable {
+     public static let bodyLength = 25
+ }
+ 
++/// Duo Desktop build (overview snapshots) — DISPLAY_SNAPSHOT (type 0x66), host →
++/// viewer: one still picture of one screen, sent in answer to
++/// DISPLAY_SNAPSHOT_REQUEST (0x65). `format` is `WindowThumbFormat` (JPEG = 3);
++/// the picture is advisory display data for the All Screens overview only.
++public struct WireDisplaySnapshot: Equatable, Sendable {
++    public var displayID: UInt32
++    public var format: UInt8
++    public var width: UInt16
++    public var height: UInt16
++    public var bytes: [UInt8]
++    public init(displayID: UInt32, format: UInt8, width: UInt16, height: UInt16, bytes: [UInt8]) {
++        self.displayID = displayID; self.format = format; self.width = width; self.height = height; self.bytes = bytes
++    }
++    /// The JPEG format byte (WindowThumbFormat has 0 none, 1 WebP, 2 AVIF).
++    public static let jpeg: UInt8 = 3
++}
++
+ /// Duo Desktop build — SCREEN_LOCK (type 0x63) states, host → viewer.
+ public enum ScreenLock {
+     public static let unlocked: UInt8 = 0
+@@ -390,6 +407,13 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Duo Desktop build — host → viewer: where typing goes (`WireTextFocus`).
+     /// Type 0x64.
+     case textFocus(WireTextFocus)
++    /// Duo Desktop build (overview snapshots) — viewer → host: send a still of
++    /// every offered screen, long side at most `maxSide` pixels. Type 0x65. A
++    /// host that does not know it skips it (unknown TLV): no answer, no error.
++    case displaySnapshotRequest(maxSide: UInt16)
++    /// Duo Desktop build (overview snapshots) — host → viewer: one screen's still
++    /// (`WireDisplaySnapshot`). Type 0x66.
++    case displaySnapshot(WireDisplaySnapshot)
+     /// Single-window mode — viewer → host: a window-chrome action on the
+     /// shared window:
+     ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
+@@ -516,6 +540,8 @@ public enum ControlMessage: Equatable, Sendable {
+         case .displaySelected: 0x62
+         case .screenLock: 0x63
+         case .textFocus: 0x64
++        case .displaySnapshotRequest: 0x65
++        case .displaySnapshot: 0x66
+         }
+     }
+ 
+@@ -731,6 +757,15 @@ public enum ControlMessage: Equatable, Sendable {
+             body.writeU16(f.fieldW); body.writeU16(f.fieldH)
+             body.writeU32(UInt32(bitPattern: f.caretX)); body.writeU32(UInt32(bitPattern: f.caretY))
+             body.writeU16(f.caretW); body.writeU16(f.caretH)
++        case let .displaySnapshotRequest(maxSide):
++            body.writeU16(maxSide)
++        case let .displaySnapshot(s):
++            body.writeU32(s.displayID)
++            body.writeU8(s.format)
++            body.writeU16(s.width)
++            body.writeU16(s.height)
++            body.writeVarint(UInt32(s.bytes.count))
++            body.writeBytes(s.bytes)
+         case let .displaySelected(r):
+             body.writeU32(r.requestedID)
+             body.writeU8(r.status.rawValue)
+@@ -974,6 +1009,15 @@ public enum ControlMessage: Equatable, Sendable {
+             return .textFocus(WireTextFocus(
+                 hasText: flag == 1, fieldX: Int32(bitPattern: fx), fieldY: Int32(bitPattern: fy), fieldW: fw, fieldH: fh,
+                 caretX: Int32(bitPattern: cx), caretY: Int32(bitPattern: cy), caretW: cw, caretH: ch))
++        case 0x65:
++            guard let side = r.readU16() else { return nil }
++            return .displaySnapshotRequest(maxSide: side)
++        case 0x66:
++            guard let id = r.readU32(), let fmt = r.readU8(), let w = r.readU16(), let h = r.readU16(),
++                  let len = r.readVarint(), Int(len) <= r.remaining, let bytes = unsafe r.readBytes(Int(len))
++            else { return nil }
++            return unsafe .displaySnapshot(WireDisplaySnapshot(displayID: id, format: fmt, width: w, height: h,
++                                                               bytes: [UInt8](bytes)))
+         default:
+             return nil
+         }
+@@ -982,7 +1026,7 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Known TLV types. Everything beyond is skipped by the deframer
+     /// using its declared length.
+     public static func isKnownType(_ t: UInt8) -> Bool {
+-        (0x01...0x1E).contains(t) || (0x60...0x64).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus)
++        (0x01...0x1E).contains(t) || (0x60...0x66).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus)
+     }
+ }
+ 
+diff --git a/Tests/SessionTests/RealHostTerminalEndProofTests.swift b/Tests/SessionTests/RealHostTerminalEndProofTests.swift
+new file mode 100644
+index 0000000..431ae34
+--- /dev/null
++++ b/Tests/SessionTests/RealHostTerminalEndProofTests.swift
+@@ -0,0 +1,85 @@
++// Duo Desktop build (overview snapshots order, Terminal aim): proof on this Mac's own Host (127.0.0.1) that a text
++// element with no caret reports the END OF ITS TEXT as the insertion point (Terminal's prompt), in a fresh window and
++// after output fills it. Keys go through the Host (kind 5/6), so no permission beyond the Host's own is used.
++// Runs only with GLASSACT_REALHOST_PORT set and the proof viewer's key on the Host's approved list.
++#if os(macOS)
++import AppKit
++import CoreGraphics
++import Foundation
++import GlassActCore
++@testable import GlassActSession
++import GlassActTransport
++import GlassActWire
++import XCTest
++
++final class RealHostTerminalEndProofTests: XCTestCase {
++    func spin(_ seconds: Double, until done: () -> Bool = { false }) {
++        let end = Date().addingTimeInterval(seconds)
++        while Date() < end, !done() { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
++    }
++
++    func describe(_ f: WireTextFocus?) -> String {
++        guard let f else { return "nothing received" }
++        guard f.hasText else { return "none (not a text place)" }
++        return "text: field \(f.fieldX),\(f.fieldY) \(f.fieldW)x\(f.fieldH); caret \(f.caretX),\(f.caretY) \(f.caretW)x\(f.caretH)"
++    }
++
++    func terminalWindows() -> [CGRect] {
++        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
++        return list.filter { ($0[kCGWindowOwnerName as String] as? String) == "Terminal" && ($0[kCGWindowLayer as String] as? Int) == 0 }
++            .compactMap { ($0[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) } }
++    }
++
++    @MainActor
++    func testTerminalCaretIsTheEndOfItsText() throws {
++        guard let portText = ProcessInfo.processInfo.environment["GLASSACT_REALHOST_PORT"],
++              let port = UInt16(portText) else { throw XCTSkip("no real host (GLASSACT_REALHOST_PORT)") }
++        let dir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["GLASSACT_PROOF_DIR"] ?? NSTemporaryDirectory())
++        let id = try QUICIdentity.loadOrCreate(directory: dir, name: "proof-viewer-identity", commonName: "duo-proof")
++        print("proof: viewer fingerprint \(try QUICIdentity.fingerprint(of: id))")
++        let session = ViewerSession(host: "127.0.0.1", port: port, fingerprint: "", identity: id,
++                                    options: .init(cursorMetadata: true, video: false, deviceName: "duo-proof"))
++        let lock = NSLock()
++        var focuses: [WireTextFocus] = []
++        session.engine.onTextFocus = { f in lock.lock(); focuses.append(f); lock.unlock() }
++        func latest() -> WireTextFocus? { lock.lock(); defer { lock.unlock() }; return focuses.last }
++        let main = CGDisplayBounds(CGMainDisplayID())
++        session.setRequestedGeometry(mode: 2, widthPoints: Int(main.width), heightPoints: Int(main.height), scale: 1)
++        session.start()
++        spin(15) { session.configuredGrid() != nil }
++        _ = try XCTUnwrap(session.configuredGrid(), "connected")
++        spin(2)
++
++        func key(_ code: Int, _ flags: Int = 0) {
++            session.sendInput(kind: 5, x: code, y: 0, a: flags, b: 0); spin(0.03)
++            session.sendInput(kind: 6, x: code, y: 0, a: flags, b: 0); spin(0.03)
++        }
++        let codes: [Character: Int] = ["s": 1, "e": 14, "q": 12, " ": 49, "1": 18, "3": 20, "0": 29, "c": 8, "l": 37,
++                                       "a": 0, "r": 15]
++        func type(_ text: String) { for ch in text { key(codes[ch]!) }; key(36) }
++        let cmd = 0x100000
++
++        let url = try XCTUnwrap(NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal"))
++        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
++        spin(2)
++        key(45, cmd) // ⌘N: a fresh window
++        spin(3)
++        let fresh = latest()
++        print("proof: Terminal windows \(terminalWindows())")
++        print("proof: fresh window: \(describe(fresh))")
++        type("seq 1 300")
++        spin(3)
++        let full = latest()
++        print("proof: after seq 1 300 (window full): \(describe(full))")
++        key(13, cmd) // ⌘W: close the proof window (idle shell)
++        spin(1)
++        session.stop()
++        spin(1)
++        XCTAssertEqual(fresh?.hasText, true)
++        XCTAssertEqual(full?.hasText, true)
++        if let fresh, let full, fresh.caretH > 0, full.caretH > 0 {
++            XCTAssertGreaterThan(full.caretY, fresh.caretY, "after output the end of the text (the prompt) is lower")
++        }
++    }
++}
++#endif

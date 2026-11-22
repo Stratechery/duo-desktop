@@ -1,0 +1,106 @@
+diff --git a/Sources/glassact-testhost/main.swift b/Sources/glassact-testhost/main.swift
+index e6ce5e7..a710f57 100644
+--- a/Sources/glassact-testhost/main.swift
++++ b/Sources/glassact-testhost/main.swift
+@@ -75,6 +75,11 @@ final class Scene {
+     private(set) var pointer: (x: Int, y: Int)
+     private var lines: [String] = ["Waiting for input…"]
+     private var typed = ""
++    // Duo Screens build: what the viewer holds down, released when its session ends (as the Host's
++    // `HostController.releaseHeldInput` does), and every input but moves logged to stdout with the time.
++    private var keysDown: Set<Int> = []
++    private var buttonsDown = 0
++    private var dragPoints = 0
+     private var scrollTotal = (x: 0, y: 0)
+     private var startUS = MonotonicClock.nowUS
+ 
+@@ -103,6 +108,30 @@ final class Scene {
+ 
+     /// INPUT (kind, x, y, a, b) as `ControlMessage.input` defines it.
+     func apply(kind: Int, x: Int, y: Int, a: Int, b: Int) {
++        switch kind {
++        case 2: buttonsDown |= 1 << b; dragPoints = 0
++        case 3: buttonsDown &= ~(1 << b)
++        case 5: keysDown.insert(x)
++        case 6: keysDown.remove(x)
++        default: break
++        }
++        switch kind {
++        case 1:
++            if buttonsDown != 0 { dragPoints += 1 }
++            if buttonsDown == 0, y == 0 || y == height - 1 {
++                Self.log("input: move to \(x),\(y) (\(y == 0 ? "top" : "bottom") edge)")
++            }
++        case 2:
++            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) down at \(x),\(y) click \(max(1, a))")
++        case 3:
++            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) up at \(x),\(y) after \(dragPoints) drag moves")
++        case 4, 7:
++            Self.log("input: scroll \(a),\(b) (\(kind == 7 ? "points" : "lines"))")
++        case 5, 6:
++            Self.log("input: key \(Self.keyName(x)) (0x\(String(x, radix: 16))) \(kind == 5 ? "down" : "up") · flags 0x\(String(UInt32(truncatingIfNeeded: a), radix: 16))")
++        default:
++            break
++        }
+         switch kind {
+         case 1:
+             pointer = (x, y)
+@@ -133,6 +162,29 @@ final class Scene {
+         }
+     }
+ 
++    /// Duo Screens build: the session ended; let go of what it still held, logging each release.
++    func releaseHeld() {
++        for code in keysDown.sorted() {
++            Self.log("released at session end: key \(Self.keyName(code)) (0x\(String(code, radix: 16))) up")
++            note("released \(Self.keyName(code)) at session end")
++        }
++        for bit in 0..<3 where buttonsDown & (1 << bit) != 0 {
++            Self.log("released at session end: \(["left", "right", "middle"][bit]) button up")
++        }
++        if keysDown.isEmpty && buttonsDown == 0 { Self.log("session ended with nothing held") }
++        keysDown.removeAll()
++        buttonsDown = 0
++        dragging = false
++    }
++
++    /// Duo Screens build: one stdout line with the wall-clock time, flushed (stdout may be a file).
++    static func log(_ line: String) {
++        let f = DateFormatter()
++        f.dateFormat = "HH:mm:ss.SSS"
++        print("glassact-testhost: [\(f.string(from: Date()))] \(line)")
++        fflush(stdout)
++    }
++
+     func clipboard(_ text: String) { note("clipboard from viewer: \(text.prefix(80))") }
+     func text(_ text: String) {
+         typed += text
+@@ -403,7 +455,8 @@ final class TestHost: @unchecked Sendable {
+     private var timer: (any DispatchSourceTimer)?
+ 
+     private func adopt(_ transport: QUICTransport) {
+-        print("glassact-testhost: viewer connected")
++        Scene.log("viewer connected") // Duo Screens build: timed
++        if self.transport != nil { scene.releaseHeld() } // Duo Screens build: a superseded session lets go too
+         self.transport?.cancel()
+         self.transport = transport
+         geometrySettled = false
+@@ -418,7 +471,8 @@ final class TestHost: @unchecked Sendable {
+     }
+ 
+     private func endSession() {
+-        print("glassact-testhost: viewer left")
++        Scene.log("viewer left")
++        scene.releaseHeld() // Duo Screens build
+         engine = nil
+         transport = nil
+     }
+@@ -441,7 +495,7 @@ final class TestHost: @unchecked Sendable {
+             self?.scene.clipboard(text)
+         }
+         engine.onViewerInfo = { name in print("glassact-testhost: viewer is \"\(name)\"") }
+-        engine.onViewerBye = { reason in print("glassact-testhost: viewer said goodbye (\(reason))") }
++        engine.onViewerBye = { reason in Scene.log("viewer said goodbye (\(reason))") }
+         engine.onVideoCodecChanged = { codec in
+             print("glassact-testhost: video \(codec.map(VideoCodec.name) ?? "off")")
+         }

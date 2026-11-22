@@ -1,0 +1,441 @@
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index c877b58..fc643bd 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -1337,6 +1337,48 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         return "key \(code) flags \(String(raw.rawValue, radix: 16))"
+     }
+ 
++    /// Duo Desktop build (auto-unlock). Main thread. The phone sent the Mac password (UNLOCK_TYPE): re-check the
++    /// lock RIGHT before typing, so it can never land in an ordinary window; locked → type it with Unicode key
++    /// events (no newline or tab meaning) and press Return. The bytes are never logged or stored; the local copy is
++    /// zeroed after typing. Answers UNLOCK_STATE; the lock check runs again soon so the phone hears "unlocked".
++    private func typeUnlockPassword(_ password: [UInt8]) {
++        var bytes = password
++        defer { for i in bytes.indices { bytes[i] = 0 } }
++        let reply: UInt8
++        if !TypingWatch.screenLocked() {
++            onStatus("unlock request: screen not locked, nothing typed")
++            reply = UnlockState.notLocked
++        } else if !ensureAccessibility() {
++            onStatus("unlock request: no Accessibility, nothing typed")
++            reply = UnlockState.failed
++        } else if var units = String(bytes: bytes, encoding: .utf8).map({ Array($0.utf16) }), !units.isEmpty {
++            var i = 0
++            while i < units.count {
++                var end = min(i + 20, units.count)
++                if end < units.count, UTF16.isTrailSurrogate(units[end]) { end -= 1 }
++                let chunk = Array(units[i..<end])
++                for down in [true, false] {
++                    guard let ev = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else { continue }
++                    ev.flags = []
++                    ev.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
++                    ev.post(tap: .cghidEventTap)
++                }
++                i = end
++            }
++            for down in [true, false] {
++                CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: down)?.post(tap: .cghidEventTap)
++            }
++            onStatus("unlock request: typed \(units.count) characters and Return")
++            for j in units.indices { units[j] = 0 }
++            reply = UnlockState.typed
++        } else {
++            onStatus("unlock request: not readable text, nothing typed")
++            reply = UnlockState.failed
++        }
++        encodeQueue.async { self.engine?.sendUnlockState(reply) }
++        if reply == UnlockState.typed { typingWatch.checkLockSoon() }
++    }
++
+     /// Accessibility (TCC) is required for CGEventPost. Checked SILENTLY
+     /// (AXIsProcessTrusted, never the prompting variant) so no system dialog
+     /// pops on the first stray event — instead, once per session, log it and
+@@ -3056,6 +3098,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         engine.onDisplaySnapshotRequest = { [weak self] maxSide in // Duo Desktop build (overview snapshots)
+             DispatchQueue.main.async { self?.sendDisplaySnapshots(maxSide: Int(maxSide)) }
+         }
++        engine.unlockAvailable = true // Duo Desktop build (auto-unlock)
++        engine.onUnlockType = { [weak self] password in
++            DispatchQueue.main.async { self?.typeUnlockPassword(password) }
++        }
+         engine.onWindowControl = { [weak self] action, width, height in
+             guard let self else { return }
+             if action != WindowAction.endSession,
+diff --git a/Apps/Host/TypingWatch.swift b/Apps/Host/TypingWatch.swift
+index 5ab5461..8fb44d0 100644
+--- a/Apps/Host/TypingWatch.swift
++++ b/Apps/Host/TypingWatch.swift
+@@ -66,6 +66,12 @@ final class TypingWatch: @unchecked Sendable {
+         poke()
+     }
+ 
++    /// Duo Desktop build (auto-unlock): the password was just typed; check the lock at 1 s and 3 s so the
++    /// viewer hears "unlocked" quickly (the 2 s check covers it too).
++    func checkLockSoon() {
++        for delay in [1.0, 3.0] { queue.asyncAfter(deadline: .now() + delay) { self.checkLock() } }
++    }
++
+     /// The viewer clicked (button up) or typed (key up): look again shortly
+     /// after, when the app has moved its focus.
+     func poke() {
+diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
+index 9a9d78c..6e15469 100644
+--- a/Sources/GlassActCore/HostEngine.swift
++++ b/Sources/GlassActCore/HostEngine.swift
+@@ -626,6 +626,11 @@ public final class HostEngine: @unchecked Sendable {
+     public var onDisplaySelect: ((_ displayID: UInt32, _ placePointer: Bool, _ x: Int32, _ y: Int32) -> Void)?
+     /// Duo Desktop build (overview snapshots): DISPLAY_SNAPSHOT_REQUEST.
+     public var onDisplaySnapshotRequest: ((_ maxSide: UInt16) -> Void)?
++    /// Duo Desktop build (auto-unlock): this host can type the password on its lock
++    /// screen; when true, UNLOCK_STATE available is sent after each handshake.
++    public var unlockAvailable = false
++    /// Duo Desktop build (auto-unlock): UNLOCK_TYPE — the password bytes. Never log them.
++    public var onUnlockType: (([UInt8]) -> Void)?
+     /// Single-window mode: the viewer issued a window-chrome action (see
+     /// WindowAction). The app drives the host window via Accessibility
+     /// (fullscreen / resize) or ends the single-window session.
+@@ -714,6 +719,12 @@ public final class HostEngine: @unchecked Sendable {
+         sendControl(.displaySnapshot(snapshot))
+     }
+ 
++    /// Duo Desktop build (auto-unlock): UNLOCK_STATE.
++    public func sendUnlockState(_ state: UInt8) {
++        guard self.state == .running else { return }
++        sendControl(.unlockState(state: state))
++    }
++
+     /// Duo Screens build (multi-screen): answer one DISPLAY_SELECT (DISPLAY_SELECTED).
+     public func sendDisplaySelected(_ result: WireDisplaySelection) {
+         guard state == .running else { return }
+@@ -951,6 +962,7 @@ public final class HostEngine: @unchecked Sendable {
+                     lastPingUS = nowUS
+                     if hostNotice != HostNotice.none { sendControl(.hostNotice(code: hostNotice)) }
+                     if let screenLock { sendControl(.screenLock(state: screenLock)) }
++                    if unlockAvailable { sendControl(.unlockState(state: UnlockState.available)) } // Duo Desktop build (auto-unlock)
+                 }
+             case let .ack(frameSeq, dgramCnt, bitmap):
+                 lastControlNowUS = nowUS
+@@ -1001,6 +1013,8 @@ public final class HostEngine: @unchecked Sendable {
+                 onDisplaySelect?(displayID, place, x, y)
+             case let .displaySnapshotRequest(maxSide):
+                 onDisplaySnapshotRequest?(maxSide)
++            case let .unlockType(password): // Duo Desktop build (auto-unlock)
++                onUnlockType?(password)
+             case let .windowControl(action, width, height):
+                 onWindowControl?(action, width, height)
+             case let .viewerLog(name, offset, total, data):
+@@ -1025,7 +1039,7 @@ public final class HostEngine: @unchecked Sendable {
+             case let .syncRequest(region, generation):
+                 noteSyncRequest(region: region, generation: generation)
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+-                 .screenLock, .textFocus, .displaySnapshot:
++                 .screenLock, .textFocus, .displaySnapshot, .unlockState:
+                 break // host-originated / not addressed to the host
+             }
+         }
+@@ -1067,7 +1081,7 @@ public final class HostEngine: @unchecked Sendable {
+             return k != 3 && k != 6 // mouse-up, key-up
+         case let .windowControl(action, _, _):
+             return action != WindowAction.endSession
+-        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect, .displaySnapshotRequest:
++        case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect, .displaySnapshotRequest, .unlockType:
+             return true
+         default:
+             return false
+diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
+index cc4ee99..c83c6de 100644
+--- a/Sources/GlassActCore/ViewerEngine.swift
++++ b/Sources/GlassActCore/ViewerEngine.swift
+@@ -283,6 +283,13 @@ public final class ViewerEngine: @unchecked Sendable {
+         guard state == .running else { return }
+         sendControl(.displaySnapshotRequest(maxSide: maxSide))
+     }
++    /// Duo Desktop build (auto-unlock): UNLOCK_STATE (`UnlockState`).
++    public var onUnlockState: ((UInt8) -> Void)?
++    /// Duo Desktop build (auto-unlock): UNLOCK_TYPE — the host types it only if still locked.
++    public func sendUnlockType(_ bytes: [UInt8]) {
++        guard state == .running else { return }
++        sendControl(.unlockType(password: bytes))
++    }
+     /// Connect milestones (see SessionMilestones). Engine-queue.
+     public private(set) var milestones = SessionMilestones()
+     /// `nowUS` of the datagram being applied (tile milestones).
+@@ -512,9 +519,11 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onTextFocus?(focus)
+             case let .displaySnapshot(snapshot):
+                 onDisplaySnapshot?(snapshot)
++            case let .unlockState(state):
++                onUnlockState?(state)
+             case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
+                  .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
+-                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect, .displaySnapshotRequest:
++                 .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect, .displaySnapshotRequest, .unlockType:
+                 break // viewer-originated / not addressed to the viewer
+             }
+         }
+diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
+index 44ea0c2..b062101 100644
+--- a/Sources/GlassActSession/ViewerController.swift
++++ b/Sources/GlassActSession/ViewerController.swift
+@@ -248,6 +248,8 @@ public final class ViewerController: @unchecked Sendable {
+     public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
+     /// Duo Desktop build (overview snapshots): one screen's still, main queue.
+     public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
++    /// Duo Desktop build (auto-unlock): UNLOCK_STATE (`UnlockState`), main queue. An older host never sends it.
++    public var onUnlockState: ((UInt8) -> Void)?
+     /// Main thread: the host ended the session on purpose (shared window
+     /// closed) — show why, don't redial.
+     public var onHostEndedSession: ((String) -> Void)?
+@@ -367,6 +369,9 @@ public final class ViewerController: @unchecked Sendable {
+     /// Duo Desktop build (overview snapshots): ask for a still of every screen (long
+     /// side at most `maxSide` px). An older host ignores it.
+     public func requestDisplaySnapshots(maxSide: UInt16 = 480) { session.requestDisplaySnapshots(maxSide: maxSide) }
++    /// Duo Desktop build (auto-unlock): send the Mac password; the host types it with Return only if the
++    /// screen is still locked, and answers UNLOCK_STATE.
++    public func sendUnlockPassword(_ bytes: [UInt8]) { session.sendUnlockType(bytes) }
+     /// Duo Screens build (multi-screen): a screen choice is waiting for its answer.
+     public func displaySelectPending() -> Bool { session.displaySelectPending() }
+     /// Duo Screens build (multi-screen): 0 = ask for the list; else share that screen,
+@@ -461,6 +466,7 @@ public final class ViewerController: @unchecked Sendable {
+         session.onDisplayList = { [weak self] displays in self?.onDisplayList?(displays) }
+         session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
+         session.onDisplaySnapshot = { [weak self] snapshot in self?.onDisplaySnapshot?(snapshot) }
++        session.onUnlockState = { [weak self] state in self?.onUnlockState?(state) }
+         session.onWindowList = { [weak self] windows in
+             self?.agentDriver?.noteWindowList(windows)
+             self?.onWindowList?(windows)
+diff --git a/Sources/GlassActSession/ViewerSession.swift b/Sources/GlassActSession/ViewerSession.swift
+index 5fe6828..3cdd773 100644
+--- a/Sources/GlassActSession/ViewerSession.swift
++++ b/Sources/GlassActSession/ViewerSession.swift
+@@ -80,6 +80,8 @@ public final class ViewerSession: @unchecked Sendable {
+     public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
+     /// Duo Desktop build (overview snapshots), main queue.
+     public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
++    /// Duo Desktop build (auto-unlock), main queue.
++    public var onUnlockState: ((UInt8) -> Void)?
+     /// `queue`: the choice sent and not yet answered, and the one waiting behind
+     /// it (a newer one replaces an older waiting one). Selections are serialized.
+     private var displaySelectInFlight: (id: UInt32, point: (x: Int32, y: Int32)?)?
+@@ -181,6 +183,9 @@ public final class ViewerSession: @unchecked Sendable {
+         engine.onDisplaySnapshot = { [weak self] snapshot in
+             DispatchQueue.main.async { self?.onDisplaySnapshot?(snapshot) }
+         }
++        engine.onUnlockState = { [weak self] state in
++            DispatchQueue.main.async { self?.onUnlockState?(state) }
++        }
+         engine.onDisplayList = { [weak self] displays in
+             DispatchQueue.main.async { self?.onDisplayList?(displays) }
+         }
+@@ -345,6 +350,11 @@ public final class ViewerSession: @unchecked Sendable {
+         queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: 0) }
+     }
+ 
++    /// Duo Desktop build (auto-unlock): send the Mac password (typed only if still locked).
++    public func sendUnlockType(_ bytes: [UInt8]) {
++        queue.async { [weak self] in self?.engine.sendUnlockType(bytes) }
++    }
++
+     /// Duo Desktop build (overview snapshots): ask for a still of every screen.
+     public func requestDisplaySnapshots(maxSide: UInt16) {
+         queue.async { [weak self] in self?.engine.sendDisplaySnapshotRequest(maxSide: maxSide) }
+diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
+index 872cc22..058cdb7 100644
+--- a/Sources/GlassActWire/Control.swift
++++ b/Sources/GlassActWire/Control.swift
+@@ -220,6 +220,21 @@ public enum ScreenLock {
+     public static let locked: UInt8 = 1
+ }
+ 
++/// Duo Desktop build (auto-unlock) — UNLOCK_STATE (type 0x68) states, host → viewer.
++/// `available` is sent once after the handshake by a host that can type the
++/// Mac password on its lock screen; an older host never sends it.
++public enum UnlockState {
++    public static let available: UInt8 = 0
++    /// The host re-checked, the screen was still locked, it typed the password and Return.
++    public static let typed: UInt8 = 1
++    /// The screen was not locked at that moment: nothing was typed.
++    public static let notLocked: UInt8 = 2
++    /// The host could not type (no Accessibility, or busy).
++    public static let failed: UInt8 = 3
++    /// Longest password accepted on the wire, in UTF-8 bytes.
++    public static let maxPasswordBytes = 256
++}
++
+ /// §3.5 — control-stream messages (reliable, ordered). TLV framing:
+ /// `{type u8, len varint, body}`.
+ /// HOST_NOTICE codes (§3.5).
+@@ -414,6 +429,12 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Duo Desktop build (overview snapshots) — host → viewer: one screen's still
+     /// (`WireDisplaySnapshot`). Type 0x66.
+     case displaySnapshot(WireDisplaySnapshot)
++    /// Duo Desktop build (auto-unlock) — viewer → host: the Mac password (UTF-8,
++    /// 1...256 bytes), typed by the host with Return ONLY if the screen is still
++    /// locked when it arrives. Never logged or stored. Type 0x67.
++    case unlockType(password: [UInt8])
++    /// Duo Desktop build (auto-unlock) — host → viewer (`UnlockState`). Type 0x68.
++    case unlockState(state: UInt8)
+     /// Single-window mode — viewer → host: a window-chrome action on the
+     /// shared window:
+     ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
+@@ -542,6 +563,8 @@ public enum ControlMessage: Equatable, Sendable {
+         case .textFocus: 0x64
+         case .displaySnapshotRequest: 0x65
+         case .displaySnapshot: 0x66
++        case .unlockType: 0x67
++        case .unlockState: 0x68
+         }
+     }
+ 
+@@ -759,6 +782,11 @@ public enum ControlMessage: Equatable, Sendable {
+             body.writeU16(f.caretW); body.writeU16(f.caretH)
+         case let .displaySnapshotRequest(maxSide):
+             body.writeU16(maxSide)
++        case let .unlockType(password):
++            body.writeVarint(UInt32(password.count))
++            body.writeBytes(password)
++        case let .unlockState(state):
++            body.writeU8(state)
+         case let .displaySnapshot(s):
+             body.writeU32(s.displayID)
+             body.writeU8(s.format)
+@@ -1018,6 +1046,13 @@ public enum ControlMessage: Equatable, Sendable {
+             else { return nil }
+             return unsafe .displaySnapshot(WireDisplaySnapshot(displayID: id, format: fmt, width: w, height: h,
+                                                                bytes: [UInt8](bytes)))
++        case 0x67:
++            guard let len = r.readVarint(), len > 0, Int(len) <= UnlockState.maxPasswordBytes, Int(len) <= r.remaining,
++                  let bytes = unsafe r.readBytes(Int(len)) else { return nil }
++            return unsafe .unlockType(password: [UInt8](bytes))
++        case 0x68:
++            guard let state = r.readU8() else { return nil }
++            return .unlockState(state: state)
+         default:
+             return nil
+         }
+@@ -1026,7 +1061,7 @@ public enum ControlMessage: Equatable, Sendable {
+     /// Known TLV types. Everything beyond is skipped by the deframer
+     /// using its declared length.
+     public static func isKnownType(_ t: UInt8) -> Bool {
+-        (0x01...0x1E).contains(t) || (0x60...0x66).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus)
++        (0x01...0x1E).contains(t) || (0x60...0x68).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus; 0x67-0x68 unlock)
+     }
+ }
+ 
+diff --git a/Sources/glassact-testhost/main.swift b/Sources/glassact-testhost/main.swift
+index 9295331..b8fec53 100644
+--- a/Sources/glassact-testhost/main.swift
++++ b/Sources/glassact-testhost/main.swift
+@@ -38,6 +38,11 @@ struct Options {
+     /// Duo Screens build (multi-screen): `--displays` fakes four screens of different shapes, laid out as
+     /// on a desk with a gap, offered by DISPLAY_LIST and switched by DISPLAY_SELECT.
+     var displays = false
++    /// Duo Desktop build (auto-unlock): `--locked` starts with the screen locked and offers unlock; an
++    /// UNLOCK_TYPE is answered "typed" and the screen unlocks 0.5 s later. `--locked-stays`: the same, but the
++    /// screen stays locked (a wrong password). Only the length is ever logged.
++    var locked = false
++    var lockedStays = false
+ 
+     static func parse(_ args: [String]) -> Options {
+         var o = Options()
+@@ -55,6 +60,8 @@ struct Options {
+             case "--sign-in-password": o.signInPassword = next()
+             case "--ask-after": o.askAfter = next().flatMap(Double.init)
+             case "--displays": o.displays = true
++            case "--locked": o.locked = true
++            case "--locked-stays": o.locked = true; o.lockedStays = true
+             case "--picture-steps":
+                 o.pictureSteps = (next() ?? "").split(separator: ",").compactMap { step in
+                     let ts = step.split(separator: ":")
+@@ -395,6 +402,8 @@ final class Scene {
+ final class TestHost: @unchecked Sendable {
+     let queue = DispatchQueue(label: "glassact.testhost", qos: .userInteractive)
+     let options: Options
++    /// Duo Desktop build (auto-unlock): the fake lock screen (`--locked`); stays unlocked once unlocked.
++    lazy var screenLocked = options.locked
+     let scene: Scene
+     var engine: HostEngine?
+     var transport: QUICTransport?
+@@ -577,6 +586,31 @@ final class TestHost: @unchecked Sendable {
+             self.scene.apply(kind: kind, x: sx, y: sy, a: a, b: b, picture: (x, y, pic.w, pic.h))
+         }
+         engine.onTextInput = { [weak self] text in self?.scene.text(text) }
++        if options.locked { // Duo Desktop build (auto-unlock)
++            engine.unlockAvailable = true
++            engine.setScreenLock(screenLocked ? ScreenLock.locked : ScreenLock.unlocked)
++            engine.onUnlockType = { [weak self, weak engine] password in
++                guard let self, let engine else { return }
++                guard self.screenLocked else {
++                    Scene.log("unlock: not locked, nothing typed")
++                    engine.sendUnlockState(UnlockState.notLocked)
++                    return
++                }
++                if self.options.lockedStays {
++                    Scene.log("unlock: would type \(String(decoding: password, as: UTF8.self).count) characters and Return; screen stays locked")
++                    engine.sendUnlockState(UnlockState.typed)
++                    return
++                }
++                Scene.log("unlock: would type \(String(decoding: password, as: UTF8.self).count) characters and Return (screen locked)")
++                engine.sendUnlockState(UnlockState.typed)
++                self.queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
++                    guard let self else { return }
++                    self.screenLocked = false
++                    self.engine?.setScreenLock(ScreenLock.unlocked)
++                    Scene.log("screen unlocked")
++                }
++            }
++        }
+         engine.onClipboard = { [weak self] format, data in
+             guard format == 1, let text = String(bytes: data, encoding: .utf8) else { return }
+             self?.scene.clipboard(text)
+diff --git a/Tests/WireTests/UnlockMessageTests.swift b/Tests/WireTests/UnlockMessageTests.swift
+new file mode 100644
+index 0000000..3483ecb
+--- /dev/null
++++ b/Tests/WireTests/UnlockMessageTests.swift
+@@ -0,0 +1,44 @@
++// Duo Desktop build (auto-unlock): UNLOCK_TYPE (0x67) and UNLOCK_STATE (0x68) on the wire. A made-up word only.
++import XCTest
++@testable import GlassActWire
++
++final class UnlockMessageTests: XCTestCase {
++    let word = Array("pumpernickel-42".utf8)
++
++    func testBothRoundTrip() {
++        let type = ControlMessage.unlockType(password: word)
++        let states = [UnlockState.available, UnlockState.typed, UnlockState.notLocked, UnlockState.failed]
++            .map { ControlMessage.unlockState(state: $0) }
++        XCTAssertEqual(type.tlvType, 0x67); XCTAssertEqual(states[0].tlvType, 0x68)
++        var d = ControlDeframer()
++        d.append(type.encoded()); states.forEach { d.append($0.encoded()) }
++        XCTAssertEqual(d.next(), .message(type))
++        for s in states { XCTAssertEqual(d.next(), .message(s)) }
++        XCTAssertTrue(ControlMessage.isKnownType(0x67)); XCTAssertTrue(ControlMessage.isKnownType(0x68))
++    }
++
++    /// Empty or longer than 256 bytes: refused by the decoder.
++    func testLengthLimits() {
++        func parse(_ bytes: [UInt8]) -> ControlMessage? {
++            var body = ByteWriter(reserving: bytes.count + 3)
++            body.writeVarint(UInt32(bytes.count)); body.writeBytes(bytes)
++            return body.bytes.withUnsafeBytes { ControlMessage.parseBody(type: 0x67, $0) }
++        }
++        XCTAssertNil(parse([]))
++        XCTAssertNil(parse([UInt8](repeating: 0x61, count: UnlockState.maxPasswordBytes + 1)))
++        let max = [UInt8](repeating: 0x61, count: UnlockState.maxPasswordBytes)
++        XCTAssertEqual(parse(max), .unlockType(password: max))
++    }
++
++    /// An older peer doesn't know the types: it skips them by length and the next message still arrives.
++    func testOlderPeerSkipsThem() {
++        var t = ControlMessage.unlockType(password: word).encoded(); t[0] = 0x7E
++        var s = ControlMessage.unlockState(state: UnlockState.available).encoded(); s[0] = 0x7E
++        let after = ControlMessage.hostNotice(code: HostNotice.none)
++        var d = ControlDeframer()
++        d.append(t); d.append(s); d.append(after.encoded())
++        XCTAssertEqual(d.next(), .skippedUnknown(type: 0x7E))
++        XCTAssertEqual(d.next(), .skippedUnknown(type: 0x7E))
++        XCTAssertEqual(d.next(), .message(after))
++    }
++}

@@ -1,0 +1,387 @@
+diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
+index 51ee40a..13a7c9d 100644
+--- a/Apps/Host/HostController.swift
++++ b/Apps/Host/HostController.swift
+@@ -483,11 +483,26 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+     /// The physical display the Host shares: the one capture started on,
+     /// or the main display before that (main-thread).
+     private var physicalDisplay: CGDirectDisplayID {
+-        // Duo Screens build (duo-screens/patches/host-main-display-only.patch): the main display only.
+-        // No retained or picked display, no other display. The upstream line was:
++        // Duo Screens build (multi-screen; replaces main-display-only): the screen this session's
++        // viewer picked (DISPLAY_SELECT) while it is online, else the main display. Never a display
++        // picked at the Mac, never "the first listed". Upstream:
+         // sharedDisplayID != 0 && CGDisplayIsOnline(sharedDisplayID) != 0 ? sharedDisplayID : CGMainDisplayID()
+-        CGMainDisplayID()
+-    }
++        chosenDisplayID != 0 && CGDisplayIsOnline(chosenDisplayID) != 0 && CGDisplayIsActive(chosenDisplayID) != 0
++            ? chosenDisplayID : CGMainDisplayID()
++    }
++
++    /// Duo Screens build (multi-screen), main thread: the screen this session's viewer picked
++    /// (0 = main, as for an older app that never picks). Reset when the session ends.
++    private var chosenDisplayID: CGDirectDisplayID = 0
++    /// Main thread: this session's viewer asked for the screen list, so it gets it again when
++    /// screens change.
++    private var viewerWantsDisplayList = false
++    /// Main thread: a screen switch is being made (one at a time; the viewer serializes too).
++    private var displaySwitchInProgress = false
++    /// encodeQueue: the answer to the last DISPLAY_SELECT and the fresh list, sent by the tick
++    /// once the rebuilt session is running (sent earlier, they would be lost).
++    private var pendingDisplaySelected: WireDisplaySelection?
++    private var pendingDisplayListAfterSwitch = false
+ 
+     /// Log every display mode change with its new size — the host's own
+     /// switches log just before theirs, so an unannounced one is external
+@@ -546,6 +561,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             guard let self else { return }
+             self.displayReconcilePending = false
+             self.reconcileSharedDisplay()
++            if self.viewerWantsDisplayList, self.transport != nil { // Duo Screens build (multi-screen)
++                self.onStatus("screens changed — sending the viewer a fresh list")
++                self.sendDisplayList()
++            }
+         }
+     }
+ 
+@@ -702,8 +721,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             do {
+                 let content = try await SCShareableContent.excludingDesktopWindows(
+                     false, onScreenWindowsOnly: false)
+-                // Duo Screens build: the main display or nothing. Never fall back to another display.
+-                guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {
++                // Duo Screens build (multi-screen): the viewer's screen (or main) or nothing. Never
++                // fall back to another display.
++                let wanted = await MainActor.run { self.physicalDisplay }
++                guard let display = content.displays.first(where: { $0.displayID == wanted }) else {
+                     // Asleep (or locked): nothing to capture yet. Wake it and
+                     // try again while the viewer (or the recording) waits.
+                     self.retryDefaultDisplay(after: 2, reason: "no display available to capture")
+@@ -821,10 +842,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             onPermissionProblem()
+         case let .recovered(_, filter, displayID):
+             lastFilter = filter
+-            if virtualDisplay == nil, let displayID, displayID != CGMainDisplayID() {
+-                // Duo Screens build: recovery landed on a display that is not main. End the session
+-                // rather than share it.
+-                disconnectViewer(status: "capture recovered onto a non-main display — ending the session")
++            if virtualDisplay == nil, let displayID, displayID != physicalDisplay {
++                // Duo Screens build (multi-screen): recovery landed on a display the viewer did not
++                // pick. End the session rather than share it.
++                disconnectViewer(status: "capture recovered onto display \(displayID), not the chosen \(physicalDisplay) — ending the session")
+                 stopCaptureIfIdle(force: true)
+                 return
+             }
+@@ -1120,6 +1141,14 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             onStatus("remote input active (first event kind \(kind))")
+         }
+         let scale = mappingScale
++        // Duo Screens build (multi-screen): every move and click stays on the shown screen — the
++        // position is clamped to the picture, so nothing lands on a neighbour. Crossing is a
++        // DISPLAY_SELECT, never a move. (Keys carry a key code in x; scrolls don't use it.)
++        var canvasX = canvasX, canvasY = canvasY
++        if (1...3).contains(kind), captureWidth > 0, captureHeight > 0 {
++            (canvasX, canvasY) = DisplayChoice.clampToCanvas(x: canvasX, y: canvasY,
++                                                             width: captureWidth, height: captureHeight)
++        }
+         let gx = contentOrigin.x + CGFloat(canvasX) / scale
+         let gy = contentOrigin.y + CGFloat(canvasY) / scale
+         let pt = CGPoint(x: gx, y: gy)
+@@ -1445,16 +1474,17 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+ 
+     /// Main thread. Rebuild the SCK stream at a new output size and reset
+     /// the session so the next HELLO carries the new dimensions.
++    @discardableResult // Duo Screens build (multi-screen): a screen switch needs to know
+     private func restartCapture(pixelWidth: Int, pixelHeight: Int, pointScale: CGFloat,
+-                                origin: CGPoint? = nil, inSession: Bool = false) {
+-        guard isRunning, let filter = lastFilter else { return }
++                                origin: CGPoint? = nil, inSession: Bool = false) -> Bool {
++        guard isRunning, let filter = lastFilter else { return false }
+         let size = CaptureGeometry.clamp(pixelWidth, pixelHeight)
+         let pixelWidth = size.w, pixelHeight = size.h
+         pixelScale = pointScale * size.factor
+         contentOrigin = origin ?? CGDisplayBounds(physicalDisplay).origin
+         captureWidth = pixelWidth
+         captureHeight = pixelHeight
+-        guard capture.restart(filter: filter, width: pixelWidth, height: pixelHeight) else { return }
++        guard capture.restart(filter: filter, width: pixelWidth, height: pixelHeight) else { return false }
+         encodeQueue.async { [weak self] in
+             guard let self else { return }
+             self.lastFrame = nil
+@@ -1470,6 +1500,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+                 DispatchQueue.main.async { self.server?.resetSession() }
+             }
+         }
++        return true
+     }
+ 
+     /// A geometry request must always end with a re-offered HELLO — even a
+@@ -1482,6 +1513,174 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+     }
+ 
++    // MARK: - Duo Screens build (multi-screen): the viewer's screen choice
++
++    /// Main thread. DISPLAY_SELECT: 0 = send the list; else share that screen in session (re-HELLO,
++    /// no reconnect), place the pointer on it (a drag if a button is held), and answer with
++    /// DISPLAY_SELECTED once the new session runs, or a refusal at once.
++    private func handleDisplaySelect(_ id: UInt32, pointer asked: CGPoint?) {
++        if id == 0 {
++            viewerWantsDisplayList = true
++            sendDisplayList()
++            return
++        }
++        func answerNow(_ status: WireDisplaySelection.Status, _ why: String) {
++            let cur = physicalDisplay, b = CGDisplayBounds(cur)
++            let answer = WireDisplaySelection(requestedID: id, status: status, displayID: cur,
++                                              x: Int32(b.minX), y: Int32(b.minY),
++                                              width: UInt16(clamping: Int(b.width)), height: UInt16(clamping: Int(b.height)),
++                                              pictureWidth: UInt16(clamping: captureWidth),
++                                              pictureHeight: UInt16(clamping: captureHeight))
++            onStatus("screen choice \(id) refused: \(why)")
++            encodeQueue.async { [weak self] in self?.engine?.sendDisplaySelected(answer) }
++        }
++        guard isRunning, lastFilter != nil, singleWindowID == 0, virtualDisplay == nil, !displaySwitchInProgress else {
++            answerNow(.notNow, displaySwitchInProgress ? "another switch is under way"
++                               : "not sharing a whole screen right now")
++            return
++        }
++        displaySwitchInProgress = true
++        Task {
++            let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
++            await MainActor.run {
++                let offered = (content?.displays ?? []).map(\.displayID)
++                let chosen = DisplayChoice.screenToShare(requested: id, offered: offered, main: CGMainDisplayID())
++                guard chosen == id, let scDisplay = content?.displays.first(where: { $0.displayID == id }),
++                      self.isRunning, self.transport != nil else {
++                    self.displaySwitchInProgress = false
++                    answerNow(.notOffered, "display \(id) is not offered (offered: \(offered))")
++                    return
++                }
++                self.switchDisplay(to: scDisplay, requested: id, pointer: asked)
++            }
++        }
++    }
++
++    /// Main thread.
++    private func switchDisplay(to display: SCDisplay, requested id: UInt32, pointer asked: CGPoint?) {
++        let did = display.displayID
++        let bounds = CGDisplayBounds(did)
++        let filter = SCContentFilter(display: display, excludingWindows: [])
++        let previousFilter = lastFilter, previousChosen = chosenDisplayID
++        chosenDisplayID = did
++        sharedDisplayID = did
++        lastFilter = filter
++        // The size: Scale fits this screen into the viewer's request; else the screen's own pixels.
++        var pw: Int, ph: Int
++        if let request = lastScaleRequest {
++            (pw, ph) = CaptureGeometry.scaledSize(of: bounds.size, toFit: request,
++                                                  maxPixelsPerPoint: Self.pixelsPerPoint(did))
++        } else if let mode = CGDisplayCopyDisplayMode(did) {
++            (pw, ph) = (mode.pixelWidth, mode.pixelHeight)
++        } else {
++            (pw, ph) = (Int(bounds.width), Int(bounds.height))
++        }
++        // The half-size picture stays in force on a switch (its full size follows the new screen).
++        if autoScaledDown {
++            autoScaleFull = (pw, ph, CGFloat(pw) / max(1, bounds.width))
++            pw = (pw / 2) & ~1
++            ph = (ph / 2) & ~1
++        }
++        let rect = DisplayChoice.Rect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height)
++        let placed = DisplayChoice.pointerPlacement(asked: asked.map { (Double($0.x), Double($0.y)) }, on: rect)
++        let size = CaptureGeometry.clamp(pw, ph)
++        onStatus("screen choice \(id): sharing display \(did) at \(Int(bounds.minX)),\(Int(bounds.minY)) "
++                 + "\(Int(bounds.width))×\(Int(bounds.height)) pt, picture \(size.w)×\(size.h)"
++                 + (autoScaledDown ? " (half size kept)" : ""))
++        let restarted = restartCapture(pixelWidth: pw, pixelHeight: ph, pointScale: CGFloat(pw) / max(1, bounds.width),
++                                       origin: bounds.origin, inSession: true)
++        guard restarted else {
++            // The capture could not be rebuilt: put the old one back as it was and say so.
++            chosenDisplayID = previousChosen
++            lastFilter = previousFilter
++            displaySwitchInProgress = false
++            let answer = WireDisplaySelection(requestedID: id, status: .failed, displayID: physicalDisplay)
++            onStatus("screen choice \(id): capture could not be rebuilt — ending the session")
++            encodeQueue.async { [weak self] in self?.engine?.sendDisplaySelected(answer) }
++            disconnectViewer(status: "screen switch failed — viewer disconnected")
++            return
++        }
++        // After restartCapture's engine swap (same queue, queued after it): place the pointer, then
++        // queue the answer for the tick to send once the new session runs.
++        let answer = WireDisplaySelection(requestedID: id, status: .ok, displayID: did,
++                                          x: Int32(bounds.minX), y: Int32(bounds.minY),
++                                          width: UInt16(clamping: Int(bounds.width)),
++                                          height: UInt16(clamping: Int(bounds.height)),
++                                          pictureWidth: UInt16(clamping: size.w), pictureHeight: UInt16(clamping: size.h),
++                                          pointerPlaced: true,
++                                          pointerX: Int32(placed.x.rounded()), pointerY: Int32(placed.y.rounded()))
++        let pt = CGPoint(x: placed.x, y: placed.y)
++        encodeQueue.async { [weak self] in
++            guard let self else { return }
++            if AXIsProcessTrusted() {
++                if self.mouseButtonsDown != 0 {
++                    let (type, button) = self.draggedTypeForHeldButton()
++                    self.post(mouse: type, at: pt, button: button, clickState: self.heldClickState)
++                } else {
++                    self.post(mouse: .mouseMoved, at: pt, button: .left)
++                }
++            }
++            self.pendingDisplaySelected = answer
++            self.pendingDisplayListAfterSwitch = true
++            DispatchQueue.main.async { self.displaySwitchInProgress = false }
++        }
++    }
++
++    /// Main thread. DISPLAY_LIST: every display capture can see, with its place, size and a small
++    /// picture, the shown one marked.
++    private func sendDisplayList() {
++        let shown = physicalDisplay, main = CGMainDisplayID()
++        Task {
++            guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
++            else { return }
++            var names: [CGDirectDisplayID: String] = [:]
++            await MainActor.run {
++                for screen in NSScreen.screens {
++                    if let n = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
++                        names[CGDirectDisplayID(n.uint32Value)] = screen.localizedName
++                    }
++                }
++            }
++            var list: [WireDisplay] = []
++            for d in content.displays.prefix(16) {
++                let id = d.displayID
++                let b = CGDisplayBounds(id)
++                let ppp = Int((Self.pixelsPerPoint(id) * 100).rounded())
++                let thumb = await Self.displayThumbnail(d)
++                list.append(WireDisplay(displayID: id, name: names[id] ?? "Display \(id)",
++                                        x: Int32(b.minX), y: Int32(b.minY),
++                                        width: UInt16(clamping: Int(b.width)), height: UInt16(clamping: Int(b.height)),
++                                        pixelsPerPoint100: UInt16(clamping: ppp),
++                                        rotation: UInt16(Int(CGDisplayRotation(id)) % 360),
++                                        isMain: id == main, isShown: id == shown,
++                                        thumbFormat: thumb?.format ?? WindowThumbFormat.none,
++                                        thumbWidth: UInt16(clamping: thumb?.width ?? 0),
++                                        thumbHeight: UInt16(clamping: thumb?.height ?? 0),
++                                        thumb: thumb?.bytes ?? []))
++            }
++            self.encodeQueue.async { [list] in self.engine?.sendDisplayList(list) }
++            self.onStatus("sent \(list.count) screens to viewer: " + list.map {
++                "\($0.displayID) \($0.name) \($0.width)×\($0.height) at \($0.x),\($0.y)\($0.isMain ? " main" : "")\($0.isShown ? " shown" : "")"
++            }.joined(separator: "; "))
++        }
++    }
++
++    /// A small still of a whole display (at most 320 × 200), as the window list's pictures.
++    private static func displayThumbnail(_ display: SCDisplay) async -> (format: UInt8, width: Int, height: Int, bytes: [UInt8])? {
++        let fw = max(CGFloat(display.width), 1), fh = max(CGFloat(display.height), 1)
++        let f = min(320.0 / fw, 200.0 / fh, 1.0)
++        let config = SCStreamConfiguration()
++        config.width = max(2, Int(fw * f)) & ~1
++        config.height = max(2, Int(fh * f)) & ~1
++        config.pixelFormat = kCVPixelFormatType_32BGRA
++        config.colorSpaceName = CGColorSpace.sRGB
++        config.showsCursor = false
++        guard let cg = try? await SCScreenshotManager.captureImage(
++                contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config),
++              let encoded = encodeThumbnail(cg) else { return nil }
++        return (encoded.format, cg.width, cg.height, encoded.bytes)
++    }
++
+     // MARK: - Single-window mode
+ 
+     /// Viewer picked (main thread). id 0 = "show me the list"; a real id swaps
+@@ -2621,7 +2820,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+         }
+         engine.extraHelloCaps = (geometrySettled ? WireCaps.geometryFinal : 0) | WireCaps.windowList | WireCaps.logUpload
+             | WireCaps.agentControl
+-            | (VirtualDisplay.isAvailable ? WireCaps.virtualDisplay : 0)
++            // Duo Screens build (multi-screen): the virtual display is refused in this Host, so not
++            // advertised; the screen list is.
++            | WireCaps.displayList
+         engine.rateLimit = Self.rateLimit(forMbit: bandwidthLimitMbit)
+         if !video {
+             onStatus("GLASSACT_TILE_ONLY: video off — lossless tiles only")
+@@ -2743,6 +2944,14 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             // whose control is off. They get native; scaling the capture
+             // changes only what they're sent.
+             var mode = requested
++            // Duo Screens build (multi-screen): this Host never changes a display's resolution or adds
++            // a virtual display, whatever the viewer asks (the owner 2026-11-21: "not change the resolution
++            // on the Mac"). Scale instead; the handshake still finishes (applyResize re-offers).
++            let allowed = DisplayChoice.allowedGeometryMode(mode)
++            if allowed != mode {
++                self.onStatus("geometry mode \(mode) refused by this Host (resolution / virtual display) — scale instead")
++                mode = allowed
++            }
+             if mode == Int(GeometryMode.clientResolution) || mode == Int(GeometryMode.virtualDisplay),
+                let denial = self.agentAccess.admitShare() {
+                 self.onStatus("geometry mode \(mode) refused (\(denial.reason)) — native instead")
+@@ -2780,6 +2989,16 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             }
+             DispatchQueue.main.async { self.handleWindowSelect(windowID) }
+         }
++        engine.onDisplaySelect = { [weak self] displayID, place, x, y in // Duo Screens build (multi-screen)
++            guard let self else { return }
++            if displayID != 0, let denial = self.agentAccess.admit(agentInput: self.agentAccess.agentDriving) {
++                self.agentAudit.denied("screen select", denial.reason)
++                return
++            }
++            DispatchQueue.main.async {
++                self.handleDisplaySelect(displayID, pointer: place ? CGPoint(x: Int(x), y: Int(y)) : nil)
++            }
++        }
+         engine.onWindowControl = { [weak self] action, width, height in
+             guard let self else { return }
+             if action != WindowAction.endSession,
+@@ -2970,6 +3189,19 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             }
+             let now = MonotonicClock.nowUS
+             engine.tick(nowUS: now)
++            if engine.state == .running { // Duo Screens build (multi-screen): the answer, then the list
++                if let answer = self.pendingDisplaySelected {
++                    self.pendingDisplaySelected = nil
++                    engine.sendDisplaySelected(answer)
++                    self.onStatus("screen choice \(answer.requestedID) answered: \(answer.status) — sharing display "
++                                  + "\(answer.displayID) at \(answer.x),\(answer.y) \(answer.width)×\(answer.height) pt, picture "
++                                  + "\(answer.pictureWidth)×\(answer.pictureHeight), pointer \(answer.pointerPlaced ? "\(answer.pointerX),\(answer.pointerY)" : "not moved")")
++                }
++                if self.pendingDisplayListAfterSwitch {
++                    self.pendingDisplayListAfterSwitch = false
++                    DispatchQueue.main.async { self.sendDisplayList() }
++                }
++            }
+             self.drainPendingWhileStatic(nowUS: now)
+             self.publishCursorState(engine)
+             if case let .reset(reason) = watchdog.check(engine, nowUS: now) {
+@@ -3079,6 +3311,21 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+     private func endSession() {
+         tickTimer?.cancel()
+         tickTimer = nil
++        // Duo Screens build (multi-screen): the next session starts on the main screen, as an older
++        // app expects. A capture left running on another screen is stopped once nobody watches.
++        viewerWantsDisplayList = false
++        displaySwitchInProgress = false
++        if chosenDisplayID != 0 {
++            let wasOther = physicalDisplay != CGMainDisplayID()
++            chosenDisplayID = 0
++            if wasOther {
++                DispatchQueue.main.async { [weak self] in
++                    guard let self, self.transport == nil else { return }
++                    self.onStatus("session on a non-main screen ended — capture stops; the next one starts on main")
++                    self.stopCaptureIfIdle(force: !self.isRecording)
++                }
++            }
++        }
+         logInbox.endSession()
+         let ending = transport
+         transport = nil
+@@ -3089,6 +3336,8 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             self?.sessionTransport = nil
+             self?.engineAwaitsFrame = nil
+             self?.engineStartPending = false
++            self?.pendingDisplaySelected = nil
++            self?.pendingDisplayListAfterSwitch = false
+         }
+     }
+ 

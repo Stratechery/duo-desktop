@@ -1,0 +1,197 @@
+--- a/Sources/glassact-testhost/main.swift
++++ b/Sources/glassact-testhost/main.swift
+@@ -29,6 +29,10 @@
+     var signInPassword: String?
+     /// Ask for new keys, approving each this long after its first dial.
+     var askAfter: Double?
++    /// Duo Screens build (picture size): `--picture-steps 6:960x540,14:1920x1080`: S seconds after the
++    /// viewer's geometry settles, send the picture at W x H while the screen keeps its size, as the Host's
++    /// auto-scale does on a slow link (`HostController.handleScalePressureConstrained`).
++    var pictureSteps: [(at: Double, w: Int, h: Int)] = []
+ 
+     static func parse(_ args: [String]) -> Options {
+         var o = Options()
+@@ -45,6 +49,13 @@
+             case "--still": o.motion = false
+             case "--sign-in-password": o.signInPassword = next()
+             case "--ask-after": o.askAfter = next().flatMap(Double.init)
++            case "--picture-steps":
++                o.pictureSteps = (next() ?? "").split(separator: ",").compactMap { step in
++                    let ts = step.split(separator: ":")
++                    let wh = ts.count == 2 ? ts[1].split(separator: "x").compactMap { Int($0) } : []
++                    guard let t = ts.first.flatMap({ Double($0) }), wh.count == 2 else { return nil }
++                    return (t, wh[0], wh[1])
++                }
+             case "-h", "--help":
+                 print("""
+                     usage: glassact-testhost [--port 4533] [--size 1600x1000] [--tiles-only] [--libaom] [--still]
+@@ -107,7 +118,10 @@
+     }
+ 
+     /// INPUT (kind, x, y, a, b) as `ControlMessage.input` defines it.
+-    func apply(kind: Int, x: Int, y: Int, a: Int, b: Int) {
++    func apply(kind: Int, x: Int, y: Int, a: Int, b: Int, picture p: (x: Int, y: Int, w: Int, h: Int)? = nil) {
++        // Duo Screens build (picture size): with a picture size set, edges are the picture's and each pointer
++        // line also gives the picture pixel the viewer sent.
++        let px = p.map { " [picture px \($0.x),\($0.y) of \($0.w)×\($0.h)]" } ?? ""
+         switch kind {
+         case 2: buttonsDown |= 1 << b; dragPoints = 0
+         case 3: buttonsDown &= ~(1 << b)
+@@ -118,13 +132,20 @@
+         switch kind {
+         case 1:
+             if buttonsDown != 0 { dragPoints += 1 }
+-            if buttonsDown == 0, y == 0 || y == height - 1 {
++            if let p, buttonsDown == 0 {
++                var edges: [String] = []
++                if p.y == 0 { edges.append("top") }
++                if p.y == p.h - 1 { edges.append("bottom") }
++                if p.x == 0 { edges.append("left") }
++                if p.x == p.w - 1 { edges.append("right") }
++                if !edges.isEmpty { Self.log("input: move to \(x),\(y) (\(edges.joined(separator: "+")) edge)\(px)") }
++            } else if buttonsDown == 0, y == 0 || y == height - 1 {
+                 Self.log("input: move to \(x),\(y) (\(y == 0 ? "top" : "bottom") edge)")
+             }
+         case 2:
+-            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) down at \(x),\(y) click \(max(1, a))")
++            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) down at \(x),\(y) click \(max(1, a))\(px)")
+         case 3:
+-            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) up at \(x),\(y) after \(dragPoints) drag moves")
++            Self.log("input: \(["left", "right", "middle"][min(b, 2)]) up at \(x),\(y) after \(dragPoints) drag moves\(px)")
+         case 4, 7:
+             Self.log("input: scroll \(a),\(b) (\(kind == 7 ? "points" : "lines"))")
+         case 5, 6:
+@@ -370,6 +391,13 @@
+     var asked: [String: Date] = [:]
+     var geometrySettled = false
+     var lastPointer: (x: Int, y: Int) = (-1, -1)
++    // Duo Screens build (picture size): the picture being sent when it differs from the screen, its pixels,
++    // when the viewer's geometry settled, and how many `--picture-steps` have run this session.
++    var picture: (w: Int, h: Int)?
++    var picturePixels: [UInt8] = []
++    var settledAt: Date?
++    var stepsDone = 0
++    var pictureSize: (w: Int, h: Int) { picture ?? (scene.width, scene.height) }
+ 
+     init(options: Options) {
+         self.options = options
+@@ -460,6 +488,9 @@
+         self.transport?.cancel()
+         self.transport = transport
+         geometrySettled = false
++        picture = nil // Duo Screens build (picture size): a new session starts at the screen's size
++        settledAt = nil
++        stepsDone = 0
+         transport.onControl = { [weak self] data in self?.engine?.handleControl(data, nowUS: MonotonicClock.nowUS) }
+         transport.onState = { [weak self, weak transport] state in
+             guard let self, let transport, self.transport === transport else { return }
+@@ -481,14 +512,25 @@
+         guard let transport else { return }
+         let encoders = HostVideoEncoders(choice: options.av1, callbackQueue: queue)
+         let engine = HostEngine(
+-            width: scene.width, height: scene.height, transport: transport,
++            width: pictureSize.w, height: pictureSize.h, transport: transport,
+             videoEncoderFactory: options.video ? { encoders.encoder(forCodec: $0) } : nil,
+             videoCodecPreference: encoders.preference,
+             videoAV1FromGlassAct: encoders.av1FromGlassAct,
+             startFrameSeq: startFrameSeq,
+             clock: { MonotonicClock.nowUS })
+         engine.extraHelloCaps = (geometrySettled ? WireCaps.geometryFinal : 0) | WireCaps.virtualDisplay
+-        engine.onInput = { [weak self] kind, x, y, a, b in self?.scene.apply(kind: kind, x: x, y: y, a: a, b: b) }
++        engine.onInput = { [weak self] kind, x, y, a, b in
++            guard let self else { return }
++            // Duo Screens build (picture size): the Host's mapping (`injectInput`: point = pixel / (capture
++            // width / display width)), with the screen as the display.
++            guard let pic = self.picture, kind & 0x7F <= 3 else {
++                self.scene.apply(kind: kind, x: x, y: y, a: a, b: b)
++                return
++            }
++            let sx = Int((Double(x) * Double(self.scene.width) / Double(pic.w)).rounded(.down))
++            let sy = Int((Double(y) * Double(self.scene.height) / Double(pic.h)).rounded(.down))
++            self.scene.apply(kind: kind, x: sx, y: sy, a: a, b: b, picture: (x, y, pic.w, pic.h))
++        }
+         engine.onTextInput = { [weak self] text in self?.scene.text(text) }
+         engine.onClipboard = { [weak self] format, data in
+             guard format == 1, let text = String(bytes: data, encoding: .utf8) else { return }
+@@ -518,6 +560,8 @@
+         let s = max(1, min(scale, 3))
+         let width = max(320, min(w * s, 4096)), height = max(240, min(h * s, 4096))
+         geometrySettled = true
++        settledAt = Date() // Duo Screens build (picture size)
++        picture = nil
+         if width == scene.width && height == scene.height {
+             engine?.reofferHelloFinal(nowUS: MonotonicClock.nowUS)
+             return
+@@ -530,22 +574,71 @@
+         if let previous { engine?.continueSession(from: previous) }
+     }
+ 
++    /// Duo Screens build (picture size): the next `--picture-steps` change, in session (re-HELLO, no
++    /// reconnect), as the Host's `restartCapture(inSession: true)`.
++    private func runPictureSteps() {
++        guard stepsDone < options.pictureSteps.count, let settledAt else { return }
++        let step = options.pictureSteps[stepsDone]
++        guard Date().timeIntervalSince(settledAt) >= step.at else { return }
++        stepsDone += 1
++        picture = (step.w, step.h) // at the screen's own size too, so the log reads the same at every size
++        Scene.log("picture → \(step.w)×\(step.h) (screen stays \(scene.width)×\(scene.height))")
++        let seed = engine?.currentFrameSeq ?? 1
++        if let old = engine { old.onFailed = nil }
++        let previous = engine
++        makeEngine(startFrameSeq: seed)
++        if let previous { engine?.continueSession(from: previous) }
++    }
++
++    /// Duo Screens build (picture size): the screen scaled into the picture's pixels.
++    private func scaledPicture(_ pic: (w: Int, h: Int)) {
++        if picturePixels.count != pic.w * pic.h * 4 { picturePixels = [UInt8](repeating: 0, count: pic.w * pic.h * 4) }
++        let space = CGColorSpace(name: CGColorSpace.sRGB)!
++        let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
++        let sw = scene.width, sh = scene.height
++        let image: CGImage? = scene.pixels.withUnsafeBytes { raw in
++            guard let provider = CGDataProvider(data: Data(raw) as CFData) else { return nil }
++            return CGImage(width: sw, height: sh, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: sw * 4,
++                           space: space, bitmapInfo: CGBitmapInfo(rawValue: info), provider: provider,
++                           decode: nil, shouldInterpolate: true, intent: .defaultIntent)
++        }
++        guard let image else { return }
++        picturePixels.withUnsafeMutableBytes { buf in
++            guard let ctx = CGContext(data: buf.baseAddress, width: pic.w, height: pic.h, bitsPerComponent: 8,
++                                      bytesPerRow: pic.w * 4, space: space, bitmapInfo: info) else { return }
++            ctx.interpolationQuality = .medium
++            ctx.draw(image, in: CGRect(x: 0, y: 0, width: pic.w, height: pic.h))
++        }
++    }
++
+     private func tick() {
++        if engine?.state == .running { runPictureSteps() } // Duo Screens build (picture size)
+         guard let engine else { return }
+         let now = MonotonicClock.nowUS
+         if engine.state == .running {
+             scene.render(nowUS: now)
++            if let pic = picture { // Duo Screens build (picture size)
++                scaledPicture(pic)
++                picturePixels.withUnsafeBytes { raw in
++                    engine.encodeTick(frame: raw, bytesPerRow: pic.w * 4, dirtyRects: nil,
++                                      captureTimestampUS: now, nowUS: now)
++                }
++            } else {
+             scene.pixels.withUnsafeBytes { raw in
+                 engine.encodeTick(frame: raw, bytesPerRow: scene.width * 4, dirtyRects: nil,
+                                   captureTimestampUS: now, nowUS: now)
+             }
++            }
+             if engine.cursorNegotiated, lastPointer.x != scene.pointer.x || lastPointer.y != scene.pointer.y {
+                 if lastPointer.x < 0 {
+                     engine.publishCursorImage(width: 32, height: 32, hotspotX: 1, hotspotY: 1, scale: 1,
+                                               bgra: Scene.arrow())
+                 }
+                 lastPointer = scene.pointer
+-                engine.publishCursor(x: scene.pointer.x, y: scene.pointer.y, visible: true)
++                // Duo Screens build (picture size): the cursor in the picture's pixels, as the Host reports it.
++                let pic = pictureSize
++                engine.publishCursor(x: scene.pointer.x * pic.w / max(1, scene.width),
++                                     y: scene.pointer.y * pic.h / max(1, scene.height), visible: true)
+             }
+         }
+         engine.tick(nowUS: now)

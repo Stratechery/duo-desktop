@@ -1,0 +1,128 @@
+name: DuoDesktop
+include:
+  # The Terminal view, only with DUO_TERMINAL=YES in xcodegen's environment (see project-terminal.yml).
+  - path: project-terminal.yml
+    enable: ${DUO_TERMINAL}
+  # The JetKVM view, only with DUO_JETKVM=YES in xcodegen's environment (see project-jetkvm.yml).
+  - path: project-jetkvm.yml
+    enable: ${DUO_JETKVM}
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "27.0"
+packages:
+  glassact:
+    # GLASSACT_COMMIT plus the patches in GLASSACT_PATCHES; scripts/check-glassact.sh refuses anything else.
+    path: ../vendor/glassact
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: 48
+    # The two build switches (the owner 2026-11-21: "a choice at build to incorporate either the JetKVM or the terminal or
+    # both"). Both empty here: the plain Glass Act version, with no SwiftTerm, SwiftNIO or WebRTC linked.
+    # project-terminal.yml (xcodegen with DUO_TERMINAL=YES) sets DUO_TERMINAL_FLAG and adds the terminal packages;
+    # project-jetkvm.yml (xcodegen with DUO_JETKVM=YES) sets DUO_JETKVM_FLAG and adds the JetKVM client and WebRTC.
+    DUO_TERMINAL_FLAG: ""
+    DUO_JETKVM_FLAG: ""
+    DUO_INFOPLIST_NAME: Info.plist
+    # THE ONE PLACE for the app's name and identifier (the owner 2026-11-20: "Let's just call it Duo Desktop."). The
+    # display name, usage texts and all three bundle identifiers below read these. In-app texts in DuoDesktop/*.swift
+    # and Notices/ spell the name out.
+    DUO_APP_NAME: Duo Desktop
+    # CHANGE THIS: a bundle id of your own, for example com.yourname.duodesktop.
+    DUO_BUNDLE_ID: com.example.duodesktop
+    # Signed device builds for TestFlight (the owner 2026-11-20). Simulator builds stay unsigned as before, so there the
+    # phone's key falls back to a file (plan section 8).
+    # CHANGE THIS: your own Apple developer team id (Xcode > Settings > Accounts, or developer.apple.com > Membership).
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": NO
+targets:
+  DuoDesktop:
+    type: application
+    platform: iOS
+    sources:
+      - path: DuoDesktop
+        excludes: ["*.entitlements", "Info.plist", "Info-jetkvm.plist"]
+    dependencies:
+      - package: glassact
+        product: GlassActViewer
+    preBuildScripts:
+      - name: Glass Act pin and Rust AV1 library
+        script: exec "$SRCROOT/scripts/prebuild.sh"
+        basedOnDependencyAnalysis: false
+    postCompileScripts:
+      - name: Bundle licence notices
+        script: exec "$SRCROOT/scripts/bundle-notices.sh"
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_NAME: DuoDesktop
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG)
+        PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The app's one accent colour, #FAA634 (the owner 2026-11-21: "everywhere in the app that is blue. Can we change to
+        # FAA634?"). Every tint, selected toggle, switch, cursor and Color.accentColor follows it.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The phone's key in the Keychain / Secure Enclave needs this (plan section 8; KeychainIdentity.appAccessGroup).
+        CODE_SIGN_ENTITLEMENTS: DuoDesktop/DuoDesktop.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        # Merged with the generated keys: NSBonjourServices is a list, which INFOPLIST_KEY_ cannot express.
+        # Info-jetkvm.plist in the JetKVM build (project-jetkvm.yml sets DUO_INFOPLIST_NAME).
+        INFOPLIST_FILE: DuoDesktop/$(DUO_INFOPLIST_NAME)
+        # An ordinary space (the owner 2026-11-21: "Yes, you need to go back to a regular space between Duo and desktop.");
+        # build 20's en space showed as a wide gap in Settings. The squeezed Home Screen label beside TestFlight's
+        # dot is accepted.
+        INFOPLIST_KEY_CFBundleDisplayName: $(DUO_APP_NAME)
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: $(DUO_APP_NAME) connects to your Macs running Glass Act Host.
+        # The lock uses deviceOwnerAuthentication; required on a Face ID phone, harmless with Touch ID.
+        INFOPLIST_KEY_NSFaceIDUsageDescription: $(DUO_APP_NAME) asks for Face ID before you use your Macs.
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # The Rust AV1 decoder Glass Act's AV1Core links (vendor/glassact/scripts/build-rust --xcode).
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/../vendor/glassact/.build/rust/$(PLATFORM_NAME)
+  DuoDesktopTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [DuoDesktopTests]
+    dependencies:
+      - target: DuoDesktop
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID).tests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuoDesktop.app/DuoDesktop
+        BUNDLE_LOADER: $(TEST_HOST)
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/../vendor/glassact/.build/rust/$(PLATFORM_NAME)
+  DuoDesktopUITests:
+    # Touch tests against the patched test host (needs it running; see TouchUITests.swift). Own scheme.
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [DuoDesktopUITests]
+    dependencies:
+      - target: DuoDesktop
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: DuoDesktop
+schemes:
+  DuoDesktop:
+    build:
+      targets:
+        DuoDesktop: all
+        DuoDesktopTests: [test]
+    test:
+      targets: [DuoDesktopTests]
+  DuoDesktopUITests:
+    build:
+      targets:
+        DuoDesktop: all
+        DuoDesktopUITests: [test]
+    test:
+      targets: [DuoDesktopUITests]
