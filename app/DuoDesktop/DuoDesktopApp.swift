@@ -20,8 +20,15 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            // Apple: compact width is the outer screen, regular the open one. Never detect the screen itself.
-            if sizeClass == .compact && !SimulatorSwitches.forceOpenLayout {
+            // A normal iPhone (not a Duo, by its model identifier: `PhoneKind`): its own layout, upright and sideways;
+            // never the outer screen's views. The Duo goes on exactly as before, below.
+            if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
+                if model.showsSession, let grid = model.shownGrid {
+                    SessionScreen(model: model, grid: grid, normalPhone: true)
+                } else {
+                    MacListScreen(model: model, list: list, lock: lock)
+                }
+            } else if sizeClass == .compact && !SimulatorSwitches.forceOpenLayout {
                 // The owner 2026-11-21: "If you open it on the outer screen, the app should be centered in the middle of
                 // the back screen where those annoying GUI permissions dialogues always pop up." The session's Mac
                 // when there is one; otherwise the old one line.
@@ -62,6 +69,8 @@ struct RootView: View {
         }
         // Folding or unfolding: held input is let go; the picture keeps coming (the outer screen shows it too).
         .onChange(of: sizeClass) { _, _ in
+            // A normal iPhone turning (a Max goes compact to regular) keeps held modifiers (SessionScreen).
+            guard !PhoneKind.current else { return }
             model.releaseHeldInput?()
             model.setVisible(true)
         }
@@ -91,7 +100,7 @@ struct RootView: View {
     /// Opened cold on the outer screen with one Mac: connect to it (more than one: the list). Once per launch, after
     /// the lock. Needing a sign-in or approval leaves the outer screen's one line.
     private func connectColdOnOuterScreen() {
-        guard !coldTried, sizeClass == .compact, !SimulatorSwitches.forceOpenLayout, !lock.locked,
+        guard !coldTried, !PhoneKind.current, sizeClass == .compact, !SimulatorSwitches.forceOpenLayout, !lock.locked,
               !CommandLine.arguments.contains("--connect"),
               let mac = LastMac.coldTarget(sessionMac: model.mac, idle: model.phase == .idle, macs: list.macs)
         else { return }
@@ -113,6 +122,14 @@ struct RootView: View {
             model.note("auto-unlock proof: Test host's made-up word \(saved ? "saved" : "NOT saved") in the Keychain (status \(MacPasswordKeychain.shared.lastSaveStatus))")
         }
         let args = CommandLine.arguments
+        #if targetEnvironment(simulator)
+        // `--sideways` (simulator only, normal-iPhone pictures): turns the app sideways as the phone would (no
+        // script can turn the simulator itself).
+        if args.contains("--sideways"),
+           let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+        }
+        #endif
         guard let i = args.firstIndex(of: "--connect"), i + 1 < args.count,
               let mac = list.macs.first(where: { $0.name == args[i + 1] }) else { return }
         model.connect(to: mac)

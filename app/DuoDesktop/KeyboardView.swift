@@ -417,7 +417,7 @@ struct KeyButtonStyle: ButtonStyle {
 }
 
 /// One cell of the upright grid.
-private struct KeyCell: View {
+struct KeyCell: View {
     let state: KeyboardState
     let cell: MacKeyboardLayout.Cell
 

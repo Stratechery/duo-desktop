@@ -94,6 +94,13 @@ enum SimulatorSwitches {
         return args[i + 1]
     }
 
+    /// `--kb-page numbers|symbols` and `--kb-shift` (pictures): our keyboard opens on that page / with shift on.
+    static var keyboardPage: TouchKeyboardLayout.Page? {
+        guard let i = args.firstIndex(of: "--kb-page"), i + 1 < args.count else { return nil }
+        return TouchKeyboardLayout.Page(rawValue: args[i + 1])
+    }
+    static let keyboardShift = args.contains("--kb-shift")
+
     /// `--settings-at-end` (README pictures): a Mac's settings open scrolled to the end.
     static let settingsAtEnd = args.contains("--settings-at-end")
     /// `--home-picker`: a Mac's settings open on the Home Network list (Touch ID clarity pictures).
@@ -210,6 +217,8 @@ enum SimulatorSwitches {
     static let testUnlockWord: String? = nil
     static let testSignIn: (String, String)? = nil
     static let keyboardUp = false
+    static let keyboardPage: TouchKeyboardLayout.Page? = nil
+    static let keyboardShift = false
     static let showKeyInfo = false
     static let holdCommandShift = false
     static let openAppSwitcher = false

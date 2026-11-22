@@ -13,9 +13,9 @@ It has two parts:
   `patches/`).
 
 **Read [Known issues](#known-issues) before you start.** This was built for one person's setup and is not a
-finished product. This page describes **build 0.1 (49)**.
+finished product. This page describes **build 0.1 (53)**.
 
-*All pictures on this page are the real app, build 49, in the iPhone Duo Simulator. The Macs in them are Glass
+*All pictures on this page are the real app, in the iPhone Duo Simulator (upright pictures: build 53; sideways and outside pictures: build 49). The Macs in them are Glass
 Act's test host (a stand-in Mac that draws a test picture) under made-up names. No real Mac is shown.*
 
 Contents:
@@ -41,14 +41,22 @@ Contents:
 
 | | |
 |---|---|
-| <img src="docs/images/01-mac-list.png" width="300" alt="The list of Macs: Studio Mac ready, Office Mac sign in needed, Laptop not reachable"> | **The list of Macs.** Each Mac you added, with its state: **Ready**, **Sign in needed** or **Not reachable**. Tap a Mac to connect. Tap **ⓘ** beside it for its settings. Below the Macs: the **Security** section, the trackpad side, keyboard haptics and **Keyboard Shortcuts**. |
+| <img src="docs/images/01-mac-list.png" width="300" alt="The list of Macs: Studio Mac ready, Office Mac sign in needed, Laptop not reachable"> | **The list of Macs.** Each Mac you added, with its state: **Ready**, **Sign in needed** or **Not reachable**. Tap a Mac to connect. Tap **ⓘ** beside it for its settings. Below the Macs: the **Security** section, the **Trackpad** side (Left or Right), keyboard haptics and **Keyboard Shortcuts**. |
 
 ---
 
 ## Held upright: Whole Screen and Follow Pointer
 
 With the phone open and held upright, the Mac's picture is on top. The trackpad, the Mac keys band and the keyboard
-are below. The top row holds **Back**, the Mac's name with the screen's name under it (the "name bubble"), and the
+are below.
+
+**The trackpad can be on the right or the left.** It is on the right unless you change it: in the list of Macs,
+**Trackpad**, choose **Left** or **Right**. The Mac keys keep their order either way; only the trackpad and the keys
+swap sides. The pictures here show it on the right.
+
+<img src="docs/images/04-trackpad-setting.png" width="500" alt="The Trackpad setting in the list of Macs: Left or Right, Right chosen">
+
+The top row holds **Back**, the Mac's name with the screen's name under it (the "name bubble"), and the
 view choices.
 
 | | |
@@ -78,12 +86,14 @@ anything on the Mac.
 ## Held sideways
 
 Turn the open phone sideways for a wide picture of the whole Mac screen. The trackpad sits at one side, and a clear
-column of buttons at the other: **Keyboard**, **Right click**, **Scroll** and **Click**.
+column of buttons at the other: **Keyboard**, **Right click**, **Scroll** and **Click**. The trackpad can be on the
+right or the left: the same **Trackpad** setting in the list of Macs (Left or Right; right is the default) chooses
+the side. The Mac keys keep their order.
 
 | |
 |---|
 | <img src="docs/images/12-horizontal.png" width="640" alt="Held sideways: the whole Mac screen, the trackpad and the button column"> |
-| **Sideways.** The whole Mac screen, the trackpad (bottom left) and the button column (right). |
+| **Sideways.** The whole Mac screen, the trackpad at one side and the button column at the other. This picture is from an earlier test with the trackpad set to the left. |
 | <img src="docs/images/13-horizontal-keyboard.png" width="640" alt="Held sideways with Duo Desktop's keyboard up"> |
 | **Typing sideways.** Duo Desktop's own keyboard, with Mac keys along the top (esc, tab, Control, Option, Command, Shift, arrows). Keys show a pop-up of the letter as you press them, like the iPhone's keyboard. Here the G key is held. |
 
@@ -171,7 +181,7 @@ Both views obey the app's lock, also while a connection is still starting. More 
 **A ready-to-install Host exists for each TestFlight build.** It is signed with Developer ID and notarized by
 Apple, so it opens without Gatekeeper's extra step and you do not need to build it yourself. It is attached to this
 repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). The current one, "Glass Act Host
-26.11.3 for Duo Desktop 48", also serves build 49: build 49 did not change the Host. You can also build the Host
+26.11.3 for Duo Desktop 48", also serves builds 49 to 53: those builds did not change the Host. You can also build the Host
 yourself, as the guide describes.
 
 The full, step-by-step guide is in **[docs/INSTALL.md](docs/INSTALL.md)**:
@@ -270,7 +280,8 @@ Those reports were on builds 45 to 47. Nothing else is claimed here. Everything 
 - **Not proven on a real phone:** anything not listed under [Tested on a real phone](#tested-on-a-real-phone),
   including that the JetKVM retry and the offer-first change fix the intermittent connection, build 48's
   changes (the Mac's one-time question, the lock while starting, the JetKVM failure reported at once) and build
-  49's (the Security section, picking the home address from nearby Macs, the SSH user name warnings).
+  49's (the Security section, picking the home address from nearby Macs, the SSH user name warnings), and builds
+  50 to 53's layout for a normal (not Duo) iPhone, which this page does not show.
 - **Host on macOS 15:** a first-start crash of the setup window was fixed (the last patch); macOS 15 had only one
   test Mac.
 - **Host settings while a session runs:** if someone at the Mac makes another screen the main one during a

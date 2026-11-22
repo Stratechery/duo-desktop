@@ -335,6 +335,23 @@ struct SessionScreen: View {
     /// While a finger is on the trackpad, the layout's shape held as it was (an edge crossing onto a screen of
     /// another shape changes the layout only when the finger lifts: plan item 13).
     @State private var heldShape: PictureShape?
+    /// A normal iPhone (`PhoneKind`): its own upright layout (`NormalPhoneLayout`); sideways the Duo's horizontal one.
+    let normalPhone: Bool
+    /// Normal iPhone, upright: the "…" page shows in place of the band.
+    @State private var morePage = false
+    /// Normal iPhone, JetKVM view: our keyboard typing into the JetKVM's keys (made when that view is chosen).
+    @State private var kvmKeyboard: TouchKeyboardModel?
+    /// Normal iPhone, upright: the model behind our keyboard, on the keys in use (`inputParts`).
+    private var phoneKeyboard: TouchKeyboardModel {
+        #if DUO_JETKVM
+        if view.isJetKVM, let k = kvmKeyboard, k.engine === jetkvm.parts.keyboard.engine { return k }
+        #endif
+        return touchKeyboard
+    }
+    /// A normal iPhone's view button: Follow Pointer, then Terminal and JetKVM for a Mac with them on.
+    private var phoneChoices: [SessionView] {
+        SessionView.normalPhoneChoices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered)
+    }
 
     #if DUO_TERMINAL
     /// This Mac's terminal (Terminal view).
@@ -354,10 +371,12 @@ struct SessionScreen: View {
     private var jetkvm: JetKVMLink { JetKVMLink.for(mac: model.mac?.id ?? "") }
     #endif
 
-    init(model: SessionModel, grid: TileGrid) {
+    init(model: SessionModel, grid: TileGrid, normalPhone: Bool = false) {
         self.model = model
         self.grid = grid
-        _view = State(initialValue: model.openView)
+        self.normalPhone = normalPhone
+        // A normal iPhone has one view, Follow Pointer (the owner: "The display on the Mac is square").
+        _view = State(initialValue: normalPhone ? .centred : model.openView)
         // Through the model's gate: open only while the picture is live (nothing queued while rejoining).
         let parts = SessionParts(sink: model.input)
         _parts = State(initialValue: parts)
@@ -367,6 +386,8 @@ struct SessionScreen: View {
     /// A pinch on the picture: one step between the views (`PinchLadder`); the selector and the screen menu show
     /// the result at once (they read `view` and `model.showsOverview`). Horizontal has only the whole screen.
     private func pinchStep(_ step: PinchStep, wide: Bool) {
+        // A normal iPhone upright has only Follow Pointer: nothing to step to.
+        if normalPhone && !wide { return }
         let outcome = PinchLadder.next(from: wide ? .regular : view, step: step, multiScreen: model.multiScreen,
                                        overview: model.showsOverview, followPointerOffered: !wide)
         model.note("pinch \(step) on \(wide ? "horizontal" : view.rawValue): \(outcome)")
@@ -396,7 +417,16 @@ struct SessionScreen: View {
         // directly below it (the owner 2026-11-20: "Should mimic Claud app. Mac below").
         NavigationStack {
             SessionGeometry { proxy, wide in
-                let horizontal = HorizontalLayout(size: proxy.size, side: trackpadSide)
+                let insets = normalPhone && wide ? PhoneKind.sidewaysInsets() : (leading: 0, trailing: 0)
+                let horizontal = HorizontalLayout(size: proxy.size, side: trackpadSide,
+                                                  leadingInset: insets.leading, trailingInset: insets.trailing)
+                // A normal iPhone types on our own keyboard (its height is known) in the Mac and JetKVM views; the
+                // Terminal view keeps the system keyboard the terminal takes, as on the Duo.
+                let phone = NormalPhoneLayout(size: proxy.size,
+                                              keyboardInset: view.isTerminal
+                                                ? SimulatorSwitches.keyboardInset ?? keyboardInset
+                                                : NormalPhoneLayout.ownKeyboardHeight(width: proxy.size.width),
+                                              keyboardGap: view.isTerminal ? NormalPhoneLayout.pad : 0)
                 let upright = SessionLayout.Upright(size: proxy.size,
                                                     keyboardInset: SimulatorSwitches.keyboardInset ?? keyboardInset,
                                                     side: trackpadSide, shape: shape)
@@ -405,7 +435,7 @@ struct SessionScreen: View {
                     // Size and counter from the same place (the model), read together (build 4: the freeze after a size change).
                     CanvasHost(controller: model.pictureController, grid: model.shownGrid ?? grid,
                                generation: model.gridGeneration,
-                               parts: parts, directTouch: true, followPointer: !wide && view == .centred,
+                               parts: parts, directTouch: true, followPointer: !wide && (view == .centred || normalPhone),
                                typingVisibleHeight: wide && model.keyboardRules.up ? horizontal.panelTop : nil,
                                typingAimY: wide && model.keyboardRules.up ? model.typingAimY : nil,
                                onPinch: { step in pinchStep(step, wide: wide) })
@@ -429,8 +459,8 @@ struct SessionScreen: View {
                                     .allowsHitTesting(false)
                             }
                         }
-                        .frame(width: wide ? nil : upright.picture.width,
-                               height: wide ? nil : upright.picture.height)
+                        .frame(width: wide ? nil : normalPhone ? phone.picture.width : upright.picture.width,
+                               height: wide ? nil : normalPhone ? phone.picture.height : upright.picture.height)
                         .frame(maxWidth: wide ? .infinity : nil, maxHeight: wide ? .infinity : nil)
                         // The black stops at the picture: it must not run up behind the top row.
                         .background(Color.black, ignoresSafeAreaEdges: [])
@@ -442,8 +472,11 @@ struct SessionScreen: View {
                             if !wide && view == .terminal {
                                 TerminalPanel(session: terminal, entry: model.mac.flatMap { model.store.entry($0.id) },
                                               store: model.store)
-                                    .frame(height: upright.picture.height
-                                           + TerminalKeysBand.terminalExtra(bandHeight: upright.band.height))
+                                    .frame(height: normalPhone
+                                           // A normal iPhone: the picture's and the band's space, less the one row.
+                                           ? phone.terminalHeight(keysRow: TerminalKeysBand.height)
+                                           : upright.picture.height
+                                             + TerminalKeysBand.terminalExtra(bandHeight: upright.band.height))
                             }
                             #endif
                         }
@@ -477,13 +510,46 @@ struct SessionScreen: View {
                             // Horizontal types on our own keyboard, so the system keyboard never comes up there.
                             // Sideways the responder holds only the clear click view while our keyboard is up,
                             // so our keys' system clicks play (`KeyFeedback`); a system hide changes nothing.
+                            // A normal iPhone upright types on our own keyboard too: the responder holds only
+                            // the clear click view, so the system keyboard never comes up there.
                             MacTypingField(up: wide ? Binding(get: { model.keyboardRules.up }, set: { _ in })
                                                : $typing,
-                                           state: inputParts(wide: wide).keyboard, pinned: !wide, macKeysBar: false, clickOnly: wide)
+                                           state: inputParts(wide: wide).keyboard, pinned: !wide, macKeysBar: false,
+                                           clickOnly: wide || normalPhone)
                                 .frame(width: 1, height: 1)
                             }
                         }
-                    if !wide {
+                    if !wide && normalPhone {
+                        // The normal iPhone's band (NormalPhone.swift), on the same keyboard-coloured panel. The
+                        // Terminal view: the one row of terminal keys on the keyboard, the terminal taking the rest
+                        // (as on the Duo). The JetKVM view: the same band, driving the JetKVM (`inputParts`).
+                        Group { if view.isTerminal {
+                            #if DUO_TERMINAL
+                            TerminalKeysBand(session: terminal)
+                                .frame(width: phone.band.width, height: TerminalKeysBand.height)
+                            #endif
+                        } else {
+                            let input = inputParts(wide: wide)
+                            NormalPhoneBand(state: input.keyboard, pad: input.trackpad, layout: phone,
+                                            trackpadDimmed: model.showsOverview, more: $morePage)
+                        } }
+                            .allowsHitTesting(model.flow.acceptsInput || view.isJetKVM)
+                            .opacity(model.flow.showsHeldPicture && !view.isJetKVM ? 0.5 : 1)
+                            .padding(.top, NormalPhoneLayout.pad)
+                            .frame(width: proxy.size.width, alignment: .top)
+                            .background(alignment: .top) {
+                                Rectangle().fill(KeyLook.panel)
+                                    .frame(height: proxy.size.height)
+                                    .ignoresSafeArea(edges: .bottom)
+                            }
+                            // Terminal: the panel starts where the terminal ends (it reaches past the picture's
+                            // bottom edge), so it never covers the terminal's last rows.
+                            .padding(.top, view.isTerminal
+                                     ? phone.terminalPanelTop(keysRow: TerminalKeysBand.height) - phone.picture.height
+                                     : 0)
+                            .zIndex(1)
+                        Spacer(minLength: 0)
+                    } else if !wide {
                         // The owner 2026-11-20: "the middle part should be a trackpad. We can make the right part the
                         // trackpad and the left part the special keys." The band fills from the picture to the
                         // top of the system keyboard; the click buttons and keys fill its height.
@@ -531,6 +597,18 @@ struct SessionScreen: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                // A normal iPhone upright, Mac and JetKVM views: our own keyboard (the sideways view's, laid out at
+                // the drawing's portrait sizes), always showing, on the panel under the band; its keys' pop-ups
+                // rise over the band. It types into the keys in use (the JetKVM's in the JetKVM view).
+                .overlay(alignment: .bottom) {
+                    if normalPhone && !wide && !view.isTerminal {
+                        TouchKeyboardView(model: phoneKeyboard, width: proxy.size.width, sizes: .portrait)
+                            .frame(width: proxy.size.width, height: phone.keyboardInset, alignment: .top)
+                            .allowsHitTesting(model.flow.acceptsInput || view.isJetKVM)
+                            .opacity(model.flow.showsHeldPicture && !view.isJetKVM ? 0.5 : 1)
+                            .accessibilityIdentifier("phoneKeyboard")
+                    }
+                }
                 .background(wide ? Color.black : Color(.systemBackground))
                 .ignoresSafeArea(edges: wide ? .all : [])
                 .statusBarHidden(wide)
@@ -546,21 +624,39 @@ struct SessionScreen: View {
                                             model.storeView(new)
                                         }),
                                         leave: { model.disconnect() }, preview: SimulatorSwitches.topRowPreview,
-                                        rowWidth: proxy.size.width))
+                                        rowWidth: proxy.size.width,
+                                        fixedChoices: normalPhone ? phoneChoices : nil,
+                                        nameMaxOverride: normalPhone
+                                            ? NormalPhoneTopRow.nameMax(rowWidth: proxy.size.width)
+                                            : nil,
+                                        viewMenu: normalPhone))
                 // Turning the phone lets go of every held key and button (order item 3), and puts the keyboard
                 // away.
                 .onChange(of: wide) { _, _ in
                     typing = false
                     model.keyboardRulesReset()
-                    parts.layoutChanged()
+                    if normalPhone {
+                        // A normal iPhone keeps its held modifiers across the turn (the owner 2026-11-22: turning keeps the
+                        // connection, the screen and held modifiers); the mouse buttons and touch still let go.
+                        parts.trackpad.releaseAll()
+                        parts.touch.releaseAll()
+                        parts.canvas?.layoutChanged()
+                        morePage = false
+                    } else {
+                        parts.layoutChanged()
+                    }
                 }
                 // Flipping the band lets go of every held key and button, as turning the phone does; the session
                 // carries on.
                 .onChange(of: trackpadSide) { _, _ in parts.releaseAll() }
                 // Changing view lets go of held keys and buttons too.
-                .onChange(of: view) { _, _ in
+                .onChange(of: view) { _, new in
                     parts.releaseAll()
+                    morePage = false
                     #if DUO_JETKVM
+                    if normalPhone && new.isJetKVM && kvmKeyboard?.engine !== jetkvm.parts.keyboard.engine {
+                        kvmKeyboard = TouchKeyboardModel(engine: jetkvm.parts.keyboard.engine)
+                    }
                     jetkvm.parts.releaseAll()
                     #endif
                 }
@@ -613,7 +709,8 @@ struct SessionScreen: View {
                     // (a headless simulator cannot tap). Opening still starts in Whole Screen.
                     guard let v = SimulatorSwitches.chooseView, !wide else { return }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                        guard SessionView.choices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered)
+                        guard (normalPhone ? phoneChoices
+                               : SessionView.choices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered))
                             .contains(v) else { model.note("choose view: \(v.rawValue) not offered"); return }
                         view = v
                         model.openView = v
@@ -622,7 +719,11 @@ struct SessionScreen: View {
                 }
                 .onAppear {
                     guard SimulatorSwitches.moreOn, !wide else { return }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { parts.keyboard.functionKeys = true }
+                    // A normal iPhone: a second after `--choose-view` (changing view closes the "…" page).
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (normalPhone ? 5 : 4)) {
+                        // A normal iPhone: `--more-on` opens its "…" page.
+                        if normalPhone { morePage = true } else { parts.keyboard.functionKeys = true }
+                    }
                 }
                 .onAppear {
                     guard SimulatorSwitches.openAppSwitcher, !wide else { return }
@@ -745,6 +846,12 @@ struct SessionTopRow: ViewModifier {
     var rowWidth: CGFloat = 669
     /// Tests only: the view switch's choices (the probe's model offers neither Terminal nor JetKVM).
     var choicesForTest: [SessionView]? = nil
+    /// A normal iPhone: only the views that work there (Follow Pointer).
+    var fixedChoices: [SessionView]? = nil
+    /// A normal iPhone: the name bubble's widest size (`NormalPhoneTopRow`).
+    var nameMaxOverride: CGFloat? = nil
+    /// A normal iPhone: one view button that opens a menu (`ViewMenuButton`) in place of the switch.
+    var viewMenu = false
 
     /// The screen's name on a multi-screen Mac, nil on a one-screen Mac (or an older Host).
     private var screenName: String? {
@@ -755,6 +862,7 @@ struct SessionTopRow: ViewModifier {
 
     private var choices: [SessionView] {
         if let choicesForTest { return choicesForTest }
+        if let fixedChoices { return fixedChoices }
         return SessionView.choices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered)
     }
 
@@ -777,7 +885,8 @@ struct SessionTopRow: ViewModifier {
     /// view", and it "can update its content to indicate the current selection." The two lines follow the Claude
     /// app's own title capsule (the owner's reference picture): a semibold first line, a smaller secondary second line.
     @ViewBuilder private var nameBubble: some View {
-        let maxWidth = Self.nameMaxWidth(rowWidth: rowWidth, selectorWidth: ViewSelector.target * CGFloat(choices.count))
+        let maxWidth = nameMaxOverride
+            ?? Self.nameMaxWidth(rowWidth: rowWidth, selectorWidth: ViewSelector.target * CGFloat(choices.count))
         if screenName != nil {
             Menu {
                 ScreenMenuItems(model: model)
@@ -817,7 +926,10 @@ struct SessionTopRow: ViewModifier {
                 .sharedBackgroundVisibility(screenName == nil ? .hidden : .automatic)
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 ToolbarItem(placement: .topBarLeading) {
-                    ViewSelector(view: $view, choices: choices)
+                    Group {
+                        if viewMenu { ViewMenuButton(view: $view, choices: choices) }
+                        else { ViewSelector(view: $view, choices: choices) }
+                    }
                         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
                 }
                 // The selector draws its own one capsule (no toolbar glass behind it: no glass on glass).
@@ -1382,6 +1494,13 @@ extension SessionView {
         if jetkvm { c.append(.jetkvm) }
         #endif
         return c
+    }
+
+    /// A normal iPhone's view button (normal iPhone terminal jetkvm (change), the owner 2026-11-22: "Yes, Terminal and JetKVM
+    /// should be available on a normal phone."): the Duo's choices, per Mac and by the same settings switches, less
+    /// Whole Screen (the normal iPhone's Mac view is Follow Pointer only: "The display on the Mac is square").
+    static func normalPhoneChoices(terminal: Bool, jetkvm: Bool = false) -> [SessionView] {
+        choices(terminal: terminal, jetkvm: jetkvm).filter { $0 != .regular }
     }
 
     /// A stored choice that is no longer offered (Terminal turned off since) falls back to Whole Screen.

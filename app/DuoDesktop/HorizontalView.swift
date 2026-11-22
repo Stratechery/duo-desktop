@@ -32,6 +32,10 @@ struct HorizontalLayout: Equatable {
 
     let size: CGSize
     var side: TrackpadSide = .standard
+    /// A normal iPhone held sideways only: extra room kept clear at each side (the Dynamic Island's side,
+    /// `PhoneKind.sidewaysInsets`). Zero on the Duo, so its layout is unchanged.
+    var leadingInset: CGFloat = 0
+    var trailingInset: CGFloat = 0
 
     /// Our keyboard's height (four rows with the upright gaps, 8 above and 12 below, scaled).
     var keyboardHeight: CGFloat { TouchKeyboardLayout.height(width: Self.keyboardWidth) }
@@ -42,12 +46,13 @@ struct HorizontalLayout: Equatable {
     private var controlsHeight: CGFloat { size.height - Self.bottom - controlsTop }
 
     var column: CGRect {
-        let x = side == .right ? Self.edge : size.width - Self.edge - Self.columnWidth
+        let x = side == .right ? Self.edge + leadingInset : size.width - Self.edge - trailingInset - Self.columnWidth
         return CGRect(x: x, y: controlsTop, width: Self.columnWidth, height: controlsHeight)
     }
     var trackpad: CGRect {
-        let w = size.width - 2 * Self.edge - Self.columnWidth - 2 * Self.gap - Self.keyboardWidth
-        let x = side == .right ? size.width - Self.edge - w : Self.edge
+        let w = size.width - 2 * Self.edge - leadingInset - trailingInset - Self.columnWidth - 2 * Self.gap
+            - Self.keyboardWidth
+        let x = side == .right ? size.width - Self.edge - trailingInset - w : Self.edge + leadingInset
         return CGRect(x: x, y: controlsTop, width: w, height: controlsHeight)
     }
     private var keyboardX: CGFloat {
@@ -144,8 +149,39 @@ enum TouchKeyboardLayout {
     static let wideKey: CGFloat = 72.7, pageKey: CGFloat = 49.5, returnKey: CGFloat = 79.4
     static var gapX: CGFloat { pitchX - keyW }
 
-    static func height(width: CGFloat) -> CGFloat {
-        (top + 4 * keyH + 3 * (pitchY - keyH) + bottom) * width / HorizontalLayout.uprightWidth
+    /// One set of the keyboard's proportions. Widths are in units of `drawnWidth` and scale with the keyboard's
+    /// width; heights scale too unless `fixedHeights` (then they are points at every width).
+    struct Sizes: Equatable {
+        var drawnWidth: CGFloat
+        var keyW: CGFloat, keyH: CGFloat, pitchX: CGFloat, pitchY: CGFloat
+        var side: CGFloat, top: CGFloat, bottom: CGFloat
+        var wideKey: CGFloat, pageKey: CGFloat, returnKey: CGFloat
+        var fixedHeights = false
+        var gapX: CGFloat { pitchX - keyW }
+        var rowGap: CGFloat { pitchY - keyH }
+
+        /// The sideways keyboard (the open Duo's upright proportions, scaled as one piece).
+        static let sideways = Sizes(drawnWidth: HorizontalLayout.uprightWidth,
+                                    keyW: TouchKeyboardLayout.keyW, keyH: TouchKeyboardLayout.keyH,
+                                    pitchX: TouchKeyboardLayout.pitchX, pitchY: TouchKeyboardLayout.pitchY,
+                                    side: TouchKeyboardLayout.side, top: TouchKeyboardLayout.top,
+                                    bottom: TouchKeyboardLayout.bottom, wideKey: TouchKeyboardLayout.wideKey,
+                                    pageKey: TouchKeyboardLayout.pageKey, returnKey: TouchKeyboardLayout.returnKey)
+        /// A normal iPhone upright (the agreed drawing, screenshots/normal-phone/R8-V1-light.png, draw2.py at 402
+        /// wide): letter keys 34.2 x 40, 6 apart, 3 in from the sides; ⇧ and ⌫ 1.3 keys, 123 1.3 keys + 4, return
+        /// 2.2 keys; 6 above the first row (the gap under the band). Rows 48 apart, not the drawing's 50, and
+        /// nothing below the last row (it sits on the home indicator's area, not in it): the app's top row is the
+        /// system bar, 16 pt taller than the drawing's, and these 6 + 4 pt (with the band's lower gap, now the
+        /// keyboard's own top inset) give the picture its 402 x 402. Each key's touch area stays 48 tall.
+        /// 190 pt tall at every width.
+        static let portrait = Sizes(drawnWidth: 402, keyW: 34.2, keyH: 40, pitchX: 40.2, pitchY: 48,
+                                    side: 3, top: 6, bottom: 0, wideKey: 34.2 * 1.3, pageKey: 34.2 * 1.3 + 4,
+                                    returnKey: 34.2 * 2.2, fixedHeights: true)
+    }
+
+    static func height(width: CGFloat, sizes: Sizes = .sideways) -> CGFloat {
+        let s = sizes
+        return (s.top + 4 * s.keyH + 3 * s.rowGap + s.bottom) * (s.fixedHeights ? 1 : width / s.drawnWidth)
     }
 
     private static func chars(_ s: String) -> [TouchKey] { s.map { .char($0) } }
@@ -167,19 +203,21 @@ enum TouchKeyboardLayout {
     }
 
     /// Every key's frame in a keyboard `width` points wide (origin at the keyboard's top-left).
-    static func frames(_ page: Page, width: CGFloat) -> [(key: TouchKey, frame: CGRect)] {
-        let k = width / HorizontalLayout.uprightWidth
+    static func frames(_ page: Page, width: CGFloat, sizes s: Sizes = .sideways) -> [(key: TouchKey, frame: CGRect)] {
+        let k = width / s.drawnWidth
+        let kv = s.fixedHeights ? 1 : k
         var out: [(TouchKey, CGRect)] = []
-        let inner = HorizontalLayout.uprightWidth - 2 * side
+        let inner = s.drawnWidth - 2 * s.side
+        let keyW = s.keyW, gapX = s.gapX, side = s.side, wideKey = s.wideKey
         for (r, row) in rows(page).enumerated() {
-            let y = top + CGFloat(r) * pitchY
-            var cells: [(TouchKey, CGFloat, CGFloat)] = [] // key, x, width (upright units)
+            let y = s.top + CGFloat(r) * s.pitchY
+            var cells: [(TouchKey, CGFloat, CGFloat)] = [] // key, x, width (drawn units)
             switch r {
             case 0, 1:
                 // Letter-width keys at the letter pitch, the row centred (A-L sits in by half a key).
                 let n = CGFloat(row.count)
                 let x0 = side + (inner - (n * keyW + (n - 1) * gapX)) / 2
-                for (i, key) in row.enumerated() { cells.append((key, x0 + CGFloat(i) * pitchX, keyW)) }
+                for (i, key) in row.enumerated() { cells.append((key, x0 + CGFloat(i) * s.pitchX, keyW)) }
             case 2:
                 // ⇧ (or the page key) at the left, ⌫ at the right, the rest between: letters at the letter pitch,
                 // centred; the five punctuation keys share the space evenly (as the iPhone's 123 page).
@@ -189,7 +227,7 @@ enum TouchKeyboardLayout {
                 let n = CGFloat(mid.count)
                 if page == .letters {
                     let x0 = side + (inner - (n * keyW + (n - 1) * gapX)) / 2
-                    for (i, key) in mid.enumerated() { cells.append((key, x0 + CGFloat(i) * pitchX, keyW)) }
+                    for (i, key) in mid.enumerated() { cells.append((key, x0 + CGFloat(i) * s.pitchX, keyW)) }
                 } else {
                     let room = inner - 2 * wideKey - 2 * gapX
                     let w = (room - (n - 1) * gapX) / n
@@ -198,13 +236,20 @@ enum TouchKeyboardLayout {
                     }
                 }
             default:
-                cells.append((row[0], side, pageKey))
-                cells.append((row[2], side + inner - returnKey, returnKey))
-                cells.append((row[1], side + pageKey + gapX, inner - pageKey - returnKey - 2 * gapX))
+                cells.append((row[0], side, s.pageKey))
+                cells.append((row[2], side + inner - s.returnKey, s.returnKey))
+                cells.append((row[1], side + s.pageKey + gapX, inner - s.pageKey - s.returnKey - 2 * gapX))
             }
-            for (key, x, w) in cells { out.append((key, CGRect(x: x * k, y: y * k, width: w * k, height: keyH * k))) }
+            for (key, x, w) in cells { out.append((key, CGRect(x: x * k, y: y * kv, width: w * k, height: s.keyH * kv))) }
         }
         return out
+    }
+
+    /// A key's touch area: its frame grown by half the gap to each neighbour (so the keys' areas meet with no dead
+    /// strip between them, as the system keyboard's).
+    static func touchArea(_ frame: CGRect, width: CGFloat, sizes s: Sizes) -> CGRect {
+        let k = width / s.drawnWidth, kv = s.fixedHeights ? 1 : k
+        return frame.insetBy(dx: -s.gapX * k / 2, dy: -s.rowGap * kv / 2)
     }
 }
 
@@ -227,6 +272,8 @@ final class TouchKeyboardModel {
         if let id = SimulatorSwitches.holdKeyLook {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.shownKeys.insert(id) }
         }
+        if let p = SimulatorSwitches.keyboardPage { page = p }
+        if SimulatorSwitches.keyboardShift { shift = .once }
     }
 
     /// The Mac key a character key sends now (capital with shift on the letters page).
@@ -335,23 +382,30 @@ final class TouchKeyboardModel {
 struct TouchKeyboardView: View {
     let model: TouchKeyboardModel
     let width: CGFloat
+    /// The proportions: sideways (the Duo's horizontal view, as always) or a normal iPhone upright.
+    var sizes: TouchKeyboardLayout.Sizes = .sideways
     /// Proof renders only: draw these keys as held down.
     var shownPressed: Set<String> = []
 
     var body: some View {
-        let frames = TouchKeyboardLayout.frames(model.page, width: width)
+        let frames = TouchKeyboardLayout.frames(model.page, width: width, sizes: sizes)
+        // Upright on a normal iPhone each key also takes the half gaps around it (`touchArea`); sideways, as before,
+        // only the key itself.
+        let grows = sizes.fixedHeights
         ZStack(alignment: .topLeading) {
             ForEach(frames, id: \.key.id) { item in
+                let area = grows ? TouchKeyboardLayout.touchArea(item.frame, width: width, sizes: sizes) : item.frame
                 TouchKeyCap(model: model, key: item.key, size: item.frame.size,
                             shownPressed: shownPressed.contains(item.key.id),
                             popupShift: KeyPopup.shift(keyMinX: item.frame.minX, keyWidth: item.frame.width,
-                                                       containerWidth: width))
-                    .frame(width: item.frame.width, height: item.frame.height)
-                    .offset(x: item.frame.minX, y: item.frame.minY)
+                                                       containerWidth: width),
+                            touchPad: CGSize(width: item.frame.minX - area.minX, height: item.frame.minY - area.minY))
+                    .frame(width: area.width, height: area.height)
+                    .offset(x: area.minX, y: area.minY)
                     .zIndex(model.shownKeys.contains(item.key.id) || shownPressed.contains(item.key.id) ? 1 : 0)
             }
         }
-        .frame(width: width, height: TouchKeyboardLayout.height(width: width), alignment: .topLeading)
+        .frame(width: width, height: TouchKeyboardLayout.height(width: width, sizes: sizes), alignment: .topLeading)
         .onAppear { KeyFeedback.prepare() }
     }
 }
@@ -362,6 +416,8 @@ private struct TouchKeyCap: View {
     var size: CGSize = .zero
     var shownPressed = false
     var popupShift: CGFloat = 0
+    /// How far the touch area reaches past the key on each side (0 sideways).
+    var touchPad: CGSize = .zero
     @State private var touched = false
     /// Drawn pressed: the model's shown keys (held at least `minimumShown`), or a proof render's.
     private var pressed: Bool { model.shownKeys.contains(key.id) || shownPressed }
@@ -400,10 +456,13 @@ private struct TouchKeyCap: View {
                     KeyPopupView(letter: model.label(key), keySize: size, shift: popupShift)
                 }
             }
+            // Only upright on a normal iPhone: sideways nothing here changes (touchPad is zero).
+            .modifier(TouchPadArea(pad: touchPad))
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     if !touched { down() }
-                    let now = KeyPressRules.inside(v.location, size: size)
+                    let now = KeyPressRules.inside(CGPoint(x: v.location.x - touchPad.width,
+                                                           y: v.location.y - touchPad.height), size: size)
                     if now != onKey {
                         onKey = now
                         // Slid off: the look goes (as the system's); back on: it returns.
@@ -449,6 +508,18 @@ private struct TouchKeyCap: View {
         repeatTimer?.invalidate()
         repeatTimer = nil
         model.lifted(key, onKey: lifted)
+    }
+}
+
+/// A key's touch area grown by `pad` on each side; nothing at all when `pad` is zero.
+private struct TouchPadArea: ViewModifier {
+    let pad: CGSize
+    func body(content: Content) -> some View {
+        if pad == .zero {
+            content
+        } else {
+            content.padding(.horizontal, pad.width).padding(.vertical, pad.height).contentShape(Rectangle())
+        }
     }
 }
 
