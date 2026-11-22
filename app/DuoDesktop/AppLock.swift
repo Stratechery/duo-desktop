@@ -108,7 +108,7 @@ final class AppLock {
         guard on != required, !busy else { return }
         busy = true
         defer { busy = false }
-        switch await authenticate(on ? "Turn on Touch ID for Duo Desktop." : "Turn off Touch ID for Duo Desktop.") {
+        switch await authenticate(UnlockMethod.current.setRequiredReason(on)) {
         case let .success(context):
             if on, !locked { authContext = context }
             if !on { authContext?.invalidate(); authContext = nil }
@@ -120,12 +120,13 @@ final class AppLock {
         }
     }
 
-    nonisolated static func describe(_ error: Error) -> String {
+    /// `hardware`: the phone's Face ID / Touch ID / Optic ID, set up or not (`UnlockMethod.hardware`).
+    nonisolated static func describe(_ error: Error, hardware: UnlockMethod? = UnlockMethod.hardware) -> String {
         switch (error as? LAError)?.code {
         case .userCancel?, .systemCancel?, .appCancel?: "Unlock was cancelled."
-        case .passcodeNotSet?: "Set up a passcode and Touch ID in Settings to use the lock."
-        case .biometryNotEnrolled?: "Set up Touch ID in Settings to use the lock."
-        case .biometryLockout?: "Touch ID is locked. Use the passcode."
+        case .passcodeNotSet?: "\(UnlockMethod.noPasscodeSetup(hardware: hardware)) to use the lock."
+        case .biometryNotEnrolled?: UnlockMethod.notEnrolledText(hardware: hardware)
+        case .biometryLockout?: UnlockMethod.lockoutText(hardware: hardware)
         default: "Couldn’t unlock: \(error.localizedDescription)"
         }
     }

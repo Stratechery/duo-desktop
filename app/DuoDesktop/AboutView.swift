@@ -120,10 +120,11 @@ struct AboutList: View {
 /// What the screen shows while the app is locked: nothing of the Macs, one button.
 struct LockedView: View {
     let lock: AppLock
+    private let method = UnlockMethod.current
 
     var body: some View {
         VStack(spacing: 20) {
-            Image(systemName: "touchid")
+            Image(systemName: method.symbol)
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
             Text("Duo Desktop is Locked")
@@ -133,7 +134,7 @@ struct LockedView: View {
             } label: {
                 // White on the orange accent fill, forced so the system never picks a dark label (the owner 2026-11-21:
                 // "Let's do white first and I will decide.").
-                Text("Unlock with Touch ID").foregroundStyle(.white).frame(minWidth: 220)
+                Text(method.unlockButton).foregroundStyle(.white).frame(minWidth: 220)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)

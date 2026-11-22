@@ -210,9 +210,9 @@ enum KeyInfo {
     /// The three buttons' lines, first, as they are the band's first cells (the owner 2026-11-20: the reference
     /// "lists the keys of the new layout and the two click buttons").
     /// project notes: the feature in one plain line.
-    static let autoUnlockLine = Line(face: .symbol("lock.open"),
-                                     text: "With Unlock Automatically on in a Mac’s settings (it needs Require Touch ID), a locked Mac unlocks by itself",
-                                     ids: ["auto-unlock"])
+    static var autoUnlockLine: Line { Line(face: .symbol("lock.open"),
+                                     text: UnlockMethod.current.keyInfoAutoUnlock,
+                                     ids: ["auto-unlock"]) }
 
     static let clickLines: [Line] = [
         Line(face: .symbol("cursorarrow.click"), text: "Left click (hold it to drag)", ids: ["click-left"]),

@@ -72,7 +72,7 @@ struct MacListScreen: View {
                             Task { await lock.setRequired(on) }
                         }
                     })) {
-                        Label("Require Touch ID", systemImage: "touchid")
+                        Label(UnlockMethod.current.settingName, systemImage: UnlockMethod.current.symbol)
                     }
                     .disabled(lock.busy)
                     .accessibilityIdentifier("requireTouchID")
@@ -136,7 +136,7 @@ struct MacListScreen: View {
                                   identity: model.identity)
             }
             .modifier(RemoveMacAlert(mac: $removing) { list.store.remove($0.id) })
-            .alert("Turn Off Require Touch ID?", isPresented: $confirmLockOff) {
+            .alert(UnlockMethod.current.turnOffAlertTitle, isPresented: $confirmLockOff) {
                 Button("Turn Off", role: .destructive) {
                     Task {
                         await lock.setRequired(false)
@@ -149,7 +149,12 @@ struct MacListScreen: View {
             }
             .onChange(of: settingsFor) { _, new in if new == nil { probe() } }
             .refreshable { probe() }
-            .onAppear { probe() }
+            .onAppear {
+                probe()
+                if SimulatorSwitches.confirmLockOff, AutoUnlockRules.lockOffWarning(list.macs) != nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { confirmLockOff = true }
+                }
+            }
             .onChange(of: model.phase) { _, new in if new == .idle { probe() } }
             .alert(model.notice?.title ?? "", isPresented: Binding(get: { model.notice != nil },
                                                                     set: { if !$0 { model.notice = nil } })) {

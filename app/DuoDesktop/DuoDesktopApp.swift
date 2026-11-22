@@ -64,7 +64,7 @@ struct RootView: View {
             lock.onAccessChange = { AppAccess.set($0) }
             AppAccess.set(lock.access)
             model.note("window on the \(sizeClass == .compact ? "outer" : "open") screen, session \(ObjectIdentifier(model).hashValue)")
-            if lock.locked { await lock.unlock() }
+            if lock.locked, !SimulatorSwitches.lockNoPrompt { await lock.unlock() }
             connectColdOnOuterScreen()
         }
         // Folding or unfolding: held input is let go; the picture keeps coming (the outer screen shows it too).
@@ -83,7 +83,7 @@ struct RootView: View {
                 // The lock decides first: after 5 minutes away the rejoin waits for Touch ID.
                 lock.willEnterForeground()
                 model.willEnterForeground(locked: lock.locked)
-                if lock.locked { Task { await lock.unlock() } }
+                if lock.locked, !SimulatorSwitches.lockNoPrompt { Task { await lock.unlock() } }
             default: break
             }
         }

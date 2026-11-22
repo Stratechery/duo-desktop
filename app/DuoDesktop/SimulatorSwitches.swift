@@ -107,6 +107,16 @@ enum SimulatorSwitches {
     static let openHomePicker = args.contains("--home-picker")
     /// `--app-lock-passed`: Require Touch ID on and already passed, for pictures (the simulator has no finger).
     static let appLockPassed = args.contains("--app-lock-passed")
+    /// `--unlock-method faceID|touchID|opticID|passcode`: the app names this method instead of reading the device
+    /// (Face ID wording pictures; the simulator's enrolled state is not settable per run). nil: read it.
+    static var unlockMethod: UnlockMethod? {
+        guard let i = args.firstIndex(of: "--unlock-method"), i + 1 < args.count else { return nil }
+        return UnlockMethod(rawValue: args[i + 1])
+    }
+    /// `--confirm-lock-off`: the Mac list opens with the turn-off warning showing (Face ID wording pictures).
+    static let confirmLockOff = args.contains("--confirm-lock-off")
+    /// `--lock-no-prompt`: locked at launch without the system's prompt, so the lock screen can be pictured.
+    static let lockNoPrompt = args.contains("--lock-no-prompt")
 
     /// `--show-about` (README pictures): the Mac list opens with About showing.
     static let showAbout = args.contains("--show-about")
@@ -231,6 +241,8 @@ enum SimulatorSwitches {
     static let settingsAtEnd = false
     static let openHomePicker = false
     static let appLockPassed = false
+    static let confirmLockOff = false
+    static let lockNoPrompt = false
     static let chooseScreen: UInt32? = nil
     static let pointerWalk: [(at: Double, dx: Double, dy: Double, n: Int)] = []
     @MainActor static var inputDemo: ((SessionModel) -> Void)? { nil }

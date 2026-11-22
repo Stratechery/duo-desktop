@@ -485,10 +485,11 @@ In the Mac list, tap **ⓘ** beside a Mac.
 - **Mac's Key**: the Host's identity the phone trusts for this Mac. **Forget Key** only if that Mac's Host was
   reinstalled with a new key.
 - **Unlock Automatically**: when this Mac's screen is locked, the app types its password for you. Needs a
-  passcode and Touch ID on the phone and **Require Touch ID** on (the **Security** section of the Mac list). The
-  section says so. When Require Touch ID is off, a **Turn On Require Touch ID** button sits right under the switch;
+  passcode on the phone and the app lock on: **Require Face ID** on a normal iPhone, **Require Touch ID** on the
+  iPhone Duo, **Require Passcode** when neither is set up (the **Security** section of the Mac list). The
+  section says so. When the lock is off, a **Turn On Require …** button sits right under the switch;
   when the phone has no passcode, it says so and offers **Open Settings**. The password is kept
-  **only in this iPhone's Keychain**: this device only, never synced to iCloud, readable only after Touch ID.
+  **only in this iPhone's Keychain**: this device only, never synced to iCloud, readable only after the app lock is passed.
   It is sent to the Host only when the Mac's screen is locked; the Host types it only if the screen is still
   locked, and never logs it.
 - **Terminal** (Terminal versions): adds a Terminal view for this Mac.
@@ -521,7 +522,7 @@ In the Mac list, tap **ⓘ** beside a Mac.
 - **Remove Mac**: deletes its key and settings from this iPhone. The Mac is not changed.
 
 App-wide settings are on the Mac list itself, below the Macs. First the **Security** section with
-**Require Touch ID** (on by default); its footer says what depends on it. Turning it off while a Mac uses Unlock
+**Require Face ID** (**Require Touch ID** on the iPhone Duo; on by default); its footer says what depends on it. Turning it off while a Mac uses Unlock
 Automatically warns first, names those Macs, and then deletes their saved Mac passwords from this iPhone (turning it
 back on does not bring them back). Then **This iPhone** (the phone's own key and where it is kept), the trackpad
 side and **Keyboard Haptics**. The **ⓘ About** button

@@ -145,11 +145,12 @@ the top or bottom edge shows a hidden menu bar or Dock.
 |---|---|
 | <img src="docs/images/08a-mac-settings-top.png" width="300" alt="A Mac's settings: addresses, Unlock Automatically, Terminal"> | **A Mac's settings** (tap ⓘ beside a Mac). **Unlock Automatically**: when the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. |
 
-- **Require Touch ID** locks Duo Desktop itself. It is in the **Security** section of the Mac list, on by default.
-  It asks for Touch ID when the app opens and after 5 minutes away.
-- **Unlock Automatically needs Require Touch ID.** One Touch ID then unlocks every Mac. The Mac's settings say so.
-  When Require Touch ID is off, a **Turn On Require Touch ID** button sits right under the switch.
-- Turning Require Touch ID off while Macs use Unlock Automatically warns first and names those Macs. Their saved
+- **Require Face ID** (Touch ID on the iPhone Duo) locks Duo Desktop itself. The app names the phone's own
+  method: Face ID, Touch ID, or the passcode when neither is set up. It is in the **Security** section of the Mac
+  list, on by default, and asks when the app opens and after 5 minutes away.
+- **Unlock Automatically needs that lock.** One Face ID or Touch ID then unlocks every Mac. The Mac's settings say
+  so. When the lock is off, a **Turn On** button sits right under the switch.
+- Turning the lock off while Macs use Unlock Automatically warns first and names those Macs. Their saved
   passwords are then deleted from the phone.
 - **Home Network** in a Mac's settings: tap it to pick the Mac from those nearby, or type an address.
 
@@ -238,7 +239,7 @@ The steps (Glass Act for the app, your bundle id and team, the Simulator, your p
   owner once (see [Settings for each Mac](docs/INSTALL.md#settings-for-each-mac)). Treat approving a phone like handing over your
   keyboard. Set a phone to **View Only** in the Host's **Viewers** menu to allow watching only.
 - **On the phone:** Mac passwords and the JetKVM password live in the iPhone's Keychain, this device only.
-  **Require Touch ID** locks the app; while locked, nothing connects and no password is read.
+  **Require Face ID** (Touch ID on the iPhone Duo) locks the app; while locked, nothing connects and no password is read.
 - **Network:** use it on your own network or Tailscale. Do not forward UDP 4433/4434 from the internet.
 - **JetKVM:** the JetKVM's own login is plain `http://` (as the device offers it). Reach it only over your home
   network or Tailscale.

@@ -90,8 +90,8 @@ enum AutoUnlockRules {
 
     /// What the setting row says when the feature cannot be used (nil: it can).
     static func unavailableReason(appLockOn: Bool, deviceCanAuthenticate: Bool) -> String? {
-        if !deviceCanAuthenticate { return "Set up a passcode and Touch ID in Settings to use this." }
-        if !appLockOn { return "Turn on Require Touch ID to use this." }
+        if !deviceCanAuthenticate { return "\(UnlockMethod.noPasscodeSetup(hardware: UnlockMethod.hardware)) to use this." }
+        if !appLockOn { return UnlockMethod.current.turnOnRequiredHint }
         return nil
     }
 
@@ -122,12 +122,13 @@ enum AutoUnlockRules {
 
     /// The section's footer, saying the dependency before it matters (the owner 2026-11-22: "it should clarify that you
     /// have to set Touch ID if you want your Mac to unlock automatically").
-    static let footer = "Needs Require Touch ID, which locks Duo Desktop itself. One Touch ID then unlocks every Mac. When this Mac is locked, Duo Desktop types its password for you; the password stays in this iPhone’s Keychain."
-    static let noPasscodeText = "This iPhone has no passcode, so Touch ID can’t be used. Set up a passcode and Touch ID in Settings."
-    static let appLockOffText = "Require Touch ID is off."
+    /// The words name this phone's own method (`UnlockMethod`, Face ID wording change).
+    static var footer: String { UnlockMethod.current.autoUnlockFooter }
+    static var noPasscodeText: String { UnlockMethod.noPasscodeText(hardware: UnlockMethod.hardware) }
+    static var appLockOffText: String { UnlockMethod.current.settingOffText }
 
     /// The Mac list's Security footer: what depends on Require Touch ID.
-    static let securityFooter = "Asks for Touch ID when Duo Desktop opens and after 5 minutes away. Unlock Automatically and the saved Mac passwords need it, and Terminal and JetKVM wait for it after 5 minutes away."
+    static var securityFooter: String { UnlockMethod.current.securityFooter }
 
     /// The Macs that stop unlocking automatically if Require Touch ID is turned off.
     static func macsUsing(_ macs: [MacEntry]) -> [MacEntry] { macs.filter { $0.autoUnlock == true } }
@@ -257,13 +258,13 @@ struct AutoUnlockSection: View {
                         Button {
                             Task { await lock.setRequired(true) }
                         } label: {
-                            Label("Turn On Require Touch ID", systemImage: "touchid")
+                            Label(UnlockMethod.current.turnOnRow, systemImage: UnlockMethod.current.symbol)
                         }
                         .disabled(lock.busy)
                         .accessibilityIdentifier("autoUnlockTurnOnTouchID")
                         if let m = lock.message { Text(m).font(.footnote).foregroundStyle(.secondary) }
                     } else {
-                        Text("Turn on Require Touch ID in the Mac list’s Security section.").foregroundStyle(.secondary)
+                        Text(UnlockMethod.current.turnOnInSecurityHint).foregroundStyle(.secondary)
                     }
                 }
             }

@@ -37,7 +37,7 @@ final class TouchIDClarityTests: XCTestCase {
         XCTAssertEqual(AutoUnlockRules.blocker(appLockOn: false, deviceCanAuthenticate: false), .noPasscode)
         XCTAssertEqual(AutoUnlockRules.blocker(appLockOn: false, deviceCanAuthenticate: true), .appLockOff)
         XCTAssertNil(AutoUnlockRules.blocker(appLockOn: true, deviceCanAuthenticate: true))
-        XCTAssertTrue(AutoUnlockRules.footer.hasPrefix("Needs Require Touch ID"))
+        XCTAssertTrue(AutoUnlockRules.footer.hasPrefix("Needs \(UnlockMethod.current.settingName)"))
         XCTAssertTrue(AutoUnlockRules.securityFooter.contains("Terminal and JetKVM wait for it after 5 minutes away"))
     }
 
