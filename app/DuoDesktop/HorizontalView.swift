@@ -643,7 +643,8 @@ private struct KeyboardButtonSurface: ViewModifier {
     }
 }
 
-/// Leave (top-left); Screens (several screens only, top-right): small round glass buttons. No info control (the owner
+/// Back to Macs (top-left, the shared `BackToMacsButton`); Screens (several screens only, top-right): small round
+/// glass buttons. No info control (the owner
 /// 2026-11-21: the shortcuts "don't need to be on every screen"; Keyboard Shortcuts is a row on the Mac list; after
 /// build 46 brought it back: "No, no truncation. Cut it again").
 private struct TopCornerButtons: View {
@@ -652,10 +653,8 @@ private struct TopCornerButtons: View {
     var body: some View {
         GlassEffectContainer {
             HStack {
-                Button { model.disconnect() } label: {
-                    Image(systemName: "xmark").frame(width: 20, height: 20)
-                }
-                .accessibilityLabel("Leave \(model.mac?.name ?? "the Mac")")
+                // The same back button as upright (not an X: X closes a modal; this goes back to the Mac list).
+                BackToMacsButton { model.disconnect() }
                 Spacer()
                 if model.multiScreen {
                     Menu {

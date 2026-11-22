@@ -912,8 +912,7 @@ struct SessionTopRow: ViewModifier {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Macs", systemImage: "chevron.backward", action: leave)
-                        .accessibilityLabel("Back to Macs")
+                    BackToMacsButton(action: leave)
                 }
                 // Order, left to right (the owner 2026-11-21: "We should flip the order of the computer name and its
                 // screens and the four views. After all, the four views are all a subset of that computer."): back,
@@ -941,6 +940,28 @@ struct SessionTopRow: ViewModifier {
                 .sharedBackgroundVisibility(.hidden)
             }
             .toolbar(hidden ? .hidden : .visible, for: .navigationBar)
+    }
+}
+
+/// The one button that leaves the Mac and goes back to the Mac list: the standard back chevron, upright (in the bar)
+/// and sideways (top-left corner) alike. The owner, 2026-11-22, on the sideways X: "That's really confusing. I keep hitting it
+/// to dismiss the keyboard. It should be a back caret like it is in the vertical view." HIG Toolbars: "the standard
+/// Back button lets them retrace their steps through a hierarchy of information, and the standard Close button
+/// closes a modal view." The symbol's 20 pt minimum frame keeps the sideways glass circle the size it was.
+struct BackToMacsButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label {
+                Text("Macs")
+            } icon: {
+                Image(systemName: "chevron.backward").frame(minWidth: 20, minHeight: 20)
+            }
+            .labelStyle(.iconOnly)
+        }
+        .accessibilityLabel("Back to Macs")
+        .accessibilityIdentifier("backToMacs")
     }
 }
 
