@@ -424,7 +424,9 @@ struct SessionScreen: View {
             SessionGeometry { proxy, wide in
                 let insets = normalPhone && wide ? PhoneKind.sidewaysInsets() : (leading: 0, trailing: 0)
                 let horizontal = HorizontalLayout(size: proxy.size, side: trackpadSide,
-                                                  leadingInset: insets.leading, trailingInset: insets.trailing)
+                                                  leadingInset: insets.leading, trailingInset: insets.trailing,
+                                                  normalPhone: normalPhone && wide,
+                                                  typing: model.keyboardRules.up)
                 // A normal iPhone types on our own keyboard (its height is known) in the Mac and JetKVM views; the
                 // Terminal view keeps the system keyboard the terminal takes, as on the Duo.
                 let phone = NormalPhoneLayout(size: proxy.size,

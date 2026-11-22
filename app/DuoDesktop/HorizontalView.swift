@@ -36,6 +36,20 @@ struct HorizontalLayout: Equatable {
     /// `PhoneKind.sidewaysInsets`). Zero on the Duo, so its layout is unchanged.
     var leadingInset: CGFloat = 0
     var trailingInset: CGFloat = 0
+    /// A normal iPhone held sideways (never the Duo): with the keyboard down the trackpad is the wide overlay
+    /// (`widePad`). With the keyboard up it keeps the Duo's rule (the room beside our 589 pt keyboard).
+    var normalPhone = false
+    /// Our keyboard is up (only changes anything on a normal iPhone).
+    var typing = false
+
+    /// The wide overlay on a normal iPhone, keyboard down (project notes; the owner: "The
+    /// trackpad overlays the picture. This is the horizontal view. It doesn't matter how wide it is."). One rule:
+    /// from under the top corner buttons (the 48 pt glass circles 14 pt in, then this 8 pt gap) to the bottom
+    /// margin, and `wideAspect` times as wide as it is tall, never past the room beside the column.
+    static let wideTop: CGFloat = 14 + 48 + gap
+    /// 3:2: wide like a Mac trackpad (a Magic Trackpad is 160 x 115 mm, about 1.4:1).
+    static let wideAspect: CGFloat = 1.5
+    var widePad: Bool { normalPhone && !typing }
 
     /// Our keyboard's height (four rows with the upright gaps, 8 above and 12 below, scaled).
     var keyboardHeight: CGFloat { TouchKeyboardLayout.height(width: Self.keyboardWidth) }
@@ -50,6 +64,13 @@ struct HorizontalLayout: Equatable {
         return CGRect(x: x, y: controlsTop, width: Self.columnWidth, height: controlsHeight)
     }
     var trackpad: CGRect {
+        if widePad {
+            let h = size.height - Self.bottom - Self.wideTop
+            let room = size.width - 2 * Self.edge - leadingInset - trailingInset - Self.columnWidth - Self.gap
+            let w = min(room, (h * Self.wideAspect).rounded(.down))
+            let x = side == .right ? size.width - Self.edge - trailingInset - w : Self.edge + leadingInset
+            return CGRect(x: x, y: Self.wideTop, width: w, height: h)
+        }
         let w = size.width - 2 * Self.edge - leadingInset - trailingInset - Self.columnWidth - 2 * Self.gap
             - Self.keyboardWidth
         let x = side == .right ? size.width - Self.edge - trailingInset - w : Self.edge + leadingInset

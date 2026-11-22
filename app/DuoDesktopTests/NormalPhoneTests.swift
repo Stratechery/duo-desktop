@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import UIKit
 import XCTest
 @testable import DuoDesktop
@@ -261,5 +262,145 @@ final class NormalPhoneOwnKeyboardTests: XCTestCase {
                        (8 + 4 * 49 + 3 * (63.8 - 49) + 12) * w / HorizontalLayout.uprightWidth, accuracy: 0.001)
         let q = TouchKeyboardLayout.frames(.letters, width: w).first { $0.key == .char("q") }!.frame
         XCTAssertEqual(q.height, 49 * w / HorizontalLayout.uprightWidth, accuracy: 0.001)
+    }
+}
+
+/// The wide sideways trackpad on a normal iPhone (project notes).
+final class SidewaysWidePadTests: XCTestCase {
+    /// Each class of supported iPhone held sideways: screen in points, the Dynamic Island's (or notch's) inset on
+    /// one side, and points per millimetre (dpi / scale / 25.4).
+    static let phones: [(name: String, size: CGSize, inset: CGFloat, ptPerMM: CGFloat)] = [
+        ("iPhone SE (narrowest)", CGSize(width: 667, height: 375), 0, 326 / 2 / 25.4),
+        ("iPhone 16e", CGSize(width: 844, height: 390), 47, 460 / 3 / 25.4),
+        ("iPhone 18 Pro", CGSize(width: 874, height: 402), 62, 460 / 3 / 25.4),
+        ("iPhone 18 Pro Max", CGSize(width: 956, height: 440), 62, 460 / 3 / 25.4),
+    ]
+    static let duo = CGSize(width: 951, height: 669)
+    static let duoPtPerMM: CGFloat = 460 / 3 / 25.4
+
+    func testWidePadOnEveryNormalIPhone() {
+        let duoPad = HorizontalLayout(size: Self.duo).trackpad
+        for p in Self.phones {
+            for side in [TrackpadSide.right, .left] {
+                for (lead, trail) in [(p.inset, CGFloat(0)), (0, p.inset)] {
+                    let l = HorizontalLayout(size: p.size, side: side, leadingInset: lead, trailingInset: trail,
+                                             normalPhone: true)
+                    let pad = l.trackpad, column = l.column
+                    // The upright pad the owner accepted on the same phone (upper bound: the whole long side as height).
+                    let upright = NormalPhoneLayout(size: CGSize(width: p.size.height, height: p.size.width),
+                                                    keyboardInset: NormalPhoneLayout.ownKeyboardHeight(width: p.size.height),
+                                                    keyboardGap: 0).trackpad
+                    XCTAssertGreaterThanOrEqual(pad.width, upright.width, p.name)
+                    XCTAssertGreaterThanOrEqual(pad.height, upright.height, p.name)
+                    XCTAssertGreaterThanOrEqual(pad.width / p.ptPerMM, duoPad.width / Self.duoPtPerMM, p.name)
+                    XCTAssertGreaterThanOrEqual(pad.height / p.ptPerMM, duoPad.height / Self.duoPtPerMM, p.name)
+                    // The height the screen allows: under the top buttons to the bottom margin.
+                    XCTAssertEqual(pad.minY, HorizontalLayout.wideTop, p.name)
+                    XCTAssertEqual(pad.maxY, p.size.height - HorizontalLayout.bottom, p.name)
+                    // On its side at the screen's edge (clear of the island), never over the column.
+                    if side == .right {
+                        XCTAssertEqual(pad.maxX, p.size.width - HorizontalLayout.edge - trail, p.name)
+                        XCTAssertGreaterThanOrEqual(pad.minX, column.maxX + HorizontalLayout.gap, p.name)
+                    } else {
+                        XCTAssertEqual(pad.minX, HorizontalLayout.edge + lead, p.name)
+                        XCTAssertLessThanOrEqual(pad.maxX, column.minX - HorizontalLayout.gap, p.name)
+                    }
+                    // The column (and so Click on the outside) is where it was.
+                    XCTAssertEqual(column, HorizontalLayout(size: p.size, side: side, leadingInset: lead,
+                                                            trailingInset: trail).column, p.name)
+                    print(String(format: "wide pad %@ %@: %.0f x %.0f pt = %.1f x %.1f mm", p.name,
+                                 side == .right ? "right" : "left", pad.width, pad.height,
+                                 pad.width / p.ptPerMM, pad.height / p.ptPerMM))
+                }
+            }
+        }
+    }
+
+    /// The Duo's sideways layout does not change (its pad, column and keyboard), whatever the keyboard does.
+    func testDuoUnchanged() {
+        for typing in [false, true] {
+            let l = HorizontalLayout(size: Self.duo, side: .right, typing: typing)
+            XCTAssertEqual(l.trackpad.width, 250, accuracy: 0.01)
+            XCTAssertEqual(l.trackpad.maxX, Self.duo.width - HorizontalLayout.edge)
+            XCTAssertEqual(l.trackpad.minY, l.column.minY)
+        }
+    }
+
+    /// Keyboard up on a normal iPhone: the pad goes back to the room beside our keyboard, as before.
+    func testKeyboardUpKeepsTheOldRule() {
+        let size = CGSize(width: 874, height: 402)
+        let up = HorizontalLayout(size: size, leadingInset: 62, normalPhone: true, typing: true)
+        let before = HorizontalLayout(size: size, leadingInset: 62)
+        XCTAssertEqual(up.trackpad, before.trackpad)
+        XCTAssertEqual(up.keyboard, before.keyboard)
+    }
+}
+
+/// Before/after pictures of the sideways controls on a normal iPhone (rendered, not the app on a phone): the phone's
+/// outline and Dynamic Island are drawn as guides. Run with TEST_RUNNER_DUO_SNAPSHOT_DIR set.
+@MainActor
+final class SidewaysWidePadSnapshotTests: XCTestCase {
+    func testRenderBeforeAndAfter() throws {
+        guard let dir = ProcessInfo.processInfo.environment["DUO_SNAPSHOT_DIR"] else {
+            throw XCTSkip("set TEST_RUNNER_DUO_SNAPSHOT_DIR to render")
+        }
+        let mac = try XCTUnwrap(UIImage(contentsOfFile: dir + "/" + (ProcessInfo.processInfo.environment["DUO_SNAPSHOT_MAC"] ?? "mac-1920x1200.png")))
+        let out = dir + "/normal-phone/sideways-pad/"
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let phones: [(String, CGSize, CGFloat, CGFloat, Bool)] = [   // name, size, island inset, corner radius, island
+            ("18pro", CGSize(width: 874, height: 402), 62, 55, true),
+            ("se", CGSize(width: 667, height: 375), 0, 0, false),
+            ("duo", CGSize(width: 951, height: 669), 0, 59, false),
+        ]
+        for (phone, size, inset, radius, island) in phones {
+            for canvasH in [1200, 1080] {
+                for (state, wide, typing) in [("before", false, false), ("after", true, false), ("after-keyboard", true, true)] {
+                    if phone == "duo" && state != "after" { continue }
+                    if typing && canvasH == 1080 { continue }
+                    let layout = HorizontalLayout(size: size, side: .right, leadingInset: inset,
+                                                  normalPhone: wide && phone != "duo", typing: typing)
+                    let parts = SessionParts(sink: Recorder())
+                    let kb = TouchKeyboardModel(engine: parts.keyboard.engine)
+                    let fit = PictureFit.frame(canvasWidth: 1920, canvasHeight: canvasH, in: size, screenScale: 3)
+                    let picture = canvasH == 1080
+                        ? UIImage(cgImage: try XCTUnwrap(mac.cgImage?.cropping(to: CGRect(x: 0, y: 0, width: 1920, height: 1080))))
+                        : mac
+                    let view = ZStack(alignment: .topLeading) {
+                        Color.black
+                        Image(uiImage: picture).resizable()
+                            .frame(width: fit.width, height: fit.height).offset(x: fit.minX, y: fit.minY)
+                        HorizontalControls(model: SessionModel.app, parts: parts, keyboard: kb, layout: layout,
+                                           typing: .constant(typing))
+                        if island {
+                            Capsule().fill(Color.black).frame(width: 37, height: 126)
+                                .offset(x: 11, y: (size.height - 126) / 2)
+                        }
+                    }
+                    .frame(width: size.width, height: size.height, alignment: .topLeading)
+                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .containerShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .padding(12).background(Color(white: 0.75))
+                    let full = CGSize(width: size.width + 24, height: size.height + 24)
+                    let host = UIHostingController(rootView: view.ignoresSafeArea())
+                    host.safeAreaRegions = []
+                    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+                    let window = UIWindow(windowScene: scene)
+                    window.frame = CGRect(origin: .zero, size: full)
+                    window.windowLevel = .alert + 1
+                    window.rootViewController = host
+                    window.makeKeyAndVisible()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                    host.view.layoutIfNeeded()
+                    let format = UIGraphicsImageRendererFormat()
+                    format.scale = 2
+                    let image = UIGraphicsImageRenderer(size: full, format: format).image { _ in
+                        host.view.drawHierarchy(in: CGRect(origin: .zero, size: full), afterScreenUpdates: true)
+                    }
+                    let aspect = canvasH == 1200 ? "16x10" : "16x9"
+                    try XCTUnwrap(image.pngData()).write(to: URL(fileURLWithPath: out + "\(phone)-\(aspect)-\(state).png"))
+                    window.isHidden = true
+                }
+            }
+        }
     }
 }
