@@ -1737,14 +1737,78 @@ final class TopRowTests: XCTestCase {
         }
     }
 
-    /// The full build's four-choice switch: the bubble's widest size still ends the switch by x 512, where the bar
-    /// keeps the leading parts (measured), and the test names fit under it.
+    /// No bubble in a bubble (the owner 2026-11-21 and 2026-11-22, twice: "The double bubble is back."): the session's
+    /// real top bar, both layouts (the Duo's switch, the normal iPhone's view button with one view and with several),
+    /// one-line and two-line names, short and long. The bar draws one glass platter per part (`barGlass`); a part
+    /// that draws its own `glassEffect` adds a second glass layer inside it (`ownGlass`). Build 55 had exactly that at
+    /// the one-line name pill and the view switch, so this test fails on build 55 and passes on 56. It also checks
+    /// that back, the name and the views stay on the row (not folded into the bar's "•••").
+    @MainActor
+    func testTopBarHasNoGlassInsideGlass() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        if scene.effectiveGeometry.interfaceOrientation.isLandscape {
+            throw XCTSkip("needs the simulator upright (the scene cannot be turned from code)")
+        }
+        let names: [(String, String?)] = [("Test host", nil), ("Studio Mac mini", nil),
+                                           ("a-very-long-mac-name-that-cannot-fit", nil),
+                                           ("My Mac mini", "Studio Display (2)"),
+                                           ("a-very-long-mac-name-that-cannot-fit", "Another Very Long Screen Name")]
+        let rows: [(String, [SessionView], Bool, CGFloat)] = [
+            ("duo 2", SessionView.choices(terminal: false), false, 669),
+            ("duo 4", SessionView.choices(terminal: true, jetkvm: true), false, 669),
+            ("phone 1", [.centred], true, 402),
+            // The menu with several choices, in every build (the plain build offers the phone only Follow Pointer).
+            ("phone menu", [.regular, .centred], true, 402),
+            ("phone all", SessionView.normalPhoneChoices(terminal: true, jetkvm: true), true, 402),
+        ]
+        for (label, choices, menu, width) in rows {
+            for (mac, screen) in names {
+                let host = UIHostingController(rootView: TopRowProbe(frames: FrameLog(), preview: (mac, screen),
+                                                                     choices: choices, viewMenu: menu,
+                                                                     rowWidth: width))
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                try await Task.sleep(for: .seconds(1))
+                let nav = try XCTUnwrap(Self.find(UINavigationBar.self, in: host.view))
+                let own = Self.ownGlass(in: nav), bar = Self.barGlass(in: nav)
+                print("DUO-TEST glass \(label) '\(mac)' / '\(screen ?? "-")': bar \(bar), own \(own)")
+                XCTAssertGreaterThanOrEqual(bar.count, 3, "\(label): back, name and views each on the bar's glass")
+                XCTAssertEqual(own, [], "\(label) '\(mac)' / '\(screen ?? "-")': a top-bar part draws its own glass "
+                               + "on the bar's (a bubble in a bubble)")
+                window.isHidden = true
+            }
+        }
+    }
+
+    /// Glass a bar item draws itself, in window points: SwiftUI's `glassEffect` renders through a view whose
+    /// layer is an `SDFLayer` (seen in build 55 exactly at the name pill and the view switch; the bar's own items have
+    /// none). The bar's own item glass is a platter view (`barGlass`), not this.
+    /// The bar's own full-width background uses the same kind of layer and is left out.
+    @MainActor static func ownGlass(in view: UIView) -> [CGRect] {
+        all(UIView.self, in: view)
+            .filter { !$0.isHidden && $0.alpha > 0.01 && String(describing: type(of: $0.layer)).contains("SDFLayer") }
+            .map { $0.convert($0.bounds, to: nil).integral }
+            .filter { $0.width < view.bounds.width - 1 }
+    }
+
+    /// The bar's own glass shapes behind its items (its "platter" views), in window points.
+    @MainActor static func barGlass(in view: UIView) -> [CGRect] {
+        all(UIView.self, in: view)
+            .filter { !$0.isHidden && $0.bounds.width > 4 && String(describing: type(of: $0)).contains("NavigationBarPlatter") }
+            .map { $0.convert($0.bounds, to: nil).integral }
+            .filter { $0.width < view.bounds.width - 1 }   // the bar's own full-width background
+    }
+
+    /// The full build's four-choice switch: the bubble's widest size still ends the switch where the bar
+    /// keeps the leading parts (measured; build 56: about x 500), and the test names fit under it.
     func testFourChoiceRowFitsBesideTheClock() {
         let w = SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: 4 * ViewSelector.target)
-        XCTAssertEqual(w, 204)
+        XCTAssertEqual(w, 192)
         XCTAssertLessThanOrEqual(SessionTopRow.beforeSwitch + w + 4 * ViewSelector.target,
                                  669 - SessionTopRow.leadingEndFromRight)
-        XCTAssertEqual(SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: 2 * ViewSelector.target), 300)
+        XCTAssertEqual(SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: 2 * ViewSelector.target), 288)
     }
 
     /// The bubble's two lines (the owner 2026-11-21, the Claude app's two-line title): one screen, the Mac's name alone
@@ -1802,6 +1866,9 @@ private struct TopRowProbe: View {
     var preview: (mac: String, screen: String?)? = nil
     var parts: TopRowParts? = nil
     var choices: [SessionView]? = nil
+    /// The normal iPhone's top row (`ViewMenuButton`, its own name cap) instead of the Duo's.
+    var viewMenu = false
+    var rowWidth: CGFloat = 669
 
     var body: some View {
         NavigationStack {
@@ -1814,7 +1881,9 @@ private struct TopRowProbe: View {
                     .modifier(SessionTopRow(model: SessionModel(), title: "Test host", notice: nil, hidden: false,
                                             view: .constant(.regular), leave: {}, preview: preview,
                                             report: { name, f in parts?.frames[name] = f },
-                                            choicesForTest: choices))
+                                            rowWidth: rowWidth, choicesForTest: choices,
+                                            nameMaxOverride: viewMenu ? NormalPhoneTopRow.nameMax(rowWidth: rowWidth) : nil,
+                                            viewMenu: viewMenu))
             }
         }
     }

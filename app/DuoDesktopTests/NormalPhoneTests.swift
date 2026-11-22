@@ -121,11 +121,11 @@ final class NormalPhoneViewsTests: XCTestCase {
     }
 
     func testNameBubbleHasTheRoomTheThreeButtonsTook() {
-        // 402 wide: margins 2x16, back 48, ONE view button 48, two spacers 2x12, 8 slack -> 242 (was 146 with three
+        // 402 wide: margins 2x16, back 48, ONE view button 48, two spacers 2x12, 40 slack -> 210 (was 146 with three
         // 48 pt view buttons), whatever the Mac offers.
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 402), 242)
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 375), 215)
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 440), 280)
+        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 402), 210)
+        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 375), 183)
+        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 440), 248)
         XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 200), 80)
     }
 

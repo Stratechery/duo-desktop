@@ -883,7 +883,10 @@ struct SessionTopRow: ViewModifier {
     }
 
     static let leadingEndFromRight: CGFloat = 157
-    static let beforeSwitch: CGFloat = 116
+    /// Build 56 (every part on the bar's own glass), measured with four views and an over-long two-line name: the
+    /// gap before the switch grew from 22 to 26 pt and the bubble runs up to 16 pt past its cap, so 128 (cap 192:
+    /// the switch ends at x 503.7; cap 200 sent the whole row into "•••").
+    static let beforeSwitch: CGFloat = 128
 
     /// The name bubble: the Mac's name, and on a multi-screen Mac the screen under it, as the screen menu. HIG
     /// Pop-up buttons: "A pop-up button helps people make a choice that affects their content or the surrounding
@@ -911,35 +914,45 @@ struct SessionTopRow: ViewModifier {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    BackToMacsButton(action: leave)
-                }
+                // Every part of the row is a `TopBarItem`: the bar draws its one glass shape, the part draws none.
+                TopBarItem { BackToMacsButton(action: leave) }
                 // Order, left to right (the owner 2026-11-21: "We should flip the order of the computer name and its
                 // screens and the four views. After all, the four views are all a subset of that computer."): back,
                 // the name bubble, the view switch; the clock's area stays the system's. No info button (the owner
                 // 2026-11-21: "It doesn't need to be on every screen."): Keyboard Shortcuts is a row on the Mac list.
                 // Back, the name and the switch are separate glass parts: the system's fixed spacers split them.
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
-                ToolbarItem(placement: .topBarLeading) {
-                    nameBubble
-                }
-                // The name bubble is the title: the bar draws no second, centred title.
+                TopBarItem { nameBubble }
+                // The name bubble is the title: the bar draws no second, centred title (and no glass for it).
                 ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
-                // One screen: the name draws its own glass capsule (no glass on glass). Several: the bar draws the
-                // menu's glass.
-                .sharedBackgroundVisibility(screenName == nil ? .hidden : .automatic)
+                    .sharedBackgroundVisibility(.hidden)
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
-                ToolbarItem(placement: .topBarLeading) {
+                TopBarItem {
                     Group {
                         if viewMenu { ViewMenuButton(view: $view, choices: choices) }
                         else { ViewSelector(view: $view, choices: choices) }
                     }
-                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
                 }
-                // The selector draws its own one capsule (no toolbar glass behind it: no glass on glass).
-                .sharedBackgroundVisibility(.hidden)
             }
             .toolbar(hidden ? .hidden : .visible, for: .navigationBar)
+    }
+}
+
+/// One part of the session's top bar, the same for the open Duo and the normal iPhone (back, the name bubble, the
+/// views). The part takes the bar's own glass and draws none of its own. HIG Toolbars, Best practices: "Reduce the
+/// use of toolbar backgrounds and tinted controls. Any custom backgrounds and appearances you use might overlay or
+/// interfere with background effects that the system provides." HIG Materials, Liquid Glass: "Standard components
+/// from system frameworks pick up the appearance and behavior of this material automatically." A part that also
+/// drew a `glassEffect` showed a second shape inside the bar's (the owner 2026-11-21, the selector, and 2026-11-22 twice,
+/// the name pill: "The double bubble is back."). `TopRowTests.testTopBarHasNoGlassInsideGlass` fails if any part
+/// draws its own glass again.
+struct TopBarItem<Content: View>: ToolbarContent {
+    @ViewBuilder let content: () -> Content
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) { content() }
+            .sharedBackgroundVisibility(.visible)
     }
 }
 
@@ -1003,7 +1016,7 @@ struct ViewSelector: View {
             }
         }
         .frame(width: width, height: Self.target)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        // No glass here: it is a `TopBarItem`, so the bar draws its one capsule.
     }
 }
 
@@ -1014,6 +1027,9 @@ struct ViewSelector: View {
 /// info 48). HIG Toolbars: items in a toolbar share one consistent size.
 enum TopRow {
     static let height: CGFloat = 48
+    /// A one-symbol part's content (the normal iPhone's view button): the system back button's own content size
+    /// in the bar (measured 36 x 36); the bar adds its glass around it, so both draw the same circle.
+    static let itemContent: CGFloat = 36
 }
 
 /// The name bubble in the top row (the owner 2026-11-21: "the text in the bubble should be much smaller. It can be much
@@ -1069,22 +1085,11 @@ struct TopRowName: View {
         }
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
         .fixedSize(horizontal: true, vertical: false)
-        // The name as a small glass pill, as the toolbar's buttons are (the owner's reference picture; DESIGN rules 1,
-        // 11). It sits on the bar's empty background, so no glass is stacked on glass.
         .padding(.horizontal, Self.padding)
         .frame(height: TopRow.height)
-        // A plain name draws its own glass pill (it sits on the bar's empty background). As the screen menu, the
-        // bar already draws the menu's glass, so a second pill would sit inside it (seen: a bubble in a bubble).
-        .modifier(NameGlass(on: !interactive))
+        // No glass here: it is a `TopBarItem`, so the bar draws the one pill, plain name or screen menu alike.
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("name", $0) }
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct NameGlass: ViewModifier {
-    let on: Bool
-    func body(content: Content) -> some View {
-        if on { content.glassEffect(.regular, in: .capsule) } else { content }
     }
 }
 

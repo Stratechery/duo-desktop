@@ -219,16 +219,21 @@ enum NormalPhoneTopRow {
     static let spacer: CGFloat = 12
     /// `selectorWidth`: the view button's width; one round button, as wide as the back button.
     static func nameMax(rowWidth: CGFloat, selectorWidth: CGFloat = TopRow.height) -> CGFloat {
-        max(80, rowWidth - 2 * sideMargin - TopRow.height - selectorWidth - 2 * spacer - 8)
+        max(80, rowWidth - 2 * sideMargin - TopRow.height - selectorWidth - 2 * spacer - slack)
     }
+    /// What the bar keeps free beside its glass (build 56, every part on the bar's own glass): at 402 pt an
+    /// over-long two-line name sent the whole row into "•••" with 8 and with 24; with 40 it ends at x 366 (measured,
+    /// `TopRowTests.testTopBarHasNoGlassInsideGlass`).
+    static let slack: CGFloat = 40
 }
 
-/// The normal iPhone's view button: one round glass button showing the current view's symbol. With two or more
+/// The normal iPhone's view button (a `TopBarItem`: the bar draws its round glass), showing the current view's
+/// symbol. With two or more
 /// views it opens a menu of them, each with its symbol and name, the current one checked. HIG Pop-up buttons: "A
 /// pop-up button displays a menu of mutually exclusive options", and after a choice "the button can update its
 /// content to indicate the current selection"; built as a SwiftUI `Menu` holding an inline `Picker` (HIG Menus),
 /// which draws the check. With one view there is nothing to choose, so it is plain: the symbol only, not a button
-/// (HIG Pop-up buttons are for a choice among options). 48 x 48 pt, the top row's height (HIG Buttons: at least 44).
+/// (HIG Pop-up buttons are for a choice among options). The bar's round glass, as wide as back (HIG Buttons: at least 44).
 struct ViewMenuButton: View {
     @Binding var view: SessionView
     let choices: [SessionView]
@@ -268,7 +273,6 @@ struct ViewMenuButton: View {
                 .pickerStyle(.inline)
             } label: {
                 symbol(shown)
-                    .glassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("View")
@@ -276,7 +280,6 @@ struct ViewMenuButton: View {
             .accessibilityIdentifier("viewMenu")
         } else {
             symbol(shown)
-                .glassEffect(.regular, in: .circle)
                 .accessibilityElement()
                 .accessibilityLabel(shown.title)
                 .accessibilityIdentifier("viewMenu")
@@ -287,7 +290,9 @@ struct ViewMenuButton: View {
         Image(systemName: v.systemImage)
             .font(.system(size: 17, weight: .medium))
             .foregroundStyle(Color.primary)
-            .frame(width: TopRow.height, height: TopRow.height)
+            // A system bar button's content size (the back button's, measured: 36 x 36); the bar draws the same
+            // round glass around it as around back, and its touch area is the bar's 44 pt glass.
+            .frame(width: TopRow.itemContent, height: TopRow.itemContent)
             .contentShape(Circle())
     }
 }
