@@ -653,6 +653,70 @@ struct TerminalKeyState: Codable, Equatable {
         }
     }
 
+    /// Project notes 6: what asking from the Add sheet came to.
+    enum LinkOutcome: Equatable {
+        case answered(Outcome)
+        /// No link to the Host could be opened (no answer, a changed key, not approved, the app locked), in words.
+        case noLink(String)
+    }
+
+    /// Project notes 6: ask the Mac's Host to add this iPhone's key from the Add sheet, with no session
+    /// open. Over the running session when there is one; otherwise over a short link opened for this request only
+    /// (the same `ViewerController` a session uses, so the Host's approval and sign-in rules apply unchanged), closed
+    /// as soon as the Host answers or `connectSeconds` pass.
+    static func askOpening(entry: MacEntry, store: MacStore, identity: SecIdentity?, connectSeconds: Double = 20,
+                           asking: @escaping @MainActor () -> Void = {},
+                           done: @escaping @MainActor (LinkOutcome) -> Void) {
+        if let live, live.macID == entry.id, live.controller != nil {
+            ask(macID: entry.id, store: store, asking: asking) { done(.answered($0)) }
+            return
+        }
+        guard AppAccess.isOpen else { done(.noLink(TerminalComputerCheck.lockedText)); return }
+        guard let key = try? TerminalKeys.phoneKey() else { done(.noLink("This iPhone has no key.")); return }
+        guard let host = entry.lastAddress.flatMap({ entry.address($0) }) ?? entry.addresses.first?.host else {
+            done(.noLink("\(entry.name) has no address.")); return
+        }
+        let c = ViewerController(host: host, port: entry.port, fingerprint: entry.key ?? "", identity: identity,
+                                 videoDecoders: .glassAct(av1: false), deviceName: SessionModel.deviceName)
+        let state = OpenLinkState()
+        let finish: @MainActor (LinkOutcome) -> Void = { o in
+            guard !state.finished else { return }
+            state.finished = true
+            state.timer?.invalidate()
+            if let w = state.watch { NotificationCenter.default.removeObserver(w) }
+            c.stop()
+            done(o)
+        }
+        c.onConnectionFailed = { MainActor.assumeIsolated { finish(.noLink("Glass Act Host on \(entry.name) did not answer.")) } }
+        c.onHostKeyChanged = { _, _ in MainActor.assumeIsolated { finish(.noLink("\(entry.name) showed a different key than the one saved.")) } }
+        c.onIncompatibleHost = { _ in MainActor.assumeIsolated { finish(.noLink("\(entry.name) runs a different Glass Act version.")) } }
+        c.onHostEndedSession = { r in MainActor.assumeIsolated { finish(.noLink("\(entry.name) ended the link: \(r).")) } }
+        state.watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: .main) { n in
+            if (n.object as? AppAccess.State) == .locked {
+                MainActor.assumeIsolated { finish(.noLink(TerminalComputerCheck.lockedText)) }
+            }
+        }
+        c.start()
+        let started = Date()
+        state.timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard !state.finished, !state.sent else { return }
+                if Date().timeIntervalSince(started) > connectSeconds {
+                    finish(.noLink("Could not open a link to Glass Act Host on \(entry.name) within \(Int(connectSeconds)) seconds."))
+                    return
+                }
+                c.configuredGrid { grid in
+                    guard grid != nil, !state.sent, !state.finished else { return }
+                    state.sent = true
+                    send(controller: c, keyLine: key.authorizedKeysLine(comment: "duo-desktop"), asking: asking) { o in
+                        record(o, macID: entry.id, store: store)
+                        finish(.answered(o))
+                    }
+                }
+            }
+        }
+    }
+
     /// The request itself, over any channel (tests use a fake that answers, or one that never does).
     /// The Host may first say it is asking its user (`.askingOnMac`, an approval from before it recorded SSH-key
     /// permission): `asking` runs, and the wait for the real answer becomes `askingWaitSeconds`.
@@ -739,6 +803,13 @@ struct TerminalKeyState: Codable, Equatable {
             return missing.isEmpty ? "Key installed on this Mac" : "Key installed on this Mac. " + missing.joined(separator: ". ") + "."
         }
     }
+}
+
+@MainActor final class OpenLinkState {
+    var finished = false
+    var sent = false
+    var timer: Timer?
+    var watch: NSObjectProtocol?
 }
 
 // MARK: - Why a terminal sign-in failed (Touch ID clarity B)

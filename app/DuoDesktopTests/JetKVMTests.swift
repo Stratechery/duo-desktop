@@ -98,6 +98,78 @@ final class JetKVMTests: XCTestCase {
         XCTAssertEqual(rec.log, ["rel 30 -10 -", "rel 0 0 1", "rel 0 0 0",
                                  "kb 2 []", "kb 2 [4]", "kb 2 []", "kb 0 []", "wheel -2 0"])
     }
+
+    /// the owner 2026-11-22: a password typed through a JetKVM was refused. Claim: a capital or shifted symbol from our
+    /// keyboard (the plain key with Shift in its flags) presses Shift around the key: Shift alone, Shift + key,
+    /// Shift alone, nothing; the next unshifted key carries no Shift. Before the fix "A!" arrived as "a1".
+    @MainActor
+    func testShiftedCharactersPressShift() {
+        let input = JetKVMInput(), rec = Recorder()
+        input.output = rec
+        let engine = MacKeyboardEngine(sink: input)
+        for c in "Ab!" { XCTAssertTrue(MacTyping.type(c, into: engine)) }
+        XCTAssertEqual(rec.log, ["kb 2 []", "kb 2 [4]", "kb 2 []", "kb 0 []",   // A
+                                 "kb 0 [5]", "kb 0 []",                          // b
+                                 "kb 2 []", "kb 2 [30]", "kb 2 []", "kb 0 []"])  // !
+        // Our own keyboard's shift (tap = next letter capital) goes the same way.
+        rec.log = []
+        let model = TouchKeyboardModel(engine: engine)
+        model.touchDown(.shift, at: 0)
+        model.lifted(.char("q"))
+        model.lifted(.char("q"))
+        XCTAssertEqual(rec.log, ["kb 2 []", "kb 2 [20]", "kb 2 []", "kb 0 []", "kb 0 [20]", "kb 0 []"])
+    }
+
+    /// Claim: every character our keyboard can type reaches the JetKVM as the US key and Shift state that types it
+    /// on a US Mac (the table a Mac's US layout uses), and every report ends with nothing held.
+    @MainActor
+    func testEveryCharacterOnEveryPage() {
+        let us: [Character: (UInt8, Bool)] = {
+            var m: [Character: (UInt8, Bool)] = [:]
+            for (i, c) in "abcdefghijklmnopqrstuvwxyz".enumerated() {
+                m[c] = (UInt8(0x04 + i), false); m[Character(c.uppercased())] = (UInt8(0x04 + i), true)
+            }
+            for (i, c) in "1234567890".enumerated() { m[c] = (UInt8(0x1E + i), false) }
+            for (i, c) in "!@#$%^&*()".enumerated() { m[c] = (UInt8(0x1E + i), true) }
+            let pairs: [(UInt8, Character, Character)] = [(0x2D, "-", "_"), (0x2E, "=", "+"), (0x2F, "[", "{"),
+                (0x30, "]", "}"), (0x31, "\\", "|"), (0x33, ";", ":"), (0x34, "'", "\""), (0x35, "`", "~"),
+                (0x36, ",", "<"), (0x37, ".", ">"), (0x38, "/", "?")]
+            for (u, a, b) in pairs { m[a] = (u, false); m[b] = (u, true) }
+            m[" "] = (0x2C, false)
+            return m
+        }()
+        let input = JetKVMInput(), rec = Recorder()
+        input.output = rec
+        let model = TouchKeyboardModel(engine: MacKeyboardEngine(sink: input))
+        var count = 0
+        for page in [TouchKeyboardLayout.Page.letters, .numbers, .symbols] {
+            model.page = page
+            for shifted in page == .letters ? [false, true] : [false] {
+                for row in TouchKeyboardLayout.rows(page) {
+                    for key in row {
+                        let ch: Character
+                        switch key {
+                        case let .char(c): ch = shifted ? Character(c.uppercased()) : c
+                        case .space: ch = " "
+                        default: continue
+                        }
+                        rec.log = []
+                        if shifted { model.shift = .once }
+                        model.lifted(key)
+                        guard let (u, s) = us[ch] else { XCTFail("no US key for \(ch)"); continue }
+                        let want = s ? ["kb 2 []", "kb 2 [\(u)]", "kb 2 []", "kb 0 []"] : ["kb 0 [\(u)]", "kb 0 []"]
+                        XCTAssertEqual(rec.log, want, "character \(ch)")
+                        count += 1
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(count, 90)
+        // Return and delete.
+        rec.log = []
+        model.lifted(.ret); model.touchDown(.delete); model.lifted(.delete)
+        XCTAssertEqual(rec.log, ["kb 0 [40]", "kb 0 []", "kb 0 [42]", "kb 0 []"])
+    }
 }
 #endif
 
@@ -150,6 +222,60 @@ final class JetKVMRetryTests: XCTestCase {
         await wait { link.starts == 4 }
         XCTAssertEqual(link.starts, 4)
         link.disconnect()
+    }
+
+    /// Project notes 3: connected with no picture, the link presses Left Shift alone (never a key that
+    /// types, confirms or cancels), at once when the JetKVM says "no_signal", a few times spaced out, shows "Waking
+    /// the display…" meanwhile, and when no picture comes says the likely cause in plain words.
+    func testNoPicturePressesShiftToWakeTheDisplay() async throws {
+        let e = try entry("jetkvm-wake.example.ts.net")
+        let link = JetKVMLink.for(mac: e.id)
+        link.readPassword = { _ in "made-up" }
+        link.retryDelay = .milliseconds(20)
+        JetKVMLink.wakeAfter = .milliseconds(30); JetKVMLink.wakeEvery = .milliseconds(60)
+        defer { JetKVMLink.wakeAfter = .seconds(2); JetKVMLink.wakeEvery = .seconds(3) }
+        var presses = 0
+        var statuses: [JetKVMLink.Status] = []
+        link.pressWake = { _ in presses += 1; statuses.append(link.status); return true }
+        link.startSession = { s in
+            // As the session does once it is connected and waits for the first frame.
+            link.startWaking(s)
+            link.videoInputState(ready: false, error: "no_signal", session: s)
+            try await Task.sleep(for: .milliseconds(400))
+            throw JetKVMError.timeout("connecting")
+        }
+        link.connect(entry: e)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(link.status, .waking, "the screen says Waking the display… while it waits")
+        await wait(until: { if case .failed = link.status { return true } else { return false } }, 6)
+        XCTAssertGreaterThanOrEqual(presses, 3, "a few presses")
+        XCTAssertLessThanOrEqual(presses, JetKVMLink.wakesInAll, "never more than the limit")
+        guard case .failed(let why) = link.status else { return XCTFail("status \(link.status)") }
+        XCTAssertTrue(why.contains("display may be off or asleep"), why)
+        XCTAssertTrue(why.contains("pressed Shift"), why)
+        XCTAssertTrue(link.log.joined().contains("pressed Left Shift to wake the display (the JetKVM sees no signal)"))
+        link.disconnect()
+        // The key itself: Left Shift down alone, then everything up (no key code in either report).
+        XCTAssertEqual(Array(HIDRPC.keyboardReport(modifiers: .leftShift, keys: []).dropFirst()), [0x02])
+        XCTAssertEqual(Array(HIDRPC.keyboardReport(modifiers: [], keys: []).dropFirst()), [0x00])
+    }
+
+    /// Claim (project notes, 2026-11-22): turning the phone, where the new picture view appears before the old
+    /// one goes, keeps the connection; it ends when the last picture view goes.
+    func testTurningKeepsTheConnection() async throws {
+        let e = try entry("jetkvm-turn.example.ts.net")
+        let link = JetKVMLink.for(mac: e.id)
+        link.readPassword = { _ in "made-up" }
+        link.startSession = { _ in try await Task.sleep(nanoseconds: 60_000_000_000) }
+        link.panelAppeared(entry: e)       // upright picture
+        let first = link.session
+        XCTAssertNotNil(first)
+        link.panelAppeared(entry: e)       // sideways picture appears first
+        link.panelDisappeared()            // then the upright one goes
+        XCTAssertTrue(link.session === first, "the same connection goes on")
+        link.panelDisappeared()            // back to the list
+        XCTAssertNil(link.session)
+        XCTAssertEqual(link.panelsShown, 0)
     }
 
     func testWrongPasswordIsNotRetried() async throws {

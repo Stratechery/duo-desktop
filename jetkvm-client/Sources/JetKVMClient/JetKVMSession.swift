@@ -70,6 +70,9 @@ public final class JetKVMSession: NSObject, @unchecked Sendable {
     public private(set) var state: JetKVMState = .idle
     /// Optional trace of protocol events (never includes the password). Called on the session's queue.
     public var trace: ((String) -> Void)?
+    /// The JetKVM said whether it sees a picture from the computer (`videoInputState`: ready, and its error such as
+    /// "no_signal"). Called on the session's queue.
+    public var onVideoInputState: ((_ ready: Bool, _ error: String?) -> Void)?
     /// Send plain pointer moves on the lossy channel (default) or the reliable one.
     public var pointerMovesOnLossyChannel = true
     public private(set) var deviceVersion: String?
@@ -239,6 +242,17 @@ public final class JetKVMSession: NSObject, @unchecked Sendable {
 
     /// Press and release a key.
     public func tapKey(usage: UInt8) { sendKey(usage: usage, down: true); sendKey(usage: usage, down: false) }
+
+    /// Wakes a sleeping display (project notes 3, the owner: "You need to hit a key to wake up the screen so that
+    /// JetKVM can hold on to it ... Hit Shift or something."): Left Shift pressed alone and released. It types
+    /// nothing, confirms nothing and cancels nothing. Returns false when the input channel is not ready yet.
+    @discardableResult
+    public func pressWakeKey() -> Bool {
+        guard queue.sync(execute: { hidrpcVersion == HIDRPC.supportedVersion && hid?.readyState == .open }) else { return false }
+        sendKeyboard(modifiers: .leftShift, keys: [])
+        sendKeyboard(modifiers: [], keys: [])
+        return true
+    }
 
     /// Whole keyboard state (modifiers + up to six keys); send an empty report to release everything.
     public func sendKeyboard(modifiers: HIDRPC.Modifiers, keys: [UInt8]) {
@@ -581,6 +595,7 @@ extension JetKVMSession: RTCDataChannelDelegate {
                 let ev = JetKVMRPCEvent.decode(data)
                 self.trace?("rpc ← \(ev.map { String(describing: $0) } ?? "?")")
                 if ev == .otherSessionConnected { self.takenOver() }
+                if case let .videoInputState(ready, error)? = ev { self.onVideoInputState?(ready, error) }
             case "hidrpc":
                 self.trace?("hid ← \(HIDRPC.decode(data).map { String(describing: $0) } ?? "?")")
                 if case .handshake(let v) = HIDRPC.decode(data) {

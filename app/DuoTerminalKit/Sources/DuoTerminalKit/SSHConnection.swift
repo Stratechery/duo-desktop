@@ -17,8 +17,23 @@ public struct SSHSignInRefused: Error, CustomStringConvertible, Sendable {
     /// What the server said, when it said why (Tailscale's banner: "tailnet policy does not permit you to SSH as
     /// user …").
     public var reason: String?
-    public init(reason: String? = nil) { self.reason = reason }
+    /// The server said it takes a password sign-in (its list after refusing the key). Project notes 5:
+    /// then the app can add this iPhone's key with one password sign-in.
+    public var offersPassword: Bool
+    public init(reason: String? = nil, offersPassword: Bool = false) {
+        self.reason = reason; self.offersPassword = offersPassword
+    }
     public var description: String { reason ?? "The Mac did not accept the sign-in." }
+}
+
+/// Project notes 5: a Tailscale sign-in (`none`) was answered by an ordinary SSH server, not Tailscale SSH:
+/// no Tailscale banner came, and the server listed the methods it takes instead (every ordinary SSH server rejects
+/// `none`). Not a Tailscale refusal: nothing in the tailnet's rules is involved.
+public struct SSHNotTailscale: Error, CustomStringConvertible, Sendable {
+    public var offersPassword: Bool
+    public var offersKey: Bool
+    public init(offersPassword: Bool, offersKey: Bool) { self.offersPassword = offersPassword; self.offersKey = offersKey }
+    public var description: String { "The computer uses ordinary SSH, not Tailscale SSH." }
 }
 
 /// The server took the connection but never finished the sign-in in time.
@@ -39,13 +54,27 @@ public enum TailscaleBanner {
 final class SignInDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
     let user: String
     var signIn: SSHSignIn?
+    /// What was offered (set at the first call), to say what the second call means.
+    private var offered: SSHSignIn?
     init(user: String, signIn: SSHSignIn) { self.user = user; self.signIn = signIn }
 
     func nextAuthenticationType(availableMethods: NIOSSHAvailableUserAuthenticationMethods,
                                 nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>) {
-        // One offer only; a second call means the Mac said no.
-        guard let s = signIn else { nextChallengePromise.fail(SSHSignInRefused()); return }
+        // One offer only; a second call means the server said no. Tailscale's own refusal never gets here (it
+        // sends a banner, read by `ReadyWatcher`, and holds the connection); so a second call after `none` is an
+        // ordinary SSH server listing what it takes.
+        guard let s = signIn else {
+            let password = availableMethods.contains(.password)
+            if case .tailscale? = offered {
+                nextChallengePromise.fail(SSHNotTailscale(offersPassword: password,
+                                                          offersKey: availableMethods.contains(.publicKey)))
+            } else {
+                nextChallengePromise.fail(SSHSignInRefused(offersPassword: password))
+            }
+            return
+        }
         signIn = nil
+        offered = s
         switch s {
         case .key(let k) where availableMethods.contains(.publicKey):
             nextChallengePromise.succeed(.init(username: user, serviceName: "",
@@ -56,7 +85,7 @@ final class SignInDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked S
             // `none` is offered first, whatever the list says; a second call means Tailscale refused this user.
             nextChallengePromise.succeed(.init(username: user, serviceName: "", offer: .none))
         default:
-            nextChallengePromise.fail(SSHSignInRefused())
+            nextChallengePromise.fail(SSHSignInRefused(offersPassword: availableMethods.contains(.password)))
         }
     }
 }
@@ -290,7 +319,7 @@ public enum SSHFailureKind: Equatable, Sendable {
     case notReachable
 
     public static func of(_ error: Error) -> SSHFailureKind {
-        if error is SSHSignInRefused { return .signInRefused }
+        if error is SSHSignInRefused || error is SSHNotTailscale { return .signInRefused }
         if let io = error as? IOError, io.errnoCode == ECONNREFUSED { return .connectionRefused }
         if let c = error as? NIOConnectionError,
            c.connectionErrors.contains(where: { ($0.error as? IOError)?.errnoCode == ECONNREFUSED }) {

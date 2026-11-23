@@ -1790,6 +1790,78 @@ final class TopRowTests: XCTestCase {
         }
     }
 
+    /// Project notes 7 (the owner: "I added a key. The next time I launched Robin, the top menu bar was gone": a
+    /// computer that started JetKVM-only, then got Screen Sharing and Terminal, showed only "•••"). For every mix of
+    /// ways in, on the Duo folded (the session layout on the outer screen, 466 pt), the Duo open (669 pt), a regular
+    /// iPhone (402 pt) and the widths of those held sideways (when the bar shows): back and the name are always on
+    /// the row, each on the bar's glass and inside the window, and the views are there too, as the switch when it
+    /// fits and otherwise as one view button. Before the fix, four views at 466 pt dropped back off the row.
+    @MainActor
+    func testTopBarKeepsBackAndNameForEveryMixOfWaysIn() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        if scene.effectiveGeometry.interfaceOrientation.isLandscape {
+            throw XCTSkip("needs the simulator upright (the scene cannot be turned from code)")
+        }
+        // Screen Sharing alone; with Terminal; with JetKVM; with both (Robin's Mac).
+        let mixes: [(String, Bool, Bool)] = [("SS", false, false), ("SS+T", true, false), ("SS+J", false, true),
+                                             ("SS+T+J", true, true)]
+        // (label, width, normal iPhone): upright, then held sideways.
+        // "duo layout narrow": the Duo's session bar (the switch, not the phone's menu) at a regular iPhone's width,
+        // so the switch-or-menu rule is exercised on the simulator that can lay it out.
+        let screens: [(String, CGFloat, Bool)] = [("duo layout narrow", 402, false), ("duo folded", 466, false), ("duo open", 669, false),
+                                                  ("iphone", 402, true), ("duo folded sideways", 900, false),
+                                                  ("duo open sideways", 960, false), ("iphone sideways", 874, true)]
+        let names: [(String, String?)] = [("Robin’s Mac", nil), ("a-very-long-mac-name-that-cannot-fit", "Studio Display (2)")]
+        // The bar lays out at the simulator screen's width, whatever the test window's (why the older top-row tests
+        // fail on the folded Duo): each width runs where the screen is at least that wide, and says when it is skipped.
+        let screenWidth = scene.screen.bounds.width
+        // The folded Duo's outer screen keeps the clock in a column on the right and lays a bar out in its own way; a
+        // session there uses the outer-screen layout, with no top bar, so nothing real is measured on it.
+        if !PhoneKind.current, screenWidth < 600 {
+            throw XCTSkip("the folded Duo's outer screen shows no session top bar; run on a regular iPhone or the open Duo")
+        }
+        var ran = 0
+        for (mix, terminal, jetkvm) in mixes {
+            for (label, width, phone) in screens {
+                guard width <= screenWidth + 1, width >= screenWidth - 70 else {
+                    print("DUO-TEST mix \(mix) \(label): skipped here (screen \(screenWidth) pt)")
+                    continue
+                }
+                ran += 1
+                let choices = phone ? SessionView.normalPhoneChoices(terminal: terminal, jetkvm: jetkvm)
+                                    : SessionView.choices(terminal: terminal, jetkvm: jetkvm)
+                for (mac, screen) in names {
+                    let parts = TopRowParts()
+                    let host = UIHostingController(rootView: TopRowProbe(frames: FrameLog(), preview: (mac, screen),
+                                                                         parts: parts, choices: choices,
+                                                                         viewMenu: phone, rowWidth: width))
+                    let window = UIWindow(windowScene: scene)
+                    window.frame = CGRect(x: 0, y: 0, width: width, height: 900)
+                    window.rootViewController = host
+                    window.makeKeyAndVisible()
+                    try await Task.sleep(for: .seconds(1))
+                    let what = "\(mix) \(label) '\(mac)'"
+                    let nav = try XCTUnwrap(Self.find(UINavigationBar.self, in: host.view))
+                    let bar = Self.barGlass(in: nav).filter { $0.minY < 140 }
+                    print("DUO-TEST mix \(what): bar \(bar) parts \(parts.frames)")
+                    // Folded into "•••", the bar shows ONE platter; back, the name and the views are three.
+                    XCTAssertGreaterThanOrEqual(bar.count, 3, "\(what): back, name and views each on the bar's glass (not folded into •••)")
+                    for f in bar { XCTAssertTrue(f.minX >= 0 && f.maxX <= width + 0.5, "\(what): a part is off the row: \(f)") }
+                    let sorted = bar.sorted { $0.minX < $1.minX }
+                    if sorted.count >= 3 {
+                        // Back is the first, round part; the name the second, and wide enough to read.
+                        XCTAssertLessThan(sorted[0].width, 60, "\(what): back is first")
+                        XCTAssertGreaterThanOrEqual(sorted[1].width, 70, "\(what): the name is readable")
+                    }
+                    window.isHidden = true
+                }
+            }
+        }
+        XCTAssertGreaterThan(ran, 0, "no width matched this simulator")
+        XCTAssertFalse(SessionTopRow.switchFits(rowWidth: 466, count: 4), "four views do not fit folded")
+        XCTAssertTrue(SessionTopRow.switchFits(rowWidth: 669, count: 4), "four views fit open")
+    }
+
     /// Glass a bar item draws itself, in window points: SwiftUI's `glassEffect` renders through a view whose
     /// layer is an `SDFLayer` (seen in build 55 exactly at the name pill and the view switch; the bar's own items have
     /// none). The bar's own item glass is a platter view (`barGlass`), not this.

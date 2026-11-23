@@ -48,21 +48,50 @@ enum JetKVMAddCheck {
         guard (200..<300).contains(http.statusCode) else { throw JetKVMError.loginFailed(status: http.statusCode) }
     }
 
+    /// Project notes 2: "A check that hangs must end by a deadline with a plain message."
+    static var deadlineSeconds: Double = 15
+    static func timedOutText(_ host: String) -> String {
+        "No answer from a JetKVM at \(host) within \(Int(deadlineSeconds)) seconds. Check the address, and that this iPhone can reach it."
+    }
+
     @MainActor static func run(name: String, host: String, password: String?,
                                signIn: @escaping SignIn = signIn) async -> (ok: Bool, text: String) {
         guard AppAccess.isOpen else { return (false, lockedText) }
         let work = Task { try await signIn(host, password) }
+        let timedOut = DeadlineFlag()
         let watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: nil) { n in
             if (n.object as? AppAccess.State) == .locked { work.cancel() }
         }
         defer { NotificationCenter.default.removeObserver(watch) }
         let stopped = { work.isCancelled || AppAccess.state == .locked }
+        // Whichever comes first: the sign-in's answer, or the deadline (a sign-in that ignores cancelling is left
+        // to finish on its own; its answer is not used).
+        let finished: Result<Void, Error> = await withCheckedContinuation { c in
+            let once = DeadlineFlag()
+            let resume: @MainActor (Result<Void, Error>) -> Void = { r in
+                guard !once.passed else { return }
+                once.passed = true
+                c.resume(returning: r)
+            }
+            Task { @MainActor in
+                do { try await work.value; resume(.success(())) } catch { resume(.failure(error)) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(deadlineSeconds))
+                guard !once.passed else { return }
+                timedOut.passed = true
+                work.cancel()
+                resume(.failure(CancellationError()))
+            }
+        }
         do {
-            try await work.value
+            try finished.get()
+            if timedOut.passed { return (false, timedOutText(host)) }
             if stopped() { return (false, lockedText) }
             let how = (password ?? "").isEmpty ? "The JetKVM answers (no password set)." : "Signed in to the JetKVM."
             return (true, "\(how) \(name) is added.")
         } catch {
+            if timedOut.passed, AppAccess.isOpen { return (false, timedOutText(host)) }
             if stopped() { return (false, lockedText) }
             switch error as? JetKVMError {
             case .wrongPassword?: return (false, "The JetKVM refused the password.")
@@ -80,9 +109,11 @@ enum JetKVMAddCheck {
 /// typing as the JetKVM view of a Mac's session (that view's `JetKVMLink` and its keys, trackpad and keyboard):
 /// - a normal iPhone: the Click/column/trackpad band and our own keyboard (as `SessionScreen`, normal iPhone);
 /// - the open Duo: the special keys and trackpad band over the system keyboard (as `SessionScreen`, upright).
-/// Sideways, the picture alone (the session's JetKVM view is upright only too). The top bar: back, and the name
-/// bubble with "JetKVM" under the name; no view switch, since the computer has one way in (HIG Navigation bars:
-/// a back button and a title).
+/// Sideways (project notes, 2026-11-22: "Give the JetKVM-only screen the same sideways overlay trackpad and button
+/// column a Mac session has"): the picture full screen with the session's `HorizontalControls` over it (Keyboard,
+/// the click column, the trackpad, back), driving the JetKVM. The top bar upright: back, and the name bubble with
+/// "JetKVM" under the name; no view switch, since the computer has one way in (HIG Navigation bars: a back button
+/// and a title). Sideways the bar hides, as in a Mac's session.
 struct JetKVMOnlyScreen: View {
     let entry: MacEntry
     let leave: () -> Void
@@ -91,6 +122,9 @@ struct JetKVMOnlyScreen: View {
     @State private var keyboardInset: CGFloat = 0
     @State private var more = false
     @State private var typing = true
+    /// Sideways: our own keyboard up (the Keyboard button), as `keyboardRules.up` in a Mac's session.
+    @State private var wideTyping = false
+    @State private var wideNow = false
     @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
     private let normalPhone = PhoneKind.current
 
@@ -104,11 +138,10 @@ struct JetKVMOnlyScreen: View {
 
     var body: some View {
         NavigationStack {
-            GeometryReader { proxy in
-                let wide = SessionLayout.isHorizontal(proxy.size)
+            SessionGeometry { proxy, wide in
                 Group {
                     if wide {
-                        JetKVMPanel(link: link, entry: entry)
+                        wideLayout(proxy.size)
                     } else if normalPhone {
                         phoneLayout(proxy.size)
                     } else {
@@ -116,14 +149,23 @@ struct JetKVMOnlyScreen: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .onChange(of: wide, initial: true) { _, now in
+                    if wideNow != now { wideNow = now }
+                    // Turning lets go of every held key and button and puts the keyboard away (as a Mac's session).
+                    link.parts.releaseAll()
+                    wideTyping = false
+                }
             }
             .background { KeyboardGuideReader { keyboardInset = $0 }.ignoresSafeArea() }
             .ignoresSafeArea(.keyboard)
-            .background(Color(.systemBackground))
+            .background(wideNow ? Color.black : Color(.systemBackground))
+            .statusBarHidden(wideNow)
+            .persistentSystemOverlays(wideNow ? .hidden : .automatic)
+            .toolbar(wideNow ? .hidden : .visible, for: .navigationBar)
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                TopBarItem { BackToMacsButton(action: { link.parts.releaseAll(); link.disconnect(); leave() }) }
+                TopBarItem { BackToMacsButton(action: goBack) }
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 TopBarItem { TopRowName(mac: entry.name, screen: "JetKVM", notice: nil, maxWidth: 220) }
                 ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
@@ -135,6 +177,30 @@ struct JetKVMOnlyScreen: View {
             link.parts.releaseAll()
         }
         .onChange(of: trackpadSide) { _, _ in link.parts.releaseAll() }
+    }
+
+    private func goBack() { link.parts.releaseAll(); link.disconnect(); leave() }
+
+    /// Sideways, a normal iPhone and the Duo: the picture aspect-fitted to the whole screen, and over it the Mac
+    /// session's sideways controls (`HorizontalControls`) on the JetKVM's own keys and trackpad.
+    private func wideLayout(_ size: CGSize) -> some View {
+        let insets = normalPhone ? PhoneKind.sidewaysInsets() : (leading: 0, trailing: 0)
+        let layout = HorizontalLayout(size: size, side: trackpadSide, leadingInset: insets.leading,
+                                      trailingInset: insets.trailing, normalPhone: normalPhone, typing: wideTyping)
+        return JetKVMPanel(link: link, entry: entry)
+            .frame(width: size.width, height: size.height)
+            .background(Color.black)
+            .overlay(alignment: .topLeading) {
+                HorizontalControls(model: nil, parts: link.parts, keyboard: keyboard, layout: layout,
+                                   typing: $wideTyping, back: goBack)
+            }
+            .background {
+                // The responder holds only the clear click view, so our keys' clicks play and the system keyboard
+                // never comes up (as a Mac's session sideways).
+                MacTypingField(up: Binding(get: { wideTyping }, set: { _ in }), state: link.parts.keyboard,
+                               pinned: false, macKeysBar: false, clickOnly: true)
+                    .frame(width: 1, height: 1)
+            }
     }
 
     /// A normal iPhone upright: the picture (square when it fits), the band, our own keyboard at the bottom.

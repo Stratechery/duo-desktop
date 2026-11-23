@@ -83,7 +83,11 @@ public enum JetKVMSignaling {
 /// JSON-RPC events the device pushes on the "rpc" data channel.
 public enum JetKVMRPCEvent: Equatable, Sendable {
     case otherSessionConnected
-    case videoInputState(String)
+    /// The JetKVM's capture state (jetkvm/kvm release/0.5.10: `video.go` `triggerVideoStateUpdate` sends it as the
+    /// JSON-RPC event "videoInputState"; `internal/native/video.go` `VideoState`: `ready`, and `error`, one of
+    /// "no_signal", "no_lock", "out_of_range"). `ready == false` with "no_signal": the computer sends no picture,
+    /// as when its display is asleep or off.
+    case videoInputState(ready: Bool, error: String?)
     case other(method: String)
 
     public static func decode(_ data: Data) -> JetKVMRPCEvent? {
@@ -91,7 +95,10 @@ public enum JetKVMRPCEvent: Equatable, Sendable {
               let method = obj["method"] as? String else { return nil }
         switch method {
         case "otherSessionConnected": return .otherSessionConnected
-        case "videoInputState": return .videoInputState(String(describing: obj["params"] ?? ""))
+        case "videoInputState":
+            let p = obj["params"] as? [String: Any]
+            let e = (p?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return .videoInputState(ready: p?["ready"] as? Bool ?? false, error: e)
         default: return .other(method: method)
         }
     }

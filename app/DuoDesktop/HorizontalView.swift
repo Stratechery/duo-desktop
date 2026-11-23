@@ -549,11 +549,18 @@ private struct TouchPadArea: ViewModifier {
 /// The column, trackpad, key row and our keyboard, laid over the whole-screen picture. Only the controls take
 /// touches; everywhere else touches reach the picture (tap = click, as today).
 struct HorizontalControls: View {
-    @Bindable var model: SessionModel
+    /// The Glass Act session, or nil for a JetKVM-only computer's screen (project notes, 2026-11-22: the same
+    /// sideways trackpad and button column as a Mac's session), which passes its own `back`.
+    let model: SessionModel?
     let parts: SessionParts
     let keyboard: TouchKeyboardModel
     let layout: HorizontalLayout
     @Binding var typing: Bool
+    var back: (() -> Void)? = nil
+
+    private var acceptsInput: Bool { model?.flow.acceptsInput ?? true }
+    private var held: Bool { model?.flow.showsHeldPicture ?? false }
+    private var overview: Bool { model?.showsOverview ?? false }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -576,11 +583,11 @@ struct HorizontalControls: View {
                     controls
                 }
             }
-            .allowsHitTesting(model.flow.acceptsInput)
-            .opacity(model.flow.showsHeldPicture ? 0.5 : 1)
-            .background(ColumnLookWatch(typing: typing, held: model.flow.showsHeldPicture,
-                                        acceptsInput: model.flow.acceptsInput).frame(width: 1, height: 1))
-            TopCornerButtons(model: model)
+            .allowsHitTesting(acceptsInput)
+            .opacity(held ? 0.5 : 1)
+            .background(ColumnLookWatch(typing: typing, held: held,
+                                        acceptsInput: acceptsInput).frame(width: 1, height: 1))
+            TopCornerButtons(model: model, back: back)
                 .frame(width: layout.size.width, alignment: .top)
         }
         .frame(width: layout.size.width, height: layout.size.height, alignment: .topLeading)
@@ -600,8 +607,8 @@ struct HorizontalControls: View {
             ClickButton(pad: parts.trackpad, button: .left, glass: typing, clear: !typing, shape: clickShape)
                 .place(layout.frame(.click))
             trackpad
-                .opacity(model.showsOverview ? 0.4 : 1)
-                .allowsHitTesting(!model.showsOverview)
+                .opacity(overview ? 0.4 : 1)
+                .allowsHitTesting(!overview)
                 .place(layout.trackpad)
         }
     }
@@ -669,15 +676,16 @@ private struct KeyboardButtonSurface: ViewModifier {
 /// 2026-11-21: the shortcuts "don't need to be on every screen"; Keyboard Shortcuts is a row on the Mac list; after
 /// build 46 brought it back: "No, no truncation. Cut it again").
 private struct TopCornerButtons: View {
-    @Bindable var model: SessionModel
+    let model: SessionModel?
+    var back: (() -> Void)? = nil
 
     var body: some View {
         GlassEffectContainer {
             HStack {
                 // The same back button as upright (not an X: X closes a modal; this goes back to the Mac list).
-                BackToMacsButton { model.disconnect() }
+                BackToMacsButton { if let back { back() } else { model?.disconnect() } }
                 Spacer()
-                if model.multiScreen {
+                if let model, model.multiScreen {
                     Menu {
                         ScreenMenuItems(model: model)
                     } label: {

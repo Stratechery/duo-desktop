@@ -54,6 +54,7 @@ final class AddressCheck {
     }
 
     static let lockedText = "Not checked: the app locked."
+    static var deadlineSeconds: Double = 10
 
     private(set) var state: State = .idle
     private(set) var checked: TypedAddress?
@@ -65,6 +66,12 @@ final class AddressCheck {
         checked = address
         guard AppAccess.isOpen else { state = .locked; return }
         state = .checking
+        // Project notes 2: whatever happens underneath, "Checking…" ends by a deadline as no answer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.deadlineSeconds) { [weak self] in
+            guard let self, self.generation == g, self.state == .checking else { return }
+            self.generation += 1
+            self.state = AppAccess.isOpen ? .noAnswer : .locked
+        }
         // No pin: this only learns the key (and spots a Mac already in the list). The key is then stored with the
         // entry and every later connection to any of its addresses is held to it.
         MacList.check(host: address.host, port: address.port, pin: "", identity: identity, timeout: 4) { [weak self] outcome in
@@ -164,6 +171,17 @@ struct ComputerSettingsScreen: View {
             HomeAddressPicker(store: store, id: id, identity: identity) { draft?.home = store.entry(id)?.home }
         }
         .onAppear {
+            // `--press-remove WAY` (simulator only, live check): Remove for that way in, then the alert's Remove.
+            if let way = SimulatorSwitches.pressRemove {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    proxy.scrollTo("settings.remove.\(way.rawValue)", anchor: .center)
+                    if let e = store.entry(id), e.setUpWays == [way] { removing = e } else { removingWay = way }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    if let e = removing { removing = nil; store.remove(e.id); dismiss() }
+                    else if let w = removingWay { removingWay = nil; save(); store.removeWay(w, from: id); reload() }
+                }
+            }
             // `--settings-at-end` (simulator only, README pictures): scrolls down to the end, as a finger would.
             guard SimulatorSwitches.settingsAtEnd else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { proxy.scrollTo("settings.end", anchor: .bottom) }

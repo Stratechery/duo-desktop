@@ -107,6 +107,10 @@ struct ComputerRow: View {
     let enabled: Bool
     let connect: () -> Void
     let settings: () -> Void
+    /// Project notes 1: every row's icon sits in one fixed-width, centred column (the HIG Lists pattern of
+    /// Settings: a leading icon column of one width, the text after it), so every name starts at the same place
+    /// whatever the symbol's own width. It grows with Dynamic Type with the icon's own text style.
+    @ScaledMetric(relativeTo: .title2) private var iconColumn: CGFloat = 34
 
     static func symbol(_ e: MacEntry) -> String {
         e.hasScreenSharing ? "desktopcomputer" : (e.waysInThisBuild.first == .terminal ? "terminal" : "cable.connector")
@@ -119,11 +123,15 @@ struct ComputerRow: View {
                     Image(systemName: Self.symbol(entry))
                         .font(.title2)
                         .foregroundStyle(reach.reachable ? Color.accentColor : .secondary)
+                        .frame(width: iconColumn, alignment: .center)
+                        .accessibilityIdentifier("computerIcon.\(entry.name)")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name).font(.headline)
                         Text(entry.waysLine).font(.caption).foregroundStyle(.secondary)
                             .accessibilityIdentifier("computerWays.\(entry.name)")
                     }
+                    // The divider starts where the name starts, on every row.
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     Spacer()
                     HStack(spacing: 6) {
                         Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(reach.color)

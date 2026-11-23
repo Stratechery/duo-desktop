@@ -163,6 +163,32 @@ struct RootView: View {
         #endif
         if let name = SimulatorSwitches.openComputer, let e = list.store.withoutScreenSharing.first(where: { $0.name == name }) {
             ComputerNav.shared.open(e)
+            if let lr = SimulatorSwitches.leaveReopen {
+                DispatchQueue.main.asyncAfter(deadline: .now() + lr.leave) {
+                    model.note("live check: back to the list")
+                    #if DUO_JETKVM
+                    JetKVMLink.for(mac: e.id).parts.releaseAll(); JetKVMLink.for(mac: e.id).disconnect()
+                    #endif
+                    ComputerNav.shared.close()
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + lr.reopen) {
+                    model.note("live check: opening it again"); ComputerNav.shared.open(e)
+                }
+            }
+        }
+        #if DUO_JETKVM && targetEnvironment(simulator)
+        if let name = SimulatorSwitches.keychainReport {
+            if let e = list.store.computers.first(where: { $0.name == name }) {
+                let has = KeychainJetKVMPasswords.shared.password(mac: e.id) != nil
+                model.note("live check: Keychain JetKVM password for \(name): \(has ? "yes" : "no")")
+            } else {
+                // The Keychain item is per computer id; with the computer gone, look for any JetKVM password left.
+                model.note("live check: \(name) is not in the list; JetKVM passwords left in the Keychain: \(KeychainJetKVMPasswords.shared.count())")
+            }
+        }
+        #endif
+        if let after = SimulatorSwitches.lockAfter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) { model.note("live check: locking"); lock.lockNow() }
         }
         guard let i = args.firstIndex(of: "--connect"), i + 1 < args.count,
               let mac = list.macs.first(where: { $0.name == args[i + 1] }) else { return }

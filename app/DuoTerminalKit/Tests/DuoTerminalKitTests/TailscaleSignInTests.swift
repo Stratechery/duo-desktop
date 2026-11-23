@@ -15,10 +15,11 @@ final class TailscaleSignInTests: XCTestCase {
         let offer = try XCTUnwrap(try first.futureResult.wait())
         XCTAssertEqual(offer.username, "lab")
         guard case .none = offer.offer else { return XCTFail("not the none offer: \(offer.offer)") }
-        // A second call means Tailscale said no: refused, not a second try.
+        // A second call is not a second try. Project notes 5: it means an ordinary SSH server listed what it
+        // takes (Tailscale's own refusal is its banner, below), so it is not reported as Tailscale's refusal.
         let second = loop.makePromise(of: NIOSSHUserAuthenticationOffer?.self)
         d.nextAuthenticationType(availableMethods: .all, nextChallengePromise: second)
-        XCTAssertThrowsError(try second.futureResult.wait()) { XCTAssertTrue($0 is SSHSignInRefused) }
+        XCTAssertThrowsError(try second.futureResult.wait()) { XCTAssertTrue($0 is SSHNotTailscale) }
     }
 
     /// Tailscale's refusal banner (its exact words, from the live probe of 2026-11-22) ends the sign-in at once

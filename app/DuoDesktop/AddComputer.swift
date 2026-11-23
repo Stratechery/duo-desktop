@@ -11,6 +11,9 @@ import UIKit
 // only that way in's fields. Add checks that one way in and says what happened in place (HIG: validate in place,
 // say how to fix it). The same sheet, from a computer's ⓘ page, adds one more way in to that computer.
 
+/// Set when a check's deadline passed (project notes 2), read by the check that it cut short.
+@MainActor final class DeadlineFlag { var passed = false }
+
 /// What the Add check said, in place.
 struct AddCheckResult: Equatable {
     let ok: Bool
@@ -46,6 +49,16 @@ struct AddComputerSheet: View {
     @State private var kvmAddress: String
     @State private var kvmPassword = ""
 
+    // Project notes 5/6: the Terminal check's steps, said in place, and the one-time password sign-in that
+    // adds this iPhone's key when the computer does not accept it yet.
+    @State private var steps: [String] = []
+    @State private var keyHelp: KeyHelp = .none
+    @State private var sshPassword = ""
+    @State private var installing = false
+    @State private var installNote: String?
+    @State private var appOpen = AppAccess.isOpen
+    enum KeyHelp { case none, password, copyOnly }
+
     @State private var problem: String?
     /// After Add: the computer is saved and its check runs and reports here.
     @State private var added: String?
@@ -67,9 +80,19 @@ struct AddComputerSheet: View {
         _signIn = State(initialValue: e?.terminalSignIn ?? .tailscale)
         _opens = State(initialValue: e?.terminalOpens ?? .tmux)
         _kvmAddress = State(initialValue: fields?.kvmAddress ?? e?.jetkvmAddress ?? "")
+        _kvmPassword = State(initialValue: SimulatorSwitches.addKVMPasswordFromFile ?? "")
     }
 
-    private var existing: MacEntry? { existingID.flatMap { store.entry($0) } }
+    /// The computer this sheet changes: the one from the ⓘ page, or the one its first Add saved. Order
+    /// computers-m2-fixes 2: after a failed check the plan's "saved anyway" holds, so the computer is in the list; a
+    /// corrected try updates that SAME computer, never a second one.
+    private var existing: MacEntry? { (existingID ?? added).flatMap { store.entry($0) } }
+    /// Add ran and its check is still out.
+    private var checking: Bool { added != nil && result == nil }
+    /// Add ran and its check passed: nothing is left to change here.
+    private var passed: Bool { result?.ok == true }
+    /// Add ran and its check failed: the fields stay editable and the button reads Try Again.
+    private var failed: Bool { added != nil && result?.ok == false }
     /// The ways this build can add (review finding 4: never one the build cannot show).
     private var choices: [WayIn] { WayIn.inThisBuild }
 
@@ -88,6 +111,8 @@ struct AddComputerSheet: View {
                             }
                             .pickerStyle(.segmented)
                             .accessibilityIdentifier("addStartWith")
+                            // Once saved, the computer has this way in; a different one is added from its ⓘ page.
+                            .disabled(added != nil)
                         } header: {
                             Text("Start With")
                         } footer: {
@@ -108,18 +133,34 @@ struct AddComputerSheet: View {
                 }
                 if added != nil {
                     Section("Check") {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                            Text(step).foregroundStyle(.secondary).accessibilityIdentifier("addStep")
+                        }
                         if let r = result {
                             Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
                                 .foregroundStyle(r.ok ? Color.green : Color.red)
                                 .accessibilityIdentifier("addCheck")
-                            if !r.ok { Text("Saved anyway. Fix it in the computer’s settings (ⓘ).").foregroundStyle(.secondary) }
+                                .id("addCheck")
+                            if !r.ok {
+                                Text("Saved anyway. Change what is wrong above and tap Try Again, or fix it later in the computer’s settings (ⓘ).")
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             HStack { ProgressView(); Text("Checking…").foregroundStyle(.secondary) }
                         }
                     }
+                    if way == .terminal, failed { keyHelpSections }
                 }
             }
-            .disabled(added != nil)
+            // Only while the check is out, and after it passed. A failed check leaves every field editable.
+            .disabled(checking || passed)
+            .onChange(of: result) { _, r in
+                // Project notes: the check's answer is scrolled into view (it sits under the fields).
+                guard r != nil else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation { proxy.scrollTo("addCheck", anchor: .top) }
+                }
+            }
             .onChange(of: check.state) { _, state in
                 // The answer to Add is shown where it can be seen (it sits below the Macs nearby).
                 if state == .noAnswer {
@@ -130,6 +171,11 @@ struct AddComputerSheet: View {
                 }
             }
           }
+            .onReceive(NotificationCenter.default.publisher(for: AppAccess.changed)) { _ in
+                // The app lock does not cover a sheet: the password prompt hides and forgets what was typed.
+                appOpen = AppAccess.isOpen
+                if !appOpen { sshPassword = "" }
+            }
             .navigationTitle(existingID == nil ? "Add Computer" : "Add \(way.label)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -138,6 +184,17 @@ struct AddComputerSheet: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button(role: .confirm) { add() } label: { Text("Add").foregroundStyle(.white) }
                             .disabled(addWhenFound && check.state == .checking)
+                            .accessibilityIdentifier("addConfirm")
+                    }
+                } else if failed || checking {
+                    // Saved, and the check failed (or a second try is out): Done keeps it as it is; Try Again
+                    // saves what was changed into the same computer and checks again.
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }.accessibilityIdentifier("addDone")
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(role: .confirm) { add() } label: { Text("Try Again").foregroundStyle(.white) }
+                            .disabled(checking)
                             .accessibilityIdentifier("addConfirm")
                     }
                 } else {
@@ -366,7 +423,7 @@ struct AddComputerSheet: View {
             } header: {
                 Text("Sign In")
             } footer: {
-                Text("The Mac’s Glass Act Host adds this iPhone’s key to that account, while the Mac is open in Duo Desktop.")
+                Text("Add asks the Mac’s Glass Act Host to add this iPhone’s key to that account, then signs in with it. If the Host can’t, you can sign in once with the account’s password instead.")
             }
         } else {
             Section {
@@ -417,22 +474,35 @@ struct AddComputerSheet: View {
         if let e = existing, e.hasScreenSharing {
             guard !t(user).isEmpty else { problem = "Type the user name to sign in as."; return }
             problem = nil
-            store.update(e.id) { $0.terminal = true; $0.sshUser = t(user) }
+            // Project notes 6: a Mac's Terminal signs in with this iPhone's key, never Tailscale's `none`
+            // (a Mac whose Screen Sharing was added later kept the Tailscale default, hence "Tailscale refused").
+            store.update(e.id) { $0.terminal = true; $0.sshUser = t(user); $0.terminalSignIn = .phoneKey }
             added = e.id
-            // As the Terminal switch did: ask this Mac's Host to add the phone's key, then check the sign-in.
-            TerminalKeyByHost.ask(macID: e.id, store: store) { _ in
+            result = nil
+            keyHelp = .none
+            installNote = nil
+            steps = ["Asking Glass Act Host to add this iPhone’s key…"]
+            let typed = t(user)
+            // The sheet gets the key added itself: over the running session, or a short link opened for this.
+            TerminalKeyByHost.askOpening(entry: e, store: store, identity: identity,
+                                         asking: { steps.append("Glass Act Host is asking on the Mac: approve it there.") }) { o in
+                steps.append(contentsOf: Self.hostSteps(o, typed: typed))
+                steps.append("Signing in as \(typed)…")
                 Task { await runTerminalCheck(e.id) }
             }
             return
         }
-        if let p = TerminalComputerForm.problem(name: existing?.name ?? name, address: address, user: user, port: port) {
+        if let p = TerminalComputerForm.problem(name: existingID == nil ? name : (existing?.name ?? name),
+                                                address: address, user: user, port: port) {
             problem = p
             return
         }
         problem = nil
         let p = UInt16(t(port)) ?? 22
         if let e = existing {
+            let rename = existingID == nil ? t(name) : nil
             store.update(e.id) { x in
+                if let rename { x.name = rename }
                 x.terminal = true
                 x.setTerminalAddress(address)
                 x.sshPort = p
@@ -446,17 +516,111 @@ struct AddComputerSheet: View {
             store.add(e)
             added = e.id
         }
-        if let id = added { Task { await runTerminalCheck(id) } }
+        if let id = added { result = nil; Task { await runTerminalCheck(id) } }
         #endif
     }
 
     #if DUO_TERMINAL
     private func runTerminalCheck(_ id: String) async {
         guard let e = store.entry(id) else { return }
-        let r = await TerminalComputerCheck.run(e)
+        let r = await TerminalComputerCheck.check(e)
+        keyHelp = r.passwordCanAddKey ? .password : (r.keyByHandOnly ? .copyOnly : .none)
         result = AddCheckResult(ok: r.ok, text: r.ok ? "\(r.text) \(e.name) is added." : r.text)
     }
+
+    /// What the Host said, in plain words (project notes 6), pure for tests.
+    static func hostSteps(_ o: TerminalKeyByHost.LinkOutcome, typed: String) -> [String] {
+        switch o {
+        case let .answered(.answered(r)):
+            switch r.status {
+            case .installed, .alreadyThere:
+                var out = ["Glass Act Host added this iPhone’s key for “\(r.userName)”."]
+                if !r.userName.isEmpty, r.userName != typed {
+                    out.append("The Host runs as “\(r.userName)”, so the key went to that account, not “\(typed)”.")
+                }
+                if !r.remoteLoginOn { out.append("Remote Login looks off on the Mac: its SSH port is not listening.") }
+                return out
+            case .refused, .askingOnMac:
+                return ["Glass Act Host did not add the key: \(r.reason)."]
+            }
+        case .answered(.olderHost):
+            return ["This Mac’s Glass Act Host is older and can’t add the key."]
+        case .answered(.noSession):
+            return ["No link to Glass Act Host to ask."]
+        case let .noLink(why):
+            return [why]
+        }
+    }
+
+    /// The one-time password sign-in (project notes 5).
+    private func installByPassword() async {
+        guard let id = added, let e = store.entry(id), AppAccess.isOpen else { return }
+        let pw = sshPassword
+        sshPassword = ""
+        installing = true
+        installNote = nil
+        defer { installing = false }
+        let r = await TerminalKeyByPassword.install(e, user: e.sshUser ?? user, password: pw)
+        guard r.ok else {
+            installNote = r.text
+            if r.keyByHandOnly { keyHelp = .copyOnly }
+            return
+        }
+        // From now on it signs in with the key.
+        store.update(id) { $0.terminalSignIn = .phoneKey }
+        steps.append(r.text)
+        steps.append("Signing in with this iPhone’s key…")
+        signIn = .phoneKey
+        result = nil
+        keyHelp = .none
+        await runTerminalCheck(id)
+    }
     #endif
+
+    @ViewBuilder private var keyHelpSections: some View {
+        #if DUO_TERMINAL
+        switch keyHelp {
+        case .none:
+            EmptyView()
+        case .password:
+            Section {
+                if appOpen {
+                    SecureField("Password for \(existing?.sshUser ?? user)", text: $sshPassword)
+                        .textContentType(.password)
+                        .accessibilityIdentifier("addSSHPassword")
+                    Button {
+                        Task { await installByPassword() }
+                    } label: {
+                        HStack {
+                            Text("Sign In and Add Key")
+                            if installing { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(sshPassword.isEmpty || installing)
+                    .accessibilityIdentifier("addSSHInstall")
+                } else {
+                    Text("Unlock Duo Desktop to type the password.").foregroundStyle(.secondary)
+                }
+                if let installNote {
+                    Label(installNote, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                        .accessibilityIdentifier("addSSHInstallNote")
+                }
+            } header: {
+                Text("Add This iPhone’s Key")
+            } footer: {
+                // the owner 2026-11-21: "signing in with your Mac username and password is reasonable".
+                Text("Duo Desktop signs in to \(existing?.name ?? "the computer") once as “\(existing?.sshUser ?? user)” with this password, adds this iPhone’s key to ~/.ssh/authorized_keys and signs out. The password is used for that one sign-in and is never kept or logged. After that, Terminal signs in with the key.")
+            }
+        case .copyOnly:
+            if let installNote {
+                Section { Label(installNote, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
+            }
+            if let k = try? TerminalKeys.phoneKey() {
+                PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
+            }
+        }
+        #endif
+    }
 
     // MARK: JetKVM
 
@@ -470,7 +634,8 @@ struct AddComputerSheet: View {
                     .accessibilityIdentifier("addJetKVMAddress")
             }
             LabeledContent("Password") {
-                SecureField("Optional", text: $kvmPassword)
+                SecureField(added != nil && JetKVMSettings.passwords.password(mac: added ?? "") != nil
+                            ? "Saved (type to change)" : "Optional", text: $kvmPassword)
                     .multilineTextAlignment(.trailing)
                     .textContentType(.password)
                     .accessibilityIdentifier("addJetKVMPassword")
@@ -492,7 +657,12 @@ struct AddComputerSheet: View {
         problem = nil
         let id: String
         if let e = existing {
-            store.update(e.id) { $0.jetkvm = true; $0.jetkvmAddress = t(kvmAddress) }
+            let rename = existingID == nil ? t(name) : nil
+            store.update(e.id) { x in
+                if let rename { x.name = rename }
+                x.jetkvm = true
+                x.jetkvmAddress = t(kvmAddress)
+            }
             id = e.id
         } else {
             var e = MacEntry(name: t(name))
@@ -503,10 +673,13 @@ struct AddComputerSheet: View {
             store.add(e)
             id = e.id
         }
-        let pw = kvmPassword.isEmpty ? nil : kvmPassword
-        JetKVMSettings.passwords.setPassword(pw, mac: id)
+        // A second try with the Password field left empty keeps the password the first try saved.
+        let retry = added != nil && kvmPassword.isEmpty
+        let pw = retry ? JetKVMSettings.passwords.password(mac: id) : (kvmPassword.isEmpty ? nil : kvmPassword)
+        if !retry { JetKVMSettings.passwords.setPassword(pw, mac: id) }
         kvmPassword = ""
         added = id
+        result = nil
         guard let e = store.entry(id), let host = e.jetkvmHost else { return }
         Task {
             let r = await JetKVMAddCheck.run(name: e.name, host: host, password: pw)

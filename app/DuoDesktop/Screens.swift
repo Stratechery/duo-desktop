@@ -942,6 +942,17 @@ struct SessionTopRow: ViewModifier {
     }
 
     static let leadingEndFromRight: CGFloat = 157
+
+    /// Project notes 7 (the owner: "the top menu bar was gone", a computer with Screen Sharing, Terminal and
+    /// JetKVM): the narrowest the name bubble may get beside the switch. Narrower than this, the row would not fit
+    /// and the bar folded its parts (back and name included) into "•••"; so the switch gives way instead.
+    static let nameFloor: CGFloat = 120
+
+    /// Whether back, a readable name and the switch with `count` views all fit on the row. When not, the views
+    /// collapse into ONE view button with a menu (`ViewMenuButton`); back and the name always stay.
+    static func switchFits(rowWidth: CGFloat, count: Int) -> Bool {
+        rowWidth - leadingEndFromRight - beforeSwitch - ViewSelector.target * CGFloat(count) >= nameFloor
+    }
     /// Build 56 (every part on the bar's own glass), measured with four views and an over-long two-line name: the
     /// gap before the switch grew from 22 to 26 pt and the bubble runs up to 16 pt past its cap, so 128 (cap 192:
     /// the switch ends at x 503.7; cap 200 sent the whole row into "•••").
@@ -951,9 +962,13 @@ struct SessionTopRow: ViewModifier {
     /// Pop-up buttons: "A pop-up button helps people make a choice that affects their content or the surrounding
     /// view", and it "can update its content to indicate the current selection." The two lines follow the Claude
     /// app's own title capsule (the owner's reference picture): a semibold first line, a smaller secondary second line.
+    /// The views as one menu button: a normal iPhone always; the Duo when the switch would not fit (fixes 7).
+    private var usesMenu: Bool { viewMenu || !Self.switchFits(rowWidth: rowWidth, count: choices.count) }
+
     @ViewBuilder private var nameBubble: some View {
         let maxWidth = nameMaxOverride
-            ?? Self.nameMaxWidth(rowWidth: rowWidth, selectorWidth: ViewSelector.target * CGFloat(choices.count))
+            ?? Self.nameMaxWidth(rowWidth: rowWidth,
+                                 selectorWidth: ViewSelector.target * CGFloat(usesMenu ? 1 : choices.count))
         if screenName != nil {
             Menu {
                 ScreenMenuItems(model: model)
@@ -974,7 +989,10 @@ struct SessionTopRow: ViewModifier {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Every part of the row is a `TopBarItem`: the bar draws its one glass shape, the part draws none.
-                TopBarItem { BackToMacsButton(action: leave) }
+                TopBarItem {
+                    BackToMacsButton(action: leave)
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("back", $0) }
+                }
                 // Order, left to right (the owner 2026-11-21: "We should flip the order of the computer name and its
                 // screens and the four views. After all, the four views are all a subset of that computer."): back,
                 // the name bubble, the view switch; the clock's area stays the system's. No info button (the owner
@@ -988,7 +1006,7 @@ struct SessionTopRow: ViewModifier {
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 TopBarItem {
                     Group {
-                        if viewMenu { ViewMenuButton(view: $view, choices: choices) }
+                        if usesMenu { ViewMenuButton(view: $view, choices: choices) }
                         else { ViewSelector(view: $view, choices: choices) }
                     }
                     .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }

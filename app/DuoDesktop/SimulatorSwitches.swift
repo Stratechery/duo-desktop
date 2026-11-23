@@ -241,7 +241,46 @@ enum SimulatorSwitches {
             }
         }
     }
+    // Live check on a real JetKVM (project notes). A headless simulator cannot type into
+    // a field or tap, so these run the same actions the fingers would. No secret passes through an argument.
+
+    /// `--add-kvm-password-file PATH`: the Add sheet's JetKVM Password field starts with this file's contents (read
+    /// here, never logged), so Add saves it to the Keychain exactly as a typed password.
+    static var addKVMPasswordFromFile: String? {
+        guard let i = args.firstIndex(of: "--add-kvm-password-file"), i + 1 < args.count,
+              let s = try? String(contentsOfFile: args[i + 1], encoding: .utf8) else { return nil }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// `--keychain-report NAME`: at launch, logs whether the Keychain holds a JetKVM password for the computer NAME
+    /// ("yes"/"no" only), or that no such computer is in the list.
+    static var keychainReport: String? {
+        guard let i = args.firstIndex(of: "--keychain-report"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    /// `--leave-reopen A,B`: a computer open on its own screen goes back to the list A s after launch (the back
+    /// button's action) and is opened again B s after launch (the list row's action).
+    static var leaveReopen: (leave: Double, reopen: Double)? {
+        guard let i = args.firstIndex(of: "--leave-reopen"), i + 1 < args.count else { return nil }
+        let p = args[i + 1].split(separator: ",").compactMap { Double($0) }
+        return p.count == 2 ? (p[0], p[1]) : nil
+    }
+    /// `--lock-after N`: the app locks N s after launch (as after 5 minutes away).
+    static var lockAfter: Double? {
+        guard let i = args.firstIndex(of: "--lock-after"), i + 1 < args.count else { return nil }
+        return Double(args[i + 1])
+    }
+    /// `--press-remove WAY` on a computer's ⓘ page (`--mac-settings`): presses Remove for that way in 2 s after the
+    /// page opens, then the alert's Remove 2 s later.
+    static var pressRemove: WayIn? {
+        guard let i = args.firstIndex(of: "--press-remove"), i + 1 < args.count else { return nil }
+        return WayIn(rawValue: args[i + 1])
+    }
     #else
+    static let addKVMPasswordFromFile: String? = nil
+    static let keychainReport: String? = nil
+    static let leaveReopen: (leave: Double, reopen: Double)? = nil
+    static let lockAfter: Double? = nil
+    static let pressRemove: WayIn? = nil
     @MainActor static var screenTour: ((SessionModel) -> Void)? { nil }
     static let addComputerWay: WayIn? = nil
     static let addFields: (name: String, address: String, user: String, kvmAddress: String)? = nil

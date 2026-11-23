@@ -51,6 +51,17 @@ final class KeychainJetKVMPasswords: JetKVMPasswordStore {
         return String(data: d, encoding: .utf8)
     }
 
+    #if targetEnvironment(simulator)
+    /// Simulator only (live check): how many JetKVM passwords this app's Keychain holds, whatever the computer.
+    func count() -> Int {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return 0 }
+        return (out as? [[String: Any]])?.count ?? 0
+    }
+    #endif
+
     func setPassword(_ password: String?, mac: String) {
         SecItemDelete(query(mac) as CFDictionary)
         guard let password, !password.isEmpty else { return }
@@ -207,6 +218,17 @@ enum JetKVMKeys {
         return m.filter { $0.value != 0 }
     }()
 
+    /// A key's own event flags (Mac CGEventFlags bits, as `KeyMap.Modifier.eventFlags`) as left-hand HID modifier
+    /// bits. Fn and numeric pad have no USB modifier and are dropped.
+    static func modifiers(fromFlags f: UInt32) -> HIDRPC.Modifiers {
+        var m: HIDRPC.Modifiers = []
+        if f & 0x0002_0000 != 0 { m.insert(.leftShift) }
+        if f & 0x0004_0000 != 0 { m.insert(.leftControl) }
+        if f & 0x0008_0000 != 0 { m.insert(.leftOption) }
+        if f & 0x0010_0000 != 0 { m.insert(.leftCommand) }
+        return m
+    }
+
     /// Mac modifier key codes to HID modifier bits (fn has no USB HID usage and is dropped).
     static let modifier: [UInt16: HIDRPC.Modifiers] = [
         59: .leftControl, 56: .leftShift, 58: .leftOption, 55: .leftCommand,
@@ -236,6 +258,8 @@ final class JetKVMInput: InputSink {
     private var buttons: HIDRPC.Buttons = []
     private var modifiers: HIDRPC.Modifiers = []
     private var keys: [UInt8] = []
+    /// Modifiers each held key carries in its own flags (usage → modifiers), pressed only while it is held.
+    private var implied: [UInt8: HIDRPC.Modifiers] = [:]
     private var scroll = (x: 0.0, y: 0.0)
     /// Called after a move when the engine's own pointer nears its canvas edge, so it can be put back in the middle
     /// (the Mac's pointer has no edge here; ours must not stop at one).
@@ -266,7 +290,8 @@ final class JetKVMInput: InputSink {
             // view there (measured live 2026-11-21: unflipped, fingers down moved the content up).
             output?.sendScroll(dy: max(-127, min(127, -sy)), dx: max(-127, min(127, -sx)))
         case InputKind.keyDown, InputKind.keyUp:
-            key(code: UInt16(truncatingIfNeeded: x), down: kind == InputKind.keyDown)
+            key(code: UInt16(truncatingIfNeeded: x), down: kind == InputKind.keyDown,
+                flags: UInt32(bitPattern: Int32(truncatingIfNeeded: a)))
         default:
             break
         }
@@ -280,21 +305,57 @@ final class JetKVMInput: InputSink {
         output?.sendPointerDelta(dx: dx, dy: dy, buttons: nil)
     }
 
-    private func key(code: UInt16, down: Bool) {
+    /// the owner 2026-11-22: a password typed through the JetKVM was refused. Our keyboard sends a capital or a shifted
+    /// symbol as the plain key with Shift in its flags (a Mac host applies the flags), and the JetKVM is a USB
+    /// keyboard, which has only keys: the flag was dropped, so "A" arrived as "a" and "!" as "1". A key's own
+    /// modifier flags are now pressed as modifier keys around it: the modifier alone first, then the key, then the
+    /// key up, then the modifier up (as a person types it, and never in the same report as a key change).
+    private func key(code: UInt16, down: Bool, flags: UInt32) {
         if let m = JetKVMKeys.modifier[code] {
             if down { modifiers.insert(m) } else { modifiers.remove(m) }
-        } else if let u = JetKVMKeys.usage[code] {
-            if down { if !keys.contains(u) && keys.count < 6 { keys.append(u) } } else { keys.removeAll { $0 == u } }
-        } else {
+            send()
             return
         }
-        output?.sendKeyboard(modifiers: modifiers, keys: keys)
+        guard let u = JetKVMKeys.usage[code] else { return }
+        if down {
+            var own = JetKVMKeys.modifiers(fromFlags: flags)
+            #if targetEnvironment(simulator)
+            // `--jetkvm-old-keys` (simulator only, keys proof): the keys as builds up to 63 sent them, flags dropped.
+            if CommandLine.arguments.contains("--jetkvm-old-keys") { own = [] }
+            #endif
+            if keys.contains(u) {
+                // A repeat (another key down while held): nothing new to press.
+                return
+            }
+            guard keys.count < 6 else { return }
+            let before = reportModifiers
+            implied[u] = own
+            if reportModifiers != before { send() }
+            keys.append(u)
+            send()
+        } else {
+            guard keys.contains(u) else { return }
+            keys.removeAll { $0 == u }
+            send()
+            let before = reportModifiers
+            implied[u] = nil
+            if reportModifiers != before { send() }
+        }
     }
+
+    /// The modifiers in the report: those pressed as keys, and those the held keys carry in their flags.
+    private var reportModifiers: HIDRPC.Modifiers {
+        implied.values.reduce(modifiers) { $0.union($1) }
+    }
+
+    private func send() { output?.sendKeyboard(modifiers: reportModifiers, keys: keys) }
 
     /// Everything up (view left, app in the background).
     func releaseAll() {
         if !buttons.isEmpty { buttons = []; output?.sendPointerDelta(dx: 0, dy: 0, buttons: []) }
-        if !modifiers.isEmpty || !keys.isEmpty { modifiers = []; keys = []; output?.sendKeyboard(modifiers: [], keys: []) }
+        if !modifiers.isEmpty || !keys.isEmpty || !implied.isEmpty {
+            modifiers = []; keys = []; implied = [:]; output?.sendKeyboard(modifiers: [], keys: [])
+        }
         last = nil
     }
 }
@@ -312,6 +373,80 @@ final class JetKVMLink {
         case retrying(attempt: Int, of: Int)
         /// Every attempt failed: the reason, with Try Again.
         case failed(String)
+        /// Project notes 3: connected, no picture yet, and Left Shift was pressed to wake the computer's
+        /// display; still waiting for the picture.
+        case waking
+    }
+
+    // MARK: Waking the display (project notes 3)
+
+    /// the owner: "You need to hit a key to wake up the screen so that JetKVM can hold on to it. You should automate this.
+    /// Hit Shift or something." When connected with no first frame: Left Shift alone (types nothing) after
+    /// `wakeAfter`, or at once when the JetKVM says "no_signal" (its `videoInputState` event, jetkvm/kvm 0.5.10
+    /// `internal/native/video.go`), then again every `wakeEvery` while no picture comes, at most `wakesPerAttempt`
+    /// times in an attempt and `wakesInAll` in a connect.
+    static var wakeAfter: Duration = .seconds(2)
+    static var wakeEvery: Duration = .seconds(3)
+    static let wakesPerAttempt = 3
+    static let wakesInAll = 6
+    /// Presses so far in this connect, and whether the JetKVM said it sees no signal.
+    private(set) var wakePresses = 0
+    private(set) var sawNoSignal = false
+    private var wakeTask: Task<Void, Never>?
+    private var waitingForPicture = false
+    private var lastWake: ContinuousClock.Instant?
+    /// Presses the key (a test swaps it to count presses without a JetKVM).
+    var pressWake: (JetKVMSession) -> Bool = { $0.pressWakeKey() }
+
+    func startWaking(_ s: JetKVMSession) {
+        waitingForPicture = true
+        wakeTask?.cancel()
+        let pressesBefore = wakePresses
+        wakeTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.wakeAfter)
+            while let self, !Task.isCancelled, self.session === s, self.waitingForPicture,
+                  self.wakePresses - pressesBefore < Self.wakesPerAttempt, self.wakePresses < Self.wakesInAll {
+                self.wake(s, why: "no picture yet")
+                try? await Task.sleep(for: Self.wakeEvery)
+            }
+        }
+    }
+
+    /// The JetKVM's own report while waiting: no signal = press now (not twice within a second).
+    func videoInputState(ready: Bool, error: String?, session s: JetKVMSession) {
+        note("JetKVM video: \(ready ? "ready" : "not ready")\(error.map { " (\($0))" } ?? "")")
+        guard !ready, error == "no_signal" else { return }
+        sawNoSignal = true
+        guard waitingForPicture, session === s, wakePresses < Self.wakesInAll else { return }
+        if let l = lastWake, ContinuousClock.now - l < .seconds(1) { return }
+        wake(s, why: "the JetKVM sees no signal")
+    }
+
+    private func wake(_ s: JetKVMSession, why: String) {
+        guard pressWake(s) else { note("wake key not sent: input not ready"); return }
+        wakePresses += 1
+        lastWake = .now
+        note("pressed Left Shift to wake the display (\(why))")
+        SessionModel.log.notice("JetKVM: wake key \(self.wakePresses)")
+        status = .waking
+    }
+
+    private func stopWaking() {
+        waitingForPicture = false
+        wakeTask?.cancel(); wakeTask = nil
+    }
+
+    /// The last attempt's reason, saying the likely cause when no picture came (fixes 3).
+    func reasonSayingWake(_ e: JetKVMError) -> String {
+        guard case .timeout = e else { return Self.reason(e) }
+        return Self.noPictureText(presses: wakePresses, noSignal: sawNoSignal)
+    }
+
+    static func noPictureText(presses: Int, noSignal: Bool) -> String {
+        var t = noSignal ? "The JetKVM gets no picture from the computer: its display may be off or asleep, or the computer may be off."
+                         : "Connected to the JetKVM, but no picture arrived. The computer’s display may be off or asleep."
+        if presses > 0 { t += " Duo Desktop pressed Shift \(presses == 1 ? "once" : "\(presses) times") to wake it, with no answer." }
+        return t
     }
 
     /// The owner 2026-11-21: the JetKVM's video "sometimes works and it sometimes doesn't", in its own web page too. When
@@ -440,7 +575,7 @@ final class JetKVMLink {
             retryTask?.cancel(); retryTask = nil
             attempt = 1
             switch status {
-            case .live, .connecting, .step, .retrying: status = .idle
+            case .live, .connecting, .step, .retrying, .waking: status = .idle
             default: break
             }
         case .open:
@@ -465,6 +600,12 @@ final class JetKVMLink {
         status = attempt > 1 ? .retrying(attempt: attempt, of: Self.attempts) : .connecting
         note("attempt \(attempt) of \(Self.attempts) to \(logName)")
         SessionModel.log.notice("JetKVM: connecting, attempt \(self.attempt)")
+        s.onVideoInputState = { [weak self, weak s] ready, error in
+            DispatchQueue.main.async {
+                guard let self, let s else { return }
+                self.videoInputState(ready: ready, error: error, session: s)
+            }
+        }
         s.trace = { [weak self] line in
             // Each key and pointer message is not worth a line; everything about the connection is.
             if line.hasPrefix("hid") || line.hasPrefix("rpc →") { return }
@@ -481,10 +622,15 @@ final class JetKVMLink {
                     #endif
                 case .connecting(let step):
                     // The attempt's number stays in sight on a retry; the step shows on the first attempt.
-                    if self.attempt == 1 { self.status = .step(Self.stepText(step)) }
+                    if self.attempt == 1, self.status != .waking { self.status = .step(Self.stepText(step)) }
+                    if step == "picture" { self.startWaking(s) }
                 case .live:
+                    self.stopWaking()
+                    if self.wakePresses > 0 { self.note("picture arrived after \(self.wakePresses) wake key press(es)") }
                     self.status = .live
                     self.attempt = 1
+                    self.wakePresses = 0
+                    self.sawNoSignal = false
                     self.note("live")
                     #if targetEnvironment(simulator)
                     if CommandLine.arguments.contains("--jetkvm-demo") { self.demo() }
@@ -522,6 +668,7 @@ final class JetKVMLink {
     private func failed(_ e: JetKVMError, entry: MacEntry?) {
         let wasLive = status == .live
         note("attempt \(attempt) failed: \(e)", host: session?.host)
+        stopWaking()
         drop()
         if !wasLive, Self.retries(e), attempt < Self.attempts {
             attempt += 1
@@ -539,8 +686,10 @@ final class JetKVMLink {
         switch e {
         case .wrongPassword: status = .wrongPassword
         case .unsupportedFirmware: status = .unsupportedFirmware
-        default: status = .failed(Self.reason(e))
+        default: status = .failed(reasonSayingWake(e))
         }
+        wakePresses = 0
+        sawNoSignal = false
         SessionModel.log.notice("JetKVM: \(String(describing: self.status), privacy: .public)")
     }
 
@@ -556,7 +705,7 @@ final class JetKVMLink {
     /// Ends the session but keeps the status shown.
     var inProgress: Bool {
         switch status {
-        case .connecting, .step, .retrying: true
+        case .connecting, .step, .retrying, .waking: true
         default: false
         }
     }
@@ -571,6 +720,19 @@ final class JetKVMLink {
         watch?.cancel(); task?.cancel()
     }
 
+    /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the
+    /// new one before the old one goes; the old one's disconnect must not end the new one's connection (live-check
+    /// order 2026-11-22: sideways stuck on "Connecting to the JetKVM…").
+    private(set) var panelsShown = 0
+    func panelAppeared(entry: MacEntry?) {
+        panelsShown += 1
+        connect(entry: entry)
+    }
+    func panelDisappeared() {
+        panelsShown = max(0, panelsShown - 1)
+        if panelsShown == 0 { disconnect() }
+    }
+
     /// Left the view or went to the background: release the JetKVM (and forget a connect waiting on the unlock).
     func disconnect() {
         pending = nil
@@ -578,7 +740,7 @@ final class JetKVMLink {
         attempt = 1
         drop()
         switch status {
-        case .live, .connecting, .step, .retrying: status = .idle
+        case .live, .connecting, .step, .retrying, .waking: status = .idle
         default: break
         }
     }
@@ -604,6 +766,15 @@ final class JetKVMLink {
             input.sendInput(kind: InputKind.keyUp, x: 55, y: 0, a: 0, b: 0)
         }
         switch name {
+        case "live":   // project notes, 2026-11-22: move, click, type in one connection
+            at(3, "trackpad move right and down, slow") { for _ in 0..<20 { pad.move(dx: 4, dy: 2, dt: 0.1) } }
+            at(7, "one-finger tap") { pad.tap(button: 0, at: .zero, time: Date().timeIntervalSinceReferenceDate) }
+            at(10, "Command-N") { chord(45) }
+            at(12, "typing \"duo\" (system keyboard path)") { for c in "duo" { _ = MacTyping.type(c, into: engine) } }
+            at(17, "Command-W") { chord(13) }
+            at(19, "Command-Delete (Delete)") { chord(51) }
+        case "typefile":   // keys proof 2026-11-22: a test file's text, key by key, as a finger on our keyboard
+            typeFile(engine: engine, at: at)
         case "tap": at(3, "one-finger tap") { pad.tap(button: 0, at: .zero, time: Date().timeIntervalSinceReferenceDate) }
         case "scroll":
             at(3, "two fingers down 300 pt") { for _ in 0..<20 { pad.scroll(dx: 0, dy: 15) } }
@@ -614,6 +785,59 @@ final class JetKVMLink {
             at(10, "Command-W") { chord(13) }
             at(13, "Command-Delete (Delete)") { chord(51) }
         default: break
+        }
+    }
+
+    /// `--jetkvm-check typefile --jetkvm-type-file PATH [--jetkvm-type-gap S] [--jetkvm-type-start S]`
+    /// (keys proof 2026-11-22). Types the file's test text (never a password) through our own keyboard exactly as a
+    /// finger does: the page key for a character on another page, ⇧ before a capital, then the key's lift. Marks:
+    /// "⇪" double-taps ⇧ (caps lock), "⇧" taps ⇧ once, "⌫" taps delete, a newline is return. Each character is
+    /// `gap` seconds after the last (0 = all at once).
+    private func typeFile(engine: MacKeyboardEngine, at: (Double, String, @escaping () -> Void) -> Void) {
+        let args = CommandLine.arguments
+        func value(_ name: String) -> String? {
+            guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
+            return args[i + 1]
+        }
+        guard let path = value("--jetkvm-type-file") else { return }
+        let gap = Double(value("--jetkvm-type-gap") ?? "") ?? 0.12
+        let start = Double(value("--jetkvm-type-start") ?? "") ?? 4
+        let model = TouchKeyboardModel(engine: engine)
+        func page(of c: Character) -> TouchKeyboardLayout.Page? {
+            for p in [TouchKeyboardLayout.Page.letters, .numbers, .symbols]
+            where TouchKeyboardLayout.rows(p).joined().contains(where: { $0 == .char(c) }) { return p }
+            return nil
+        }
+        func finger(_ c: Character) {
+            let now = ProcessInfo.processInfo.systemUptime
+            switch c {
+            case "\n": model.lifted(.ret)
+            case " ": model.lifted(.space)
+            case "⌫": model.touchDown(.delete, at: now); model.lifted(.delete)
+            case "⇧": model.touchDown(.shift, at: now)
+            case "⇪": model.touchDown(.shift, at: now); model.touchDown(.shift, at: now + 0.1)
+            default:
+                let base = c.isUppercase ? Character(c.lowercased()) : c
+                guard let p = page(of: base) else { SessionModel.log.notice("JetKVM check: no key for a character"); return }
+                if model.page != p { model.touchDown(.page(p), at: now) }
+                if c.isUppercase, model.shift == .off { model.touchDown(.shift, at: now) }
+                model.lifted(.char(base))
+            }
+        }
+        // The file is read when typing starts, not before: the Mac side writes it only once its test window is
+        // in front, so with no window in front nothing is typed.
+        at(start, "reading the test file, gap \(gap) s") {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+                SessionModel.log.notice("JetKVM check: no test file, nothing typed"); return
+            }
+            let chars = Array(text)
+            SessionModel.log.notice("JetKVM check: typing \(chars.count) keys")
+            for (n, c) in chars.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + gap * Double(n)) { finger(c) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + gap * Double(chars.count) + 0.5) {
+                SessionModel.log.notice("JetKVM check: typing done")
+            }
         }
     }
 
@@ -760,8 +984,8 @@ struct JetKVMPanel: View {
                 .accessibilityIdentifier("jetkvmStatus")
             }
         }
-        .onAppear { link.connect(entry: entry) }
-        .onDisappear { link.disconnect() }
+        .onAppear { link.panelAppeared(entry: entry) }
+        .onDisappear { link.panelDisappeared() }
         .onChange(of: phase) { _, p in
             if p == .background { link.disconnect() } else if p == .active { link.connect(entry: entry) }
         }
@@ -773,6 +997,7 @@ struct JetKVMPanel: View {
         case .idle, .connecting: "Connecting to the JetKVM…"
         case .step(let s): "\(s)…"
         case .retrying(let n, let of): "Trying again (\(n) of \(of))…"
+        case .waking: "Waking the display…"
         case .failed(let why): "Could not connect to the JetKVM after \(JetKVMLink.attempts) tries.\n\(why)"
         case .wrongPassword: "The JetKVM refused the password. Check it in this computer’s settings (ⓘ)."
         case .unsupportedFirmware: "This JetKVM’s firmware is not supported by this version of Duo Desktop."

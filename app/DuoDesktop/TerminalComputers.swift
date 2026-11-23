@@ -78,6 +78,9 @@ enum TerminalComputerProblem: Equatable {
     case tailscaleRefused(user: String, said: String?)
     /// The computer refused this iPhone's key for that user.
     case keyRefused(user: String)
+    /// Project notes 5: a Tailscale sign-in reached an ordinary SSH server (no Tailscale banner; it listed
+    /// publickey/password). Not Tailscale's refusal: no tailnet rule is involved.
+    case ordinarySSH(user: String, offersPassword: Bool)
     /// Nothing is listening on the port.
     case nothingOnPort(Int)
     /// No answer at all.
@@ -87,6 +90,7 @@ enum TerminalComputerProblem: Equatable {
 
     static func diagnose(_ error: Error, user: String, host: String, port: Int, tailscale: Bool) -> TerminalComputerProblem {
         if error is SSHSignInTimedOut { return .signInTimedOut }
+        if let n = error as? SSHNotTailscale { return .ordinarySSH(user: user, offersPassword: n.offersPassword) }
         switch SSHFailureKind.of(error) {
         case .signInRefused:
             return tailscale ? .tailscaleRefused(user: user, said: (error as? SSHSignInRefused)?.reason) : .keyRefused(user: user)
@@ -101,7 +105,11 @@ enum TerminalComputerProblem: Equatable {
             "Tailscale refused “\(user)” for this iPhone. Check the user name, and that the tailnet’s SSH rules allow it."
                 + (said.map { " (Tailscale: \($0.replacingOccurrences(of: "tailscale: ", with: "")))" } ?? "")
         case let .keyRefused(user):
-            "The computer refused this iPhone’s key for “\(user)”. Add the key on the computer (copy it from its settings here)."
+            "The computer does not accept this iPhone’s key for “\(user)” yet."
+        case let .ordinarySSH(user, offersPassword):
+            offersPassword
+                ? "This computer uses ordinary SSH, not Tailscale SSH, and does not have this iPhone’s key for “\(user)” yet."
+                : "This computer uses ordinary SSH, not Tailscale SSH, and it does not take passwords, so this iPhone’s key has to be added on it by hand."
         case let .nothingOnPort(port):
             "Nothing answers on port \(port). Check that the computer’s SSH server is on."
         case let .notReachable(host):
@@ -142,6 +150,10 @@ enum TerminalComputerCheck {
                                      _ attempt: SSHConnectAttempt) async throws -> Void
 
     static let lockedText = "Not checked: the app locked."
+    static var deadlineSeconds: Double = 25
+    static func timedOutText(_ host: String) -> String {
+        "No answer from \(host) within \(Int(deadlineSeconds)) seconds. Check the address, and that this iPhone can reach it."
+    }
 
     static let connectAndClose: Connector = { host, port, user, signIn, hostKeyID, attempt in
         let c = try await SSHConnection.connect(host: host, port: port, user: user, signIn: signIn,
@@ -151,32 +163,126 @@ enum TerminalComputerCheck {
     }
 
     @MainActor static func run(_ e: MacEntry, connector: Connector = connectAndClose) async -> (ok: Bool, text: String) {
-        guard AppAccess.isOpen else { return (false, lockedText) }
-        guard let host = e.terminalAddress, let user = e.sshUser else { return (false, "No address or user name.") }
+        let r = await check(e, connector: connector)
+        return (r.ok, r.text)
+    }
+
+    /// What the check found, and whether the key can be added with one password sign-in (project notes 5).
+    struct Outcome: Equatable {
+        var ok: Bool
+        var text: String
+        var problem: TerminalComputerProblem? = nil
+        /// The server refused the key (or `none`) and takes a password: the sheet offers the one-time sign-in.
+        var passwordCanAddKey = false
+        /// It refused and takes no password: the key is shown to copy, the only fallback.
+        var keyByHandOnly = false
+    }
+
+    @MainActor static func check(_ e: MacEntry, connector: Connector = connectAndClose) async -> Outcome {
+        let r = await runInner(e, connector: connector)
+        var o = Outcome(ok: r.ok, text: r.text, problem: r.problem)
+        switch r.problem {
+        case let .ordinarySSH(_, pw)?: o.passwordCanAddKey = pw; o.keyByHandOnly = !pw
+        case .keyRefused?: o.passwordCanAddKey = r.offersPassword; o.keyByHandOnly = !r.offersPassword
+        default: break
+        }
+        return o
+    }
+
+    @MainActor private static func runInner(_ e: MacEntry, connector: Connector)
+        async -> (ok: Bool, text: String, problem: TerminalComputerProblem?, offersPassword: Bool) {
+        let plain = { (ok: Bool, text: String) in (ok, text, TerminalComputerProblem?.none, false) }
+        guard AppAccess.isOpen else { return plain(false, lockedText) }
+        guard let host = e.terminalAddress, let user = e.sshUser else { return plain(false, "No address or user name.") }
         let tailscale = e.signIn == .tailscale
         let attempt = SSHConnectAttempt()
         let watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: nil) { n in
             if (n.object as? AppAccess.State) == .locked { attempt.cancel() }
         }
         defer { NotificationCenter.default.removeObserver(watch) }
+        // Project notes 2: the whole check ends by a deadline, whatever hangs (name lookup, a server
+        // that never finishes the handshake), with a plain message.
+        let timedOut = DeadlineFlag()
+        let deadline = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(deadlineSeconds))
+            if !Task.isCancelled { timedOut.passed = true; attempt.cancel() }
+        }
+        defer { deadline.cancel() }
         let stopped = { attempt.isCancelled || AppAccess.state == .locked }
+        let late = { timedOut.passed && AppAccess.isOpen }
         do {
             let signIn: SSHSignIn = tailscale ? .tailscale : .key(try TerminalKeys.phoneKey())
             try await connector(host, Int(e.sshPortValue), user, signIn,
                                 sshHostKeyID(mac: e.id, port: Int(e.sshPortValue)), attempt)
-            if stopped() { return (false, lockedText) }
-            return (true, "Signed in to \(e.name) as \(user).")
+            if late() { return plain(false, timedOutText(host)) }
+            if stopped() { return plain(false, lockedText) }
+            return plain(true, "Signed in to \(e.name) as \(user)" + (tailscale ? "." : " with this iPhone’s key."))
         } catch let changed as HostKeyChanged {
-            return stopped() ? (false, lockedText) : (false, changed.description)
+            return stopped() ? plain(false, late() ? timedOutText(host) : lockedText) : plain(false, changed.description)
         } catch {
-            if stopped() { return (false, lockedText) }
+            if late() { return plain(false, timedOutText(host)) }
+            if stopped() { return plain(false, lockedText) }
             let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(e.sshPortValue), tailscale: tailscale)
-            return (false, p.text)
+            return (false, p.text, p, (error as? SSHSignInRefused)?.offersPassword ?? false)
         }
     }
 }
 
 // The list row (`ComputerRow`) is in Computers.swift.
+
+// MARK: - Adding this iPhone's key with one password sign-in (project notes 5)
+
+/// the owner: "doing a hand crafted fix isn't very sustainable...". The app signs in once with the account's password,
+/// adds this iPhone's key (`AuthorizedKeys.installCommand`, the Host path's idempotent command) and signs out; the
+/// computer then signs in with the key. The password goes only into that one sign-in: never stored, never logged.
+@MainActor enum TerminalKeyByPassword {
+    struct Outcome: Equatable {
+        var ok: Bool
+        var text: String
+        /// The server takes no password: the key is shown to copy (the only fallback).
+        var keyByHandOnly = false
+    }
+
+    static func install(_ e: MacEntry, user: String, password: String) async -> Outcome {
+        guard AppAccess.isOpen else { return Outcome(ok: false, text: TerminalComputerCheck.lockedText) }
+        guard let host = e.terminalAddress else { return Outcome(ok: false, text: "No address.") }
+        let line: String
+        do { line = try TerminalKeys.phoneKey().authorizedKeysLine(comment: "duo-desktop") } catch {
+            return Outcome(ok: false, text: "This iPhone has no key: \(error)")
+        }
+        let attempt = SSHConnectAttempt()
+        let watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: nil) { n in
+            if (n.object as? AppAccess.State) == .locked { attempt.cancel() }
+        }
+        defer { NotificationCenter.default.removeObserver(watch) }
+        let port = Int(e.sshPortValue)
+        let r = await KeyInstallByPassword.run(host: host, port: port, user: user, password: password, keyLine: line,
+                                               hostKeys: TerminalKeys.hostKeys,
+                                               hostKeyID: sshHostKeyID(mac: e.id, port: port), attempt: attempt)
+        if attempt.isCancelled || !AppAccess.isOpen { return Outcome(ok: false, text: TerminalComputerCheck.lockedText) }
+        return outcome(r, user: user, name: e.name)
+    }
+
+    /// The words for each outcome (pure, tests).
+    static func outcome(_ r: KeyInstallByPassword.Outcome, user: String, name: String) -> Outcome {
+        switch r {
+        case let .added(already):
+            return Outcome(ok: true, text: already ? "This iPhone’s key was already on \(name) for “\(user)”."
+                                                   : "Added this iPhone’s key on \(name) for “\(user)”.")
+        case .wrongPassword:
+            return Outcome(ok: false, text: "\(name) refused that password for “\(user)”. Check it and try again.")
+        case .passwordNotAllowed:
+            return Outcome(ok: false, text: "\(name) does not allow signing in with a password, so this iPhone’s key has to be added on it by hand: copy it below and add it to ~/.ssh/authorized_keys for “\(user)”.",
+                           keyByHandOnly: true)
+        case let .cannotWrite(detail):
+            return Outcome(ok: false, text: "Signed in, but could not write ~/.ssh/authorized_keys for “\(user)” on \(name): \(detail).")
+        case .windows:
+            return Outcome(ok: false, text: "\(name) looks like a Windows computer. Adding the key there (administrators_authorized_keys) is not handled yet.")
+        case let .failed(why):
+            return Outcome(ok: false, text: "Could not sign in to \(name) with the password: \(why)")
+        }
+    }
+}
 
 /// This iPhone's public key, shown with a Copy button.
 struct PhoneKeySection: View {
