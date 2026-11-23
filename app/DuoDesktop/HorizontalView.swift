@@ -43,10 +43,10 @@ struct HorizontalLayout: Equatable {
     var typing = false
 
     /// The wide overlay on a normal iPhone, keyboard down (project notes; the owner: "The
-    /// trackpad overlays the picture. This is the horizontal view. It doesn't matter how wide it is."). One rule:
-    /// from under the top corner buttons (the 48 pt glass circles 14 pt in, then this 8 pt gap) to the bottom
-    /// margin, and `wideAspect` times as wide as it is tall, never past the room beside the column.
-    static let wideTop: CGFloat = 14 + 48 + gap
+    /// trackpad overlays the picture. This is the horizontal view. It doesn't matter how wide it is."). Build 58
+    /// (the owner: "It should be the same vertically as the buttons."): exactly the column's height, read from the
+    /// column's own frame (top of Keyboard to bottom of Click), and `wideAspect` times as wide as it is tall, never
+    /// past the room beside the column.
     /// 3:2: wide like a Mac trackpad (a Magic Trackpad is 160 x 115 mm, about 1.4:1).
     static let wideAspect: CGFloat = 1.5
     var widePad: Bool { normalPhone && !typing }
@@ -65,11 +65,11 @@ struct HorizontalLayout: Equatable {
     }
     var trackpad: CGRect {
         if widePad {
-            let h = size.height - Self.bottom - Self.wideTop
+            let c = column, h = c.height
             let room = size.width - 2 * Self.edge - leadingInset - trailingInset - Self.columnWidth - Self.gap
             let w = min(room, (h * Self.wideAspect).rounded(.down))
             let x = side == .right ? size.width - Self.edge - trailingInset - w : Self.edge + leadingInset
-            return CGRect(x: x, y: Self.wideTop, width: w, height: h)
+            return CGRect(x: x, y: c.minY, width: w, height: h)
         }
         let w = size.width - 2 * Self.edge - leadingInset - trailingInset - Self.columnWidth - 2 * Self.gap
             - Self.keyboardWidth

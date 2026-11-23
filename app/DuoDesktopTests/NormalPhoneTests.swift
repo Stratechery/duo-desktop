@@ -291,12 +291,15 @@ final class SidewaysWidePadTests: XCTestCase {
                                                     keyboardInset: NormalPhoneLayout.ownKeyboardHeight(width: p.size.height),
                                                     keyboardGap: 0).trackpad
                     XCTAssertGreaterThanOrEqual(pad.width, upright.width, p.name)
-                    XCTAssertGreaterThanOrEqual(pad.height, upright.height, p.name)
+                    // (No height bound against the upright pad any more: build 58 makes the height the column's.)
                     XCTAssertGreaterThanOrEqual(pad.width / p.ptPerMM, duoPad.width / Self.duoPtPerMM, p.name)
-                    XCTAssertGreaterThanOrEqual(pad.height / p.ptPerMM, duoPad.height / Self.duoPtPerMM, p.name)
-                    // The height the screen allows: under the top buttons to the bottom margin.
-                    XCTAssertEqual(pad.minY, HorizontalLayout.wideTop, p.name)
-                    XCTAssertEqual(pad.maxY, p.size.height - HorizontalLayout.bottom, p.name)
+                    // Build 58 (the owner: "It should be the same vertically as the buttons."): top level with the
+                    // top of Keyboard, bottom level with the bottom of Click, exactly the column's height; 3:2.
+                    XCTAssertEqual(pad.minY, column.minY, p.name)
+                    XCTAssertEqual(pad.maxY, column.maxY, p.name)
+                    XCTAssertEqual(pad.minY, l.frame(.keyboard).minY, p.name)
+                    XCTAssertEqual(pad.maxY, l.frame(.click).maxY, p.name)
+                    XCTAssertEqual(pad.width, (pad.height * HorizontalLayout.wideAspect).rounded(.down), p.name)
                     // On its side at the screen's edge (clear of the island), never over the column.
                     if side == .right {
                         XCTAssertEqual(pad.maxX, p.size.width - HorizontalLayout.edge - trail, p.name)
@@ -345,7 +348,7 @@ final class SidewaysWidePadSnapshotTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DUO_SNAPSHOT_DIR to render")
         }
         let mac = try XCTUnwrap(UIImage(contentsOfFile: dir + "/" + (ProcessInfo.processInfo.environment["DUO_SNAPSHOT_MAC"] ?? "mac-1920x1200.png")))
-        let out = dir + "/normal-phone/sideways-pad/"
+        let out = dir + "/normal-phone/sideways-pad-58/"
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
         let phones: [(String, CGSize, CGFloat, CGFloat, Bool)] = [   // name, size, island inset, corner radius, island
             ("18pro", CGSize(width: 874, height: 402), 62, 55, true),
