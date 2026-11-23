@@ -206,6 +206,9 @@ One code base, four versions. You choose when you make the Xcode project:
 | **JetKVM** | `DUO_JETKVM=YES xcodegen generate` |
 | **Both** | `DUO_TERMINAL=YES DUO_JETKVM=YES xcodegen generate` |
 
+`app/scripts/test.sh` compiles the plain, Terminal-only and JetKVM-only versions and then runs the unit tests on the
+full version; it fails if any version does not compile.
+
 The steps (Glass Act for the app, your bundle id and team, the Simulator, your phone, TestFlight) are in
 [Build the iPhone app](docs/INSTALL.md#build-the-iphone-app).
 

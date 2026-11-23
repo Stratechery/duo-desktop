@@ -408,6 +408,15 @@ struct SessionScreen: View {
         }
     }
 
+    /// Normal iPhone, Terminal view: how far the panel moves down, so it starts where the terminal ends. 0 otherwise,
+    /// and always 0 in a version built without the Terminal switch.
+    private func terminalPanelDrop(_ phone: NormalPhoneLayout) -> CGFloat {
+        #if DUO_TERMINAL
+        if view.isTerminal { return phone.terminalPanelTop(keysRow: TerminalKeysBand.height) - phone.picture.height }
+        #endif
+        return 0
+    }
+
     /// Terminal view: the band's height the terminal takes, so the one row of keys sits on the keyboard.
     private func terminalExtra(_ upright: SessionLayout.Upright) -> CGFloat {
         #if DUO_TERMINAL
@@ -551,9 +560,7 @@ struct SessionScreen: View {
                             }
                             // Terminal: the panel starts where the terminal ends (it reaches past the picture's
                             // bottom edge), so it never covers the terminal's last rows.
-                            .padding(.top, view.isTerminal
-                                     ? phone.terminalPanelTop(keysRow: TerminalKeysBand.height) - phone.picture.height
-                                     : 0)
+                            .padding(.top, terminalPanelDrop(phone))
                             .zIndex(1)
                         Spacer(minLength: 0)
                     } else if !wide {

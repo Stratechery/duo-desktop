@@ -410,6 +410,17 @@ never been opened and unfolded on screen has none. Open the simulator in the Sim
 again. (Seen here on a newly made simulator; the same tests pass on a simulator in daily use. The unfold step
 itself was not tried here.)
 
+To check every version at once, run the project's test script from `app/`:
+
+```sh
+scripts/test.sh
+```
+
+It compiles the app plain, Terminal only and JetKVM only (and fails if any of them does not compile), then makes
+the full version and runs the unit tests on the iPhone Duo simulator. `scripts/test.sh --switches-only` does only
+the compile check (no simulator needed). Logs go to `app/build/test-run/`. You should see `switch check passed`
+and, after the tests, `test run passed`.
+
 In the Simulator (only there), the Mac list has a **Test host** entry. It connects to Glass Act's stand-in host on
 the same Mac, port 4533: `glassact-testhost --port 4533 --sign-in-password duotest`, built from `vendor/glassact`
 (see the comments in `app/DuoDesktopUITests`). **(not run here)** A build for a phone starts with an empty list.
