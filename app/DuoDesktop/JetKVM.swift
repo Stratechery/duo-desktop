@@ -97,48 +97,50 @@ final class KeychainJetKVMPasswords: JetKVMPasswordStore {
     }
 }
 
+/// The JetKVM section of a computer's ⓘ page (shown once JetKVM is added; milestone 2 took its switch away: the
+/// page's Add JetKVM… row and Remove JetKVM do that now).
 struct JetKVMSettingsSection: View {
     let store: MacStore
     let id: String
     @State private var password = ""
     @State private var hasPassword = false
+    @State private var address = ""
 
     var body: some View {
-        if let entry = store.entry(id) {
+        if store.entry(id) != nil {
             Section {
-                Toggle("JetKVM", isOn: Binding(get: { entry.jetkvmOn }, set: { on in
-                    JetKVMSettings.setOn(on, mac: id, store: store)
-                    if !on { password = ""; hasPassword = false }
-                }))
-                .accessibilityIdentifier("settingsJetKVM")
-                if entry.jetkvmOn {
-                    LabeledContent("Address") {
-                        TextField("Not set", text: Binding(get: { store.entry(id)?.jetkvmAddress ?? "" }, set: { v in
-                            let t = v.trimmingCharacters(in: .whitespaces)
-                            store.update(id) { $0.jetkvmAddress = t.isEmpty ? nil : t }
-                        }))
-                        .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .accessibilityIdentifier("settingsJetKVMAddress")
-                    }
-                    NavigationLink("JetKVM Log") { JetKVMLogView(link: JetKVMLink.for(mac: id)) }
-                        .accessibilityIdentifier("settingsJetKVMLog")
-                    LabeledContent("Password") {
-                        SecureField(hasPassword ? "Saved" : "Not set", text: $password)
-                            .multilineTextAlignment(.trailing)
-                            .textContentType(.password)
-                            .onSubmit(savePassword)
-                            .accessibilityIdentifier("settingsJetKVMPassword")
-                    }
+                LabeledContent("Address") {
+                    // Saved as typed, except blank: a JetKVM-only computer would drop out of the list (Remove
+                    // JetKVM does that).
+                    TextField("Required", text: Binding(get: { address }, set: { v in
+                        address = v
+                        let t = v.trimmingCharacters(in: .whitespaces)
+                        if !t.isEmpty { store.update(id) { $0.jetkvmAddress = t } }
+                    }))
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .accessibilityIdentifier("settingsJetKVMAddress")
                 }
+                LabeledContent("Password") {
+                    SecureField(hasPassword ? "Saved" : "Not set", text: $password)
+                        .multilineTextAlignment(.trailing)
+                        .textContentType(.password)
+                        .onSubmit(savePassword)
+                        .accessibilityIdentifier("settingsJetKVMPassword")
+                }
+                NavigationLink("JetKVM Log") { JetKVMLogView(link: JetKVMLink.for(mac: id)) }
+                    .accessibilityIdentifier("settingsJetKVMLog")
+            } header: {
+                Text("JetKVM")
             } footer: {
-                Text(entry.jetkvmOn
-                     ? "Adds JetKVM to the view switch for this Mac. The password is kept in this iPhone’s Keychain only. Opening the JetKVM view takes over from anyone else viewing this JetKVM."
-                     : "Adds JetKVM to the view switch for this Mac.")
+                Text("The password is kept in this iPhone’s Keychain only. Opening the JetKVM view takes over from anyone else viewing this JetKVM.")
             }
-            .onAppear { hasPassword = JetKVMSettings.passwords.password(mac: id) != nil }
+            .onAppear {
+                hasPassword = JetKVMSettings.passwords.password(mac: id) != nil
+                address = store.entry(id)?.jetkvmAddress ?? ""
+            }
             .onDisappear(perform: savePassword)
         }
     }
@@ -454,7 +456,7 @@ final class JetKVMLink {
         guard AppAccess.isOpen else { pending = .some(entry); return }
         pending = nil
         lastEntry = .some(entry)
-        guard let entry, let host = entry.jetkvmHost else { status = .notSet("Set this Mac’s JetKVM address in its settings."); return }
+        guard let entry, let host = entry.jetkvmHost else { status = .notSet("Set this computer’s JetKVM address in its settings (ⓘ)."); return }
         passwordReads += 1
         logName = Self.logName(host: host)
         let s = JetKVMSession(host: host, password: readPassword(entry.id))
@@ -772,7 +774,7 @@ struct JetKVMPanel: View {
         case .step(let s): "\(s)…"
         case .retrying(let n, let of): "Trying again (\(n) of \(of))…"
         case .failed(let why): "Could not connect to the JetKVM after \(JetKVMLink.attempts) tries.\n\(why)"
-        case .wrongPassword: "The JetKVM refused the password. Check it in this Mac’s settings."
+        case .wrongPassword: "The JetKVM refused the password. Check it in this computer’s settings (ⓘ)."
         case .unsupportedFirmware: "This JetKVM’s firmware is not supported by this version of Duo Desktop."
         case .takenOver: "Taken over by another viewer"
         case .lost(let why): "Lost the connection to the JetKVM.\n\(why)"

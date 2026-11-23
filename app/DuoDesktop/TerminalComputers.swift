@@ -178,117 +178,6 @@ enum TerminalComputerCheck {
 
 // The list row (`ComputerRow`) is in Computers.swift.
 
-// MARK: - Add Terminal Computer (a form sheet, HIG Sheets)
-
-struct AddTerminalComputerSheet: View {
-    let store: MacStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = SimulatorSwitches.addTerminalFields?.name ?? ""
-    @State private var address = SimulatorSwitches.addTerminalFields?.address ?? ""
-    @State private var port = "22"
-    @State private var user = SimulatorSwitches.addTerminalFields?.user ?? ""
-    @State private var signIn: TerminalSignIn = .tailscale
-    @State private var opens: TerminalOpens = .tmux
-    @State private var problem: String?
-    /// After Add: the entry is saved, and the one SSH check runs and reports here (HIG: validate in place).
-    @State private var added: MacEntry?
-    @State private var checkResult: (ok: Bool, text: String)?
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Name") {
-                    TextField("Lab Server", text: $name).accessibilityIdentifier("addTerminalName")
-                }
-                Section {
-                    TextField("my-server", text: $address)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        .accessibilityIdentifier("addTerminalAddress")
-                    LabeledContent("Port") {
-                        TextField("22", text: $port).keyboardType(.numberPad).multilineTextAlignment(.trailing)
-                            .accessibilityIdentifier("addTerminalPort")
-                    }
-                } header: {
-                    Text("Address")
-                } footer: {
-                    Text("A Tailscale name (my-server) or a home name (server.local).")
-                }
-                Section {
-                    LabeledContent("User Name") {
-                        TextField("Required", text: $user)
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().textContentType(.username)
-                            .accessibilityIdentifier("addTerminalUser")
-                    }
-                    Picker("Sign In With", selection: $signIn) {
-                        ForEach(TerminalSignIn.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("addTerminalSignIn")
-                    Picker("Opens", selection: $opens) {
-                        ForEach(TerminalOpens.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("addTerminalOpens")
-                } header: {
-                    Text("Sign In")
-                } footer: {
-                    Text("Tailscale: for a computer with Tailscale SSH on; nothing to install. This iPhone’s Key: the computer must list the key below. tmux keeps the session when the link drops; Login Shell is whatever the computer starts.")
-                }
-                if signIn == .phoneKey, let k = try? TerminalKeys.phoneKey() {
-                    PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
-                }
-                if let problem {
-                    Section { Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
-                }
-                if added != nil {
-                    Section("Check") {
-                        if let r = checkResult {
-                            Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                                .foregroundStyle(r.ok ? Color.green : Color.red)
-                                .accessibilityIdentifier("addTerminalCheck")
-                            if !r.ok { Text("Saved anyway. Fix it in the computer’s settings (ⓘ).").foregroundStyle(.secondary) }
-                        } else {
-                            HStack { ProgressView(); Text("Checking the sign-in…").foregroundStyle(.secondary) }
-                        }
-                    }
-                }
-            }
-            .disabled(added != nil && checkResult == nil)
-            .navigationTitle("Add Terminal Computer")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if added == nil {
-                    ToolbarItem(placement: .cancellationAction) { Button(role: .cancel) { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(role: .confirm) { add() } label: { Text("Add").foregroundStyle(.white) }
-                            .accessibilityIdentifier("addTerminalConfirm")
-                    }
-                } else {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }.disabled(checkResult == nil)
-                            .accessibilityIdentifier("addTerminalDone")
-                    }
-                }
-            }
-        }
-    }
-
-    private func add() {
-        if let p = TerminalComputerForm.problem(name: name, address: address, user: user, port: port) {
-            problem = p; return
-        }
-        problem = nil
-        let e = MacEntry.terminalComputer(name: name, address: address, port: UInt16(port.trimmingCharacters(in: .whitespaces)) ?? 22,
-                                          user: user, signIn: signIn, opens: opens)
-        store.add(e)
-        added = e
-        Task {
-            checkResult = await TerminalComputerCheck.run(e)
-        }
-    }
-}
-
 /// This iPhone's public key, shown with a Copy button.
 struct PhoneKeySection: View {
     let line: String
@@ -301,94 +190,85 @@ struct PhoneKeySection: View {
     }
 }
 
-// MARK: - Settings (from ⓘ)
+// MARK: - The Terminal section of a computer without Screen Sharing (its ⓘ page)
 
-struct TerminalComputerSettingsScreen: View {
+/// A Terminal-only (or Terminal and JetKVM) computer's Terminal: its address, port, user name, sign-in and Opens,
+/// the phone's key, and the computer's SSH key. Edits go straight into the list.
+struct TerminalComputerSection: View {
     let store: MacStore
     let id: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var removing: MacEntry?
     @State private var keyForgotten = false
+    @State private var address = ""
 
     var body: some View {
         if let e = store.entry(id) {
-            Form {
-                Section("Name") {
-                    TextField("Name", text: bind(e.name) { v in store.update(id) { $0.name = v } })
+            Section {
+                // Saved as typed, except blank (the Terminal would have nowhere to go; Remove Terminal does that).
+                TextField("my-server", text: Binding(get: { address }, set: { v in
+                    address = v
+                    if !v.trimmingCharacters(in: .whitespaces).isEmpty { store.update(id) { $0.setTerminalAddress(v) } }
+                }))
+                .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                .accessibilityIdentifier("settingsTerminalAddress")
+                LabeledContent("Port") {
+                    TextField("22", text: bind(String(e.sshPortValue)) { v in
+                        if let p = UInt16(v), p > 0 { store.update(id) { $0.sshPort = p } }
+                    })
+                    .keyboardType(.numberPad).multilineTextAlignment(.trailing)
                 }
-                Section("Address") {
-                    TextField("my-server", text: bind(e.terminalAddress ?? "") { v in store.update(id) { $0.setTerminalAddress(v) } })
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                    LabeledContent("Port") {
-                        TextField("22", text: bind(String(e.sshPortValue)) { v in
-                            if let p = UInt16(v), p > 0 { store.update(id) { $0.sshPort = p } }
-                        })
-                        .keyboardType(.numberPad).multilineTextAlignment(.trailing)
-                    }
+            } header: {
+                Text("Terminal")
+            }
+            .onAppear { address = e.terminalAddress ?? "" }
+            Section {
+                LabeledContent("User Name") {
+                    TextField("Required", text: bind(e.sshUser ?? "") { v in
+                        let t = v.trimmingCharacters(in: .whitespaces)
+                        store.update(id) { $0.sshUser = t.isEmpty ? nil : t }
+                    })
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                Section {
-                    LabeledContent("User Name") {
-                        TextField("Required", text: bind(e.sshUser ?? "") { v in
-                            let t = v.trimmingCharacters(in: .whitespaces)
-                            store.update(id) { $0.sshUser = t.isEmpty ? nil : t }
-                        })
-                        .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    }
-                    Picker("Sign In With", selection: Binding(get: { e.signIn }, set: { v in store.update(id) { $0.terminalSignIn = v } })) {
-                        ForEach(TerminalSignIn.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    Picker("Opens", selection: Binding(get: { e.opens }, set: { v in store.update(id) { $0.terminalOpens = v } })) {
-                        ForEach(TerminalOpens.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    if let p = TerminalComputerProblems.shared.problems[id] {
-                        Label(p.text, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
-                            .accessibilityIdentifier("terminalComputerProblem")
-                    }
-                } header: {
-                    Text("Sign In")
-                } footer: {
-                    if e.opens == .loginShell {
-                        Text("A dropped link ends a login shell; the app reconnects to a fresh prompt.")
-                    }
+                Picker("Sign In With", selection: Binding(get: { e.signIn }, set: { v in store.update(id) { $0.terminalSignIn = v } })) {
+                    ForEach(TerminalSignIn.allCases) { Text($0.label).tag($0) }
                 }
-                if e.signIn == .phoneKey, let k = try? TerminalKeys.phoneKey() {
-                    PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
+                .pickerStyle(.menu)
+                Picker("Opens", selection: Binding(get: { e.opens }, set: { v in store.update(id) { $0.terminalOpens = v } })) {
+                    ForEach(TerminalOpens.allCases) { Text($0.label).tag($0) }
                 }
-                Section {
-                    let stored = TerminalKeys.hostKeys.hostKey(for: sshHostKeyID(mac: id, port: Int(e.sshPortValue))) != nil && !keyForgotten
-                    LabeledContent("Computer’s Key", value: stored ? "Kept from the first sign-in" : "Not yet seen")
-                    if stored {
-                        Button("Forget Computer’s Key", role: .destructive) {
-                            UserDefaults.standard.removeObject(forKey: "terminalHostKey.\(sshHostKeyID(mac: id, port: Int(e.sshPortValue)))")
-                            keyForgotten = true
-                        }
-                    }
-                } footer: {
-                    Text("The next sign-in keeps whatever key the computer offers. Forget it only if you know why it changed.")
+                .pickerStyle(.menu)
+                if let p = TerminalComputerProblems.shared.problems[id] {
+                    Label(p.text, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                        .accessibilityIdentifier("terminalComputerProblem")
                 }
-                Section {
-                    Button("Remove Computer", role: .destructive) { removing = e }
+            } header: {
+                Text("Sign In")
+            } footer: {
+                if e.opens == .loginShell {
+                    Text("A dropped link ends a login shell; the app reconnects to a fresh prompt.")
                 }
             }
-            .navigationTitle(e.name)
-            .modifier(RemoveMacAlert(mac: $removing) { store.remove($0.id); dismiss() })
+            if e.signIn == .phoneKey, let k = try? TerminalKeys.phoneKey() {
+                PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
+            }
+            Section {
+                let stored = TerminalKeys.hostKeys.hostKey(for: sshHostKeyID(mac: id, port: Int(e.sshPortValue))) != nil && !keyForgotten
+                LabeledContent("Computer’s Key", value: stored ? "Kept from the first sign-in" : "Not yet seen")
+                if stored {
+                    Button("Forget Computer’s Key", role: .destructive) {
+                        UserDefaults.standard.removeObject(forKey: "terminalHostKey.\(sshHostKeyID(mac: id, port: Int(e.sshPortValue)))")
+                        keyForgotten = true
+                    }
+                }
+            } footer: {
+                Text("The next sign-in keeps whatever key the computer offers. Forget it only if you know why it changed.")
+            }
         }
     }
 
     private func bind(_ value: String, _ set: @escaping (String) -> Void) -> Binding<String> {
         Binding(get: { value }, set: set)
     }
-}
-
-// MARK: - Which terminal-only computer is open
-
-@MainActor @Observable final class TerminalComputerNav {
-    static let shared = TerminalComputerNav()
-    /// The open computer's id (nil: the list).
-    var openID: String?
 }
 
 // MARK: - The session screen

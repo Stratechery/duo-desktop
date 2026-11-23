@@ -233,6 +233,8 @@ struct HomeAddressPicker: View {
             store.update(id) { $0.home = a.host; $0.lastAddress = nil }
             saved()
             note = "Saved. No Glass Act Host answered at \(a.host) just now."
+        case .locked:
+            note = AddressCheck.lockedText
         case .idle, .checking:
             break
         }

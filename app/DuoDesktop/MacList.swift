@@ -40,8 +40,10 @@ enum EntryKind: String, Codable, Hashable {
 }
 
 /// One way in to a computer (project notes, one computer with any connection), in the fallback order.
-enum WayIn: String, Codable, CaseIterable, Hashable {
+enum WayIn: String, Codable, CaseIterable, Hashable, Identifiable {
     case screenSharing, terminal, jetkvm
+
+    var id: String { rawValue }
 
     var label: String {
         switch self {
@@ -197,6 +199,48 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// The list row's second line: what it has, in order ("Screen Sharing · Terminal · JetKVM").
     var waysLine: String { waysInThisBuild.map(\.label).joined(separator: " · ") }
 
+    /// The ways in that are set up, in any build (the JetKVM counts once its switch is on, address or not). The ⓘ
+    /// page shows a section for each; removing the last of these removes the computer (milestone 2).
+    var setUpWays: [WayIn] {
+        WayIn.allCases.filter {
+            switch $0 {
+            case .screenSharing: hasScreenSharing
+            case .terminal: hasTerminal
+            case .jetkvm: jetkvm ?? false
+            }
+        }
+    }
+
+    /// Milestone 2's minimum opening rule for a computer without Screen Sharing: the first way in this build has
+    /// after Screen Sharing (Terminal, then JetKVM). nil: it has Screen Sharing (a Glass Act session), or nothing
+    /// this build can open. Opens In and the full rules are milestone 3.
+    var opensOnItsOwn: WayIn? {
+        guard !hasScreenSharing else { return nil }
+        return waysInThisBuild.first { $0 != .screenSharing }
+    }
+
+    /// This entry with one way in taken away (the ⓘ page's Remove). Screen Sharing takes its key, last address,
+    /// saved view and Unlock Automatically with it (the unlock password itself is deleted by `MacStore.removeWay`);
+    /// the addresses stay, since the Terminal shares them. Terminal and JetKVM keep their typed fields, so adding
+    /// them back starts filled in (the JetKVM's password is deleted by `MacStore.removeWay`).
+    func removing(_ way: WayIn) -> MacEntry {
+        var e = self
+        switch way {
+        case .screenSharing:
+            e.screenSharing = false
+            e.key = nil
+            e.lastAddress = nil
+            e.view = nil
+            e.autoUnlock = nil
+        case .terminal:
+            e.terminal = false
+        case .jetkvm:
+            e.jetkvm = false
+        }
+        e.kind = e.hasScreenSharing ? nil : .terminal
+        return e
+    }
+
     /// The Terminal's SSH port.
     var sshPortValue: UInt16 { sshPort ?? 22 }
 
@@ -227,7 +271,7 @@ struct MacEntry: Identifiable, Hashable, Codable {
 }
 
 /// The list's own file in the app's storage (plan §3). Not synchronised anywhere; the OS backup follows the
-/// phone's settings (reviewer wording correction).
+/// phone's settings (Reviewer wording correction).
 @MainActor @Observable
 final class MacStore {
     /// A fresh install starts with no Macs (the owner 2026-11-21: "There absolutely should not be any hard coding of
@@ -316,6 +360,31 @@ final class MacStore {
         #endif
     }
 
+    /// Takes one way in away from a computer (the ⓘ page). The last way in removes the computer itself (the page
+    /// asks first). Returns true when the computer was removed.
+    @discardableResult
+    func removeWay(_ way: WayIn, from id: String) -> Bool {
+        guard let e = entry(id), e.setUpWays.contains(way) else { return false }
+        if e.setUpWays == [way] {
+            remove(id)
+            return true
+        }
+        switch way {
+        case .screenSharing:
+            // As removing the Mac did (project notes): its saved password goes with its Screen Sharing.
+            passwords.delete(macID: id)
+            AutoUnlockFailures.set(id, failed: false, in: defaults)
+        case .jetkvm:
+            #if DUO_JETKVM
+            JetKVMSettings.macRemoved(id)
+            #endif
+        case .terminal:
+            break
+        }
+        update(id) { $0 = $0.removing(way) }
+        return false
+    }
+
     private func save() {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -339,7 +408,7 @@ final class MacList {
         case notReachable
         /// An address answered with a different Mac key than the entry's: refused (plan §2).
         case wrongMac
-        /// The Simulator never dials the real Macs (overnight builds keep off real Macs).
+        /// The Simulator never dials the real Macs (overnight builds keep off the real Macs).
         case notChecked
 
         var label: String {

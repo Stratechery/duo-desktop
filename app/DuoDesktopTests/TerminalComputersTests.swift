@@ -142,7 +142,12 @@ final class TerminalComputersTests: XCTestCase {
     func testListWords() {
         XCTAssertEqual(ListWords.title, "Computers")
         XCTAssertEqual(ListWords.footer, "Tap a computer to connect. Tap ⓘ for its settings.")
+        #if DUO_JETKVM
+        XCTAssertEqual(ListWords.emptyDescription,
+                       "Add a Mac running Glass Act Host, a computer you reach over SSH, or a computer with a JetKVM.")
+        #else
         XCTAssertEqual(ListWords.emptyDescription, "Add a Mac running Glass Act Host, or a computer you reach over SSH.")
+        #endif
     }
 
     /// Claim (Terminal review): the Add check stops when the app locks. The pending connect's attempt is

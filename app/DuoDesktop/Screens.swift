@@ -10,8 +10,7 @@ struct MacListScreen: View {
     let list: MacList
     let lock: AppLock
     @State private var showAbout = SimulatorSwitches.showAbout
-    @State private var showAdd = SimulatorSwitches.showAddMac
-    @State private var showAddTerminal = SimulatorSwitches.showAddTerminal
+    @State private var showAdd = SimulatorSwitches.addComputerWay != nil
     @State private var settingsFor: String? = SimulatorSwitches.showMacSettings
     @State private var removing: MacEntry?
     @State private var confirmLockOff = false
@@ -142,22 +141,10 @@ struct MacListScreen: View {
                 }
             }
             .sheet(isPresented: $showAbout) { AboutView() }
-            .sheet(isPresented: $showAdd, onDismiss: probe) { AddMacSheet(store: list.store, identity: model.identity) }
-            #if DUO_TERMINAL
-            .sheet(isPresented: $showAddTerminal, onDismiss: probe) { AddTerminalComputerSheet(store: list.store) }
-            #endif
+            .sheet(isPresented: $showAdd, onDismiss: probe) { AddComputerSheet(store: list.store, identity: model.identity) }
             .navigationDestination(item: $settingsFor) { id in
-                #if DUO_TERMINAL
-                if list.store.entry(id)?.hasScreenSharing == false {
-                    TerminalComputerSettingsScreen(store: list.store, id: id)
-                } else {
-                    MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
-                                      identity: model.identity)
-                }
-                #else
-                MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
-                                  identity: model.identity)
-                #endif
+                ComputerSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
+                                       identity: model.identity)
             }
             .modifier(RemoveMacAlert(mac: $removing) { list.store.remove($0.id) })
             .alert(UnlockMethod.current.turnOffAlertTitle, isPresented: $confirmLockOff) {
@@ -212,40 +199,26 @@ struct MacListScreen: View {
         ComputerReach.shared.probeAll(list.store.withoutScreenSharing)
     }
 
-    /// Milestone 1 opens a computer without Screen Sharing only in its Terminal, as build 59 did (a JetKVM-only
-    /// computer cannot be added yet; milestone 2 adds it and opens it).
+    /// A computer without Screen Sharing opens on its own screen: its Terminal, else its JetKVM view (milestone 2's
+    /// minimum; Opens In and the full opening rules are milestone 3).
     static func opensWithoutScreenSharing(_ e: MacEntry) -> Bool {
-        e.waysInThisBuild.contains(.terminal)
+        e.opensOnItsOwn != nil
     }
 
     private func openWithoutScreenSharing(_ e: MacEntry) {
-        #if DUO_TERMINAL
-        if Self.opensWithoutScreenSharing(e) { TerminalComputerNav.shared.openID = e.id }
-        #endif
+        ComputerNav.shared.open(e)
     }
 
-    /// ＋: a pull-down menu, Mac or Terminal Computer (HIG Pull-down buttons: the button names the action, the menu
-    /// picks the kind). A build without the Terminal has only Macs, so ＋ opens Add Mac directly, as before.
+    /// ＋: Add Computer, one sheet (project notes, one computer with any connection M2: the Mac / Terminal Computer menu is gone;
+    /// the sheet's Start With chooses the way in). HIG Toolbars: a toolbar's ＋ adds an item.
     @ViewBuilder private func addMenu(prominent: Bool) -> some View {
-        #if DUO_TERMINAL
-        Menu {
-            Button("Mac", systemImage: "desktopcomputer") { showAdd = true }
-                .accessibilityIdentifier("addKind.mac")
-            Button("Terminal Computer", systemImage: "terminal") { showAddTerminal = true }
-                .accessibilityIdentifier("addKind.terminal")
-        } label: {
-            if prominent { Text("Add") } else { Label("Add", systemImage: "plus") }
-        }
-        .modifier(ProminentIf(on: prominent))
-        .accessibilityIdentifier("addMac")
-        #else
         if prominent {
-            Button("Add Mac") { showAdd = true }.buttonStyle(.borderedProminent)
+            Button("Add Computer") { showAdd = true }.buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("addComputer")
         } else {
-            Button("Add Mac", systemImage: "plus") { showAdd = true }
+            Button("Add Computer", systemImage: "plus") { showAdd = true }
                 .accessibilityIdentifier("addMac")
         }
-        #endif
     }
 
 }
@@ -253,19 +226,15 @@ struct MacListScreen: View {
 /// The list's words that cover both kinds (project notes, terminal-only computers, §1). Mac-only screens keep "Mac".
 enum ListWords {
     static let title = "Computers"
-    #if DUO_TERMINAL
-    static let emptyDescription = "Add a Mac running Glass Act Host, or a computer you reach over SSH."
-    #else
-    static let emptyDescription = "Add a Mac running Glass Act Host."
-    #endif
-    static let footer = "Tap a computer to connect. Tap ⓘ for its settings."
-}
-
-private struct ProminentIf: ViewModifier {
-    let on: Bool
-    func body(content: Content) -> some View {
-        if on { content.buttonStyle(.borderedProminent) } else { content }
+    /// What can be added in this build (Screen Sharing always; Terminal and JetKVM with their switches).
+    static var emptyDescription: String {
+        var ways = ["a Mac running Glass Act Host"]
+        if WayIn.inThisBuild.contains(.terminal) { ways.append("a computer you reach over SSH") }
+        if WayIn.inThisBuild.contains(.jetkvm) { ways.append("a computer with a JetKVM") }
+        let list = ways.count > 1 ? ways.dropLast().joined(separator: ", ") + ", or " + ways.last! : ways[0]
+        return "Add \(list)."
     }
+    static let footer = "Tap a computer to connect. Tap ⓘ for its settings."
 }
 
 /// One Mac in the list (plan §5.1): name, which way it answered, its state, and ⓘ for its settings (the system's

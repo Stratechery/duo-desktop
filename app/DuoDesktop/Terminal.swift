@@ -403,7 +403,7 @@ struct TerminalPanel: View {
             .sheet(isPresented: $showSettings, onDismiss: { session.retry(entry.flatMap { store.entry($0.id) }, store: store) }) {
                 if let entry {
                     NavigationStack {
-                        MacSettingsScreen(store: store, id: entry.id, chosen: nil)
+                        ComputerSettingsScreen(store: store, id: entry.id, chosen: nil)
                             .toolbar {
                                 ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } }
                             }
@@ -484,7 +484,8 @@ struct TerminalKeysBand: View {
     }
 }
 
-/// The Terminal section of a Mac's settings: the switch (off by default) and, when on, the SSH user name.
+/// The Terminal section of a Mac's ⓘ page (a computer with Screen Sharing; shown once Terminal is added. Milestone 2
+/// took its switch away: the page's Add Terminal… row and Remove Terminal do that now).
 struct TerminalSettingsSection: View {
     let store: MacStore
     let id: String
@@ -493,12 +494,6 @@ struct TerminalSettingsSection: View {
     var body: some View {
         if let entry = store.entry(id) {
             Section {
-                Toggle("Terminal", isOn: Binding(get: { entry.terminalOn }, set: { on in
-                    store.update(id) { $0.terminalOn = on }
-                    // Turning it on asks this Mac's Host to add the phone's key (no password), when connected.
-                    if on { TerminalKeyByHost.ask(macID: id, store: store) { _ in } }
-                }))
-                    .accessibilityIdentifier("settingsTerminal")
                 if entry.terminalOn {
                     let hostUser = TerminalKeyByHost.states.state(for: id)?.user ?? ""
                     LabeledContent("SSH User Name") {
@@ -531,8 +526,10 @@ struct TerminalSettingsSection: View {
                             .accessibilityIdentifier("settingsTerminalProblem")
                     }
                 }
+            } header: {
+                Text("Terminal")
             } footer: {
-                Text("Adds Terminal to the view switch for this Mac. Terminal signs in over SSH as the user name above.")
+                Text("Terminal is in the view switch for this Mac. It signs in over SSH as the user name above.")
             }
             if entry.terminalOn {
                 Section {

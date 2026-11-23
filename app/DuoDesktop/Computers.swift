@@ -147,3 +147,27 @@ struct ComputerRow: View {
         }
     }
 }
+
+// MARK: - Which computer is open on its own screen (no Glass Act session)
+
+/// The computer open on its own screen, and in which way in (milestone 2: a Terminal-only computer in its terminal,
+/// a JetKVM-only computer in its JetKVM view). Outside the build switches, so every build reads it; a way in the
+/// build cannot show is never set here.
+@MainActor @Observable final class ComputerNav {
+    static let shared = ComputerNav()
+    /// The open computer's id (nil: the list).
+    private(set) var openID: String?
+    private(set) var way: WayIn?
+
+    /// Opens the computer in its own way in (`MacEntry.opensOnItsOwn`); nothing when it has none in this build.
+    func open(_ e: MacEntry) {
+        guard let w = e.opensOnItsOwn else { return }
+        way = w
+        openID = e.id
+    }
+
+    func close() {
+        openID = nil
+        way = nil
+    }
+}

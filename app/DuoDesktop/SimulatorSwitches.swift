@@ -80,16 +80,32 @@ enum SimulatorSwitches {
         return CGFloat(v)
     }
 
-    /// `--add-mac`: the Mac list opens with Add Mac showing, for a screenshot. `--add-mac-address A`: types A.
-    static let showAddMac = args.contains("--add-mac")
-    /// `--add-terminal "Name|address|user"`: open Add Terminal Computer with these made-up fields (pictures).
-    static var addTerminalFields: (name: String, address: String, user: String)? {
-        guard let i = args.firstIndex(of: "--add-terminal"), i + 1 < args.count else { return nil }
-        let p = args[i + 1].split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        return p.count == 3 ? (p[0], p[1], p[2]) : nil
+    /// `--add-computer WAY` (`screenSharing`, `terminal`, `jetkvm`): the list opens with Add Computer showing, Start
+    /// With on WAY (pictures). The older `--add-mac` (Screen Sharing) and `--add-terminal "Name|address|user"`
+    /// (Terminal, with those fields) still work. `--add-mac-address A` types A in Screen Sharing's address.
+    static var addComputerWay: WayIn? {
+        if let i = args.firstIndex(of: "--add-computer"), i + 1 < args.count { return WayIn(rawValue: args[i + 1]) }
+        if args.contains("--add-mac") { return .screenSharing }
+        if args.contains("--add-terminal") { return .terminal }
+        return nil
     }
-    static var showAddTerminal: Bool { addTerminalFields != nil }
-    /// `--open-computer NAME`: open that terminal-only computer at launch (the M2 pictures and live proof).
+    /// `--add-fields "Name|address|user|jetkvm address"` (or `--add-terminal "Name|address|user"`): made-up fields
+    /// for the Add sheet's pictures.
+    static var addFields: (name: String, address: String, user: String, kvmAddress: String)? {
+        guard let i = args.firstIndex(where: { $0 == "--add-fields" || $0 == "--add-terminal" }), i + 1 < args.count
+        else { return nil }
+        let p = args[i + 1].split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard p.count >= 3 else { return nil }
+        return (p[0], p[1], p[2], p.count > 3 ? p[3] : "")
+    }
+    /// `--add-press`: Add is pressed 1.5 s after the sheet opens (pictures of the in-place result).
+    static let addPress = args.contains("--add-press")
+    /// `--add-way WAY` with `--mac-settings NAME`: that computer's ⓘ page opens with Add WAY showing.
+    static var addWayOnSettings: WayIn? {
+        guard let i = args.firstIndex(of: "--add-way"), i + 1 < args.count else { return nil }
+        return WayIn(rawValue: args[i + 1])
+    }
+    /// `--open-computer NAME`: open that computer without Screen Sharing at launch (its terminal or JetKVM view).
     static var openComputer: String? {
         guard let i = args.firstIndex(of: "--open-computer"), i + 1 < args.count else { return nil }
         return args[i + 1]
@@ -160,7 +176,7 @@ enum SimulatorSwitches {
     /// `--mac-settings NAME`: the Mac list opens on that Mac's settings, for a screenshot.
     @MainActor static var showMacSettings: String? {
         guard let i = args.firstIndex(of: "--mac-settings"), i + 1 < args.count else { return nil }
-        return MacStore.shared.macs.first { $0.name == args[i + 1] }?.id
+        return MacStore.shared.entries.first { $0.name == args[i + 1] }?.id
     }
 
     /// `DUO_TEST_SIGNIN=user:password` (set with SIMCTL_CHILD_): signs in to the test host without typing.
@@ -227,12 +243,13 @@ enum SimulatorSwitches {
     }
     #else
     @MainActor static var screenTour: ((SessionModel) -> Void)? { nil }
-    static let addTerminalFields: (name: String, address: String, user: String)? = nil
-    static let showAddTerminal = false
+    static let addComputerWay: WayIn? = nil
+    static let addFields: (name: String, address: String, user: String, kvmAddress: String)? = nil
+    static let addPress = false
+    static let addWayOnSettings: WayIn? = nil
     static let openComputer: String? = nil
     static let openOverview = false
     static let outerPicture: UIImage? = nil
-    static let showAddMac = false
     static let addMacAddress: String? = nil
     static let showMacSettings: String? = nil
     static let chooseView: SessionView? = nil

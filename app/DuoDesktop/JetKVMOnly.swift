@@ -1,0 +1,208 @@
+#if DUO_JETKVM
+// A computer reached only through its JetKVM (project notes, one computer with any connection, milestone 2; the owner
+// 2026-11-22: "I can't approve the permission in two Macs until you add jetkvm support"). Its Add check, and
+// its own screen: the JetKVM's picture with the same keys, trackpad and typing as the JetKVM view in a Mac's
+// session, with no Glass Act session or picture behind it. Behind DUO_JETKVM with the rest of the JetKVM.
+import Foundation
+import JetKVMClient
+import JetKVMProtocol
+import SwiftUI
+import UIKit
+
+// MARK: - The Add check: sign in to the JetKVM, nothing more
+
+/// The Add Computer sheet's JetKVM check. It signs in with the password typed in the sheet (the JetKVM's own
+/// `/auth/login-local`) and stops there: no signaling and no video, so nobody watching the JetKVM is taken over.
+/// With no password (a JetKVM in no-password mode) it only checks that the JetKVM's web port answers. Like the
+/// Terminal's check (terminal review), it never starts while the app is locked, the sign-in is cancelled
+/// the moment the app locks, and one that still finishes after the lock is not reported as signed in.
+enum JetKVMAddCheck {
+    typealias SignIn = @Sendable (_ host: String, _ password: String?) async throws -> Void
+
+    static let lockedText = "Not checked: the app locked."
+
+    static let signIn: SignIn = { host, password in
+        guard let password, !password.isEmpty else {
+            let ok = await withCheckedContinuation { c in
+                TCPCheck.check(host: host, port: 80, timeout: 5) { c.resume(returning: $0) }
+            }
+            if !ok { throw JetKVMError.unreachable("no answer") }
+            return
+        }
+        guard let url = URL(string: "http://\(host)\(JetKVMSignaling.loginPath)") else {
+            throw JetKVMError.unreachable("bad address")
+        }
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JetKVMSignaling.loginBody(password: password)
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.httpShouldSetCookies = false
+        let resp: URLResponse
+        do { (_, resp) = try await URLSession(configuration: cfg).data(for: req) } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw JetKVMError.unreachable(error.localizedDescription)
+        }
+        guard let http = resp as? HTTPURLResponse else { throw JetKVMError.loginFailed(status: 0) }
+        if http.statusCode == 401 || http.statusCode == 403 { throw JetKVMError.wrongPassword }
+        guard (200..<300).contains(http.statusCode) else { throw JetKVMError.loginFailed(status: http.statusCode) }
+    }
+
+    @MainActor static func run(name: String, host: String, password: String?,
+                               signIn: @escaping SignIn = signIn) async -> (ok: Bool, text: String) {
+        guard AppAccess.isOpen else { return (false, lockedText) }
+        let work = Task { try await signIn(host, password) }
+        let watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: nil) { n in
+            if (n.object as? AppAccess.State) == .locked { work.cancel() }
+        }
+        defer { NotificationCenter.default.removeObserver(watch) }
+        let stopped = { work.isCancelled || AppAccess.state == .locked }
+        do {
+            try await work.value
+            if stopped() { return (false, lockedText) }
+            let how = (password ?? "").isEmpty ? "The JetKVM answers (no password set)." : "Signed in to the JetKVM."
+            return (true, "\(how) \(name) is added.")
+        } catch {
+            if stopped() { return (false, lockedText) }
+            switch error as? JetKVMError {
+            case .wrongPassword?: return (false, "The JetKVM refused the password.")
+            case .unreachable?: return (false, "Can’t reach a JetKVM at \(host). Check the address, and that this iPhone can reach it.")
+            case let .loginFailed(status)?: return (false, "The JetKVM did not accept the sign-in (HTTP \(status)).")
+            default: return (false, error.localizedDescription)
+            }
+        }
+    }
+}
+
+// MARK: - The screen of a JetKVM-only computer
+
+/// A JetKVM-only computer open: the JetKVM's picture where a Mac's picture goes, and under it the same band and
+/// typing as the JetKVM view of a Mac's session (that view's `JetKVMLink` and its keys, trackpad and keyboard):
+/// - a normal iPhone: the Click/column/trackpad band and our own keyboard (as `SessionScreen`, normal iPhone);
+/// - the open Duo: the special keys and trackpad band over the system keyboard (as `SessionScreen`, upright).
+/// Sideways, the picture alone (the session's JetKVM view is upright only too). The top bar: back, and the name
+/// bubble with "JetKVM" under the name; no view switch, since the computer has one way in (HIG Navigation bars:
+/// a back button and a title).
+struct JetKVMOnlyScreen: View {
+    let entry: MacEntry
+    let leave: () -> Void
+    private let link: JetKVMLink
+    @State private var keyboard: TouchKeyboardModel
+    @State private var keyboardInset: CGFloat = 0
+    @State private var more = false
+    @State private var typing = true
+    @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
+    private let normalPhone = PhoneKind.current
+
+    init(entry: MacEntry, leave: @escaping () -> Void) {
+        self.entry = entry
+        self.leave = leave
+        let l = JetKVMLink.for(mac: entry.id)
+        link = l
+        _keyboard = State(initialValue: TouchKeyboardModel(engine: l.parts.keyboard.engine))
+    }
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { proxy in
+                let wide = SessionLayout.isHorizontal(proxy.size)
+                Group {
+                    if wide {
+                        JetKVMPanel(link: link, entry: entry)
+                    } else if normalPhone {
+                        phoneLayout(proxy.size)
+                    } else {
+                        duoLayout(proxy.size)
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            }
+            .background { KeyboardGuideReader { keyboardInset = $0 }.ignoresSafeArea() }
+            .ignoresSafeArea(.keyboard)
+            .background(Color(.systemBackground))
+            .navigationTitle(entry.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                TopBarItem { BackToMacsButton(action: { link.parts.releaseAll(); link.disconnect(); leave() }) }
+                ToolbarSpacer(.fixed, placement: .topBarLeading)
+                TopBarItem { TopRowName(mac: entry.name, screen: "JetKVM", notice: nil, maxWidth: 220) }
+                ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
+                    .sharedBackgroundVisibility(.hidden)
+            }
+        }
+        .onDisappear { link.parts.releaseAll() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            link.parts.releaseAll()
+        }
+        .onChange(of: trackpadSide) { _, _ in link.parts.releaseAll() }
+    }
+
+    /// A normal iPhone upright: the picture (square when it fits), the band, our own keyboard at the bottom.
+    private func phoneLayout(_ size: CGSize) -> some View {
+        let phone = NormalPhoneLayout(size: size, keyboardInset: NormalPhoneLayout.ownKeyboardHeight(width: size.width),
+                                      keyboardGap: 0)
+        return VStack(spacing: 0) {
+            JetKVMPanel(link: link, entry: entry)
+                .frame(width: phone.picture.width, height: phone.picture.height)
+                .background {
+                    // The responder holds only the clear click view, so our keys' clicks play and the system
+                    // keyboard never comes up (as `SessionScreen` on a normal iPhone).
+                    MacTypingField(up: $typing, state: link.parts.keyboard, pinned: true, macKeysBar: false,
+                                   clickOnly: true)
+                        .frame(width: 1, height: 1)
+                }
+            NormalPhoneBand(state: link.parts.keyboard, pad: link.parts.trackpad, layout: phone,
+                            trackpadDimmed: false, more: $more)
+                .padding(.top, NormalPhoneLayout.pad)
+                .frame(width: size.width, alignment: .top)
+                .background(alignment: .top) {
+                    Rectangle().fill(KeyLook.panel).frame(height: size.height).ignoresSafeArea(edges: .bottom)
+                }
+                .zIndex(1)
+            Spacer(minLength: 0)
+        }
+        .overlay(alignment: .bottom) {
+            TouchKeyboardView(model: keyboard, width: size.width, sizes: .portrait)
+                .frame(width: size.width, height: phone.keyboardInset, alignment: .top)
+                .accessibilityIdentifier("phoneKeyboard")
+        }
+    }
+
+    /// The open Duo upright: the picture full width (16:9), the special keys and trackpad, the system keyboard.
+    private func duoLayout(_ size: CGSize) -> some View {
+        let upright = SessionLayout.Upright(size: size, keyboardInset: SimulatorSwitches.keyboardInset ?? keyboardInset,
+                                            side: trackpadSide, shape: .sixteenNine)
+        let parts = link.parts
+        return VStack(spacing: 0) {
+            JetKVMPanel(link: link, entry: entry)
+                .frame(width: upright.picture.width, height: upright.picture.height)
+                .background {
+                    MacTypingField(up: $typing, state: parts.keyboard, pinned: true, macKeysBar: false)
+                        .frame(width: 1, height: 1)
+                }
+            HStack(alignment: .bottom, spacing: SessionLayout.Upright.split) {
+                if trackpadSide == .left { trackpad(upright) }
+                SpecialKeysView(state: parts.keyboard, pad: parts.trackpad, metrics: upright.keyMetrics,
+                                side: trackpadSide, shape: .sixteenNine)
+                    .frame(width: upright.keys.width, height: upright.keys.height,
+                           alignment: trackpadSide == .left ? .bottomTrailing : .bottomLeading)
+                if trackpadSide == .right { trackpad(upright) }
+            }
+            .padding(.top, upright.spacing.pad)
+            .frame(width: size.width, alignment: .top)
+            .background(alignment: .top) {
+                Rectangle().fill(KeyLook.panel).frame(height: size.height).ignoresSafeArea(edges: .bottom)
+            }
+            .padding(.top, upright.band.minY - upright.spacing.pad - upright.picture.maxY)
+            .zIndex(1)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func trackpad(_ upright: SessionLayout.Upright) -> some View {
+        TrackpadView(engine: link.parts.trackpad)
+            .frame(width: upright.trackpad.width, height: upright.trackpad.height)
+            .background(KeyLook.keyFill, in: RoundedRectangle(cornerRadius: TrackpadView.cornerRadius, style: .continuous))
+    }
+}
+#endif

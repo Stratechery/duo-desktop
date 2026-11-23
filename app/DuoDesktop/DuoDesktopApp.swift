@@ -23,9 +23,10 @@ struct RootView: View {
             // A normal iPhone (not a Duo, by its model identifier: `PhoneKind`): its own layout, upright and sideways;
             // never the outer screen's views. The Duo goes on exactly as before, below.
             if let computer = openComputer, !(sizeClass == .compact && !PhoneKind.current && !SimulatorSwitches.forceOpenLayout) {
-                // A terminal-only computer (project notes, terminal-only computers, M2): its own screen, no Glass Act session.
-                // Not on the Duo's outer screen, which is for a Mac's dialogs.
-                terminalOnly(computer)
+                // A computer without Screen Sharing (project notes, one computer with any connection M2): its own screen, no Glass
+                // Act session: its terminal, or its JetKVM view. Not on the Duo's outer screen, which is for a
+                // Mac's dialogs.
+                ownScreen(computer)
             } else if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
                 if model.showsSession, let grid = model.shownGrid {
                     SessionScreen(model: model, grid: grid, normalPhone: true)
@@ -64,7 +65,7 @@ struct RootView: View {
         .task {
             // One Touch ID (the owner): the saved Mac passwords are read with the app lock's own context.
             model.autoUnlockContext = { [lock] in lock.autoUnlockContext }
-            // Review fixes (review finding 3): the Terminal and JetKVM links follow the same lock.
+            // Review fixes (Reviewer finding 3): the Terminal and JetKVM links follow the same lock.
             lock.onAccessChange = { AppAccess.set($0) }
             AppAccess.set(lock.access)
             model.note("window on the \(sizeClass == .compact ? "outer" : "open") screen, session \(ObjectIdentifier(model).hashValue)")
@@ -101,20 +102,30 @@ struct RootView: View {
         }
     }
 
-    /// The open terminal-only computer's entry, if one is open (always nil without the Terminal).
+    /// The computer open on its own screen, if one is (`ComputerNav`).
     private var openComputer: MacEntry? {
-        #if DUO_TERMINAL
-        TerminalComputerNav.shared.openID.flatMap { list.store.entry($0) }
-        #else
-        nil
-        #endif
+        ComputerNav.shared.openID.flatMap { list.store.entry($0) }
     }
 
-    @ViewBuilder private func terminalOnly(_ e: MacEntry) -> some View {
-        #if DUO_TERMINAL
-        TerminalOnlyScreen(entry: e, store: list.store) { TerminalComputerNav.shared.openID = nil }
-            .id(e.id)
-        #endif
+    @ViewBuilder private func ownScreen(_ e: MacEntry) -> some View {
+        switch ComputerNav.shared.way {
+        case .terminal?:
+            #if DUO_TERMINAL
+            TerminalOnlyScreen(entry: e, store: list.store) { ComputerNav.shared.close() }
+                .id(e.id)
+            #else
+            EmptyView()
+            #endif
+        case .jetkvm?:
+            #if DUO_JETKVM
+            JetKVMOnlyScreen(entry: e) { ComputerNav.shared.close() }
+                .id(e.id)
+            #else
+            EmptyView()
+            #endif
+        default:
+            EmptyView()
+        }
     }
 
     /// Opened cold on the outer screen with one Mac: connect to it (more than one: the list). Once per launch, after
@@ -150,11 +161,9 @@ struct RootView: View {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
         }
         #endif
-        #if DUO_TERMINAL
         if let name = SimulatorSwitches.openComputer, let e = list.store.withoutScreenSharing.first(where: { $0.name == name }) {
-            TerminalComputerNav.shared.openID = e.id
+            ComputerNav.shared.open(e)
         }
-        #endif
         guard let i = args.firstIndex(of: "--connect"), i + 1 < args.count,
               let mac = list.macs.first(where: { $0.name == args[i + 1] }) else { return }
         model.connect(to: mac)
