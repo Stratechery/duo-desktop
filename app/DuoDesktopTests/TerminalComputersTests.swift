@@ -39,7 +39,7 @@ final class TerminalComputersTests: XCTestCase {
         s.add(labServer())
         let again = store()
         XCTAssertEqual(again.macs.map(\.name), ["my-mac"], "the Mac list (probes, sessions, outer screen) is unchanged")
-        let t = try XCTUnwrap(again.withoutScreenSharing.first)
+        let t = try XCTUnwrap(again.computers.first(where: { !$0.hasScreenSharing }))
         XCTAssertEqual(t.name, "Lab Server")
         XCTAssertEqual(t.kind, .terminal)
         XCTAssertEqual(t.sshPort, 22)
@@ -47,20 +47,20 @@ final class TerminalComputersTests: XCTestCase {
         XCTAssertEqual(t.signIn, .tailscale)
         XCTAssertEqual(t.opens, .tmux)
         again.remove(t.id)
-        XCTAssertTrue(store().withoutScreenSharing.isEmpty)
+        XCTAssertTrue(store().computers.filter { !$0.hasScreenSharing }.isEmpty)
     }
 
     /// Claim (M1): the address is filed by the Mac rule (a home name is Home, anything else Tailscale); the row's
-    /// second line names what it has (project notes, one computer with any connection: "Terminal").
+    /// ways in are Terminal only (project notes).
     func testNewEntryAddressAndRowWords() {
         let t = labServer()
         XCTAssertEqual(t.tailscale, "lab-server")
         XCTAssertNil(t.home)
-        XCTAssertEqual(t.waysLine, "Terminal")
+        XCTAssertEqual(t.waysIn, [.terminal])
         var w = MacEntry.terminalComputer(name: "Windows PC", address: "windows-pc.local", port: 22, user: "me",
                                           signIn: .phoneKey, opens: .loginShell)
         XCTAssertEqual(w.home, "windows-pc.local")
-        XCTAssertEqual(w.waysLine, "Terminal")
+        XCTAssertEqual(w.waysIn, [.terminal])
         w.setTerminalAddress("windows-pc")
         XCTAssertEqual(w.tailscale, "windows-pc")
         XCTAssertNil(w.home)
@@ -90,8 +90,8 @@ final class TerminalComputersTests: XCTestCase {
         let done = expectation(description: "answers")
         DispatchQueue.main.async { done.fulfill() }
         wait(for: [done], timeout: 2)
-        XCTAssertEqual(reach.state(on.id), .ready)
-        XCTAssertEqual(reach.state("B"), .notReachable)
+        XCTAssertEqual(reach.state(on.id, .terminal), .ready)
+        XCTAssertEqual(reach.state("B", .terminal), .notReachable)
     }
 
     /// Claim (M1): the TCP check itself, against a port listening on this test machine and a closed one.
@@ -141,7 +141,7 @@ final class TerminalComputersTests: XCTestCase {
     /// Claim (M1 renames): the list's words cover both kinds.
     func testListWords() {
         XCTAssertEqual(ListWords.title, "Computers")
-        XCTAssertEqual(ListWords.footer, "Tap a computer to connect. Tap ⓘ for its settings.")
+        XCTAssertTrue(ListWords.footer.contains("Tap ⓘ for its settings."))
         #if DUO_JETKVM
         XCTAssertEqual(ListWords.emptyDescription,
                        "Add a Mac running Glass Act Host, a computer you reach over SSH, or a computer with a JetKVM.")

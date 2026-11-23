@@ -1,0 +1,397 @@
+diff --git a/duo-screens/royalvnc/Package.swift b/duo-screens/royalvnc/Package.swift
+index 6e6188446..e626ae87e 100644
+--- a/duo-screens/royalvnc/Package.swift
++++ b/duo-screens/royalvnc/Package.swift
+@@ -1,96 +1,56 @@
+ // swift-tools-version: 6.0
++// Duo Desktop's own copy of RoyalVNCKit (MIT, Royal Apps), taken at 090b96e (ROYALVNC_COMMIT); upstream was archived
++// on 2026-10-05. Our changes to the upstream files are in patches/ (see README-DUO.md). This manifest is ours:
++// Apple platforms only, a static library, upstream CryptoSwift pinned by tag, no demos, no Windows zlib, no Cstb
++// (upstream used it only on Linux, Windows and Android).
+ 
+ import PackageDescription
+ 
+-let swiftLanguageMode = SwiftLanguageMode.v5
+-let zTarget: Target
+-
+-#if os(Windows)
+-let disableDeprecatedDeclarationsWarning = "-Wno-deprecated-declarations"
+-
+-zTarget = Target.target(name: "Z", path: "Sources/zlib-1.3.1", cSettings: [
+-    .define("STDC"),
+-    .define("HAVE_STDARG_H"),
+-    .define("HAVE_HIDDEN"),
+-
+-    .unsafeFlags([
+-        disableDeprecatedDeclarationsWarning,
+-    ])
+-])
+-#else
+-zTarget = Target.target(name: "Z", linkerSettings: [
+-    .linkedLibrary("z")
+-])
+-#endif
+-
+-let d3desTarget = Target.target(name: "d3des")
+-
+ let package = Package(
+     name: "RoyalVNCKit",
+ 
+     platforms: [
+-        .macOS(.v11),
+-        .iOS(.v15),
+-        .macCatalyst(.v15),
+-        .tvOS(.v15),
+-        .visionOS(.v1)
++        .macOS(.v13),
++        .iOS(.v16),
+     ],
+ 
+     products: [
+-        .library(
+-            name: "RoyalVNCKit",
+-            type: .dynamic,
+-            targets: [ "RoyalVNCKit" ]
+-        ),
+-
+-        .executable(name: "RoyalVNCKitDemo",
+-                    targets: [ "RoyalVNCKitDemo" ])
++        .library(name: "RoyalVNCKit", targets: [ "RoyalVNCKit" ]),
+     ],
+-    
++
+     dependencies: [
+-        // TODO: Switch back to main repo once our FoundationEssentials changes are merged upstream
+-//        .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", from: "1.9.0")
+-        .package(url: "https://github.com/royalapplications/CryptoSwift.git", branch: "foundationessentials"),
+-        
+-        .package(url: "https://github.com/troughton/Cstb", from: "1.0.6")
++        // Upstream CryptoSwift at a pinned release (not Royal's fork branch). Its licence is in Notices.
++        .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", exact: "1.9.0"),
+     ],
+ 
+     targets: [
+-        .target(
+-            name: "RoyalVNCKitC"
+-        ),
++        .target(name: "RoyalVNCKitC"),
+ 
+         .target(
+             name: "RoyalVNCKit",
+-
+             dependencies: [
+                 "RoyalVNCKitC",
+-                .byName(name: d3desTarget.name),
+-                .byName(name: zTarget.name),
+-                .byName(name: "CryptoSwift"),
+-                .product(name: "stb_image", package: "Cstb", condition: .when(platforms: [ .linux, .windows, .android ]))
++                "d3des",
++                "Z",
++                .product(name: "CryptoSwift", package: "CryptoSwift"),
+             ],
+-
+             swiftSettings: [
+-                .swiftLanguageMode(swiftLanguageMode),
+-                
+-                .unsafeFlags([
+-                    "-enable-library-evolution"
+-                ])
++                .swiftLanguageMode(.v5),
++                // As upstream: its `@_implementationOnly` imports (CryptoSwift, RoyalVNCKitC) need library evolution.
++                .unsafeFlags([ "-enable-library-evolution" ]),
+             ]
+         ),
+ 
+-        d3desTarget,
+-        zTarget,
++        .target(name: "d3des"),
+ 
+-        .executableTarget(
+-            name: "RoyalVNCKitDemo",
+-            dependencies: [ "RoyalVNCKit" ]
+-        ),
++        // The system zlib (in iOS and macOS).
++        .target(name: "Z", linkerSettings: [ .linkedLibrary("z") ]),
+ 
+-        .executableTarget(
+-            name: "RoyalVNCKitCDemo",
+-            dependencies: [ "RoyalVNCKit" ]
+-        )
++        // Our tests for our changes (sign-in fixes, Mac-account-only choice).
++        .testTarget(
++            name: "RoyalVNCKitTests",
++            dependencies: [ "RoyalVNCKit" ],
++            swiftSettings: [ .swiftLanguageMode(.v5) ]
++        ),
+     ]
+ )
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/Encryption/BigNum.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/Encryption/BigNum.swift
+index a59edd8ea..d3ee677c2 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/Encryption/BigNum.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/Encryption/BigNum.swift
+@@ -102,6 +102,15 @@ extension BigNum {
+     func isLessThan(_ value: UInt64) -> Bool {
+         bigInt < value
+     }
++
++    // Duo Desktop (#43): checks on server-supplied Diffie-Hellman values.
++    var isOdd: Bool { bigInt & 1 == 1 }
++
++    /// 1 < self < modulus - 1, with a modulus of at least 5.
++    func isValidDiffieHellmanPublicValue(modulus: BigNum) -> Bool {
++        guard modulus.bigInt >= 5 else { return false }
++        return bigInt > 1 && bigInt < modulus.bigInt - 1
++    }
+ }
+ 
+ 
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthentication.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthentication.swift
+index 96ea20d06..d8c83357b 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthentication.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthentication.swift
+@@ -25,8 +25,11 @@ extension VNCProtocol {
+ 			self.generator = generator
+ 			self.keySize = keySize
+ 
+-			guard prime.count == keySize,
+-				  peerKey.count == keySize else {
++			// Duo Desktop (#43): check the server's values before any arithmetic.
++			guard DiffieHellmanKeyAgreement.acceptsParameters(prime: prime,
++															  generator: generator,
++															  peerKey: peerKey,
++															  keyLength: .init(keySize)) else {
+ 				return nil
+ 			}
+ 
+@@ -40,6 +43,12 @@ extension VNCProtocol.ARDAuthentication {
+ 	static func receive(connection: NetworkConnectionReading) async throws -> Self {
+ 		let generator = try await connection.readBuffered(length: 2)
+ 		let keySize = try await connection.readUInt16()
++
++		// Duo Desktop (#43): bound the work before reading or exponentiating server-supplied values.
++		guard (1...DiffieHellmanKeyAgreement.maximumKeySize).contains(Int(keySize)) else {
++			throw VNCError.protocol(.invalidData)
++		}
++
+ 		let prime = try await connection.readBuffered(length: .init(keySize))
+ 		let peerKey = try await connection.readBuffered(length: .init(keySize))
+ 
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthenticationImpl.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthenticationImpl.swift
+index 779435541..583c8308f 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthenticationImpl.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDAuthenticationImpl.swift
+@@ -48,22 +48,22 @@ extension VNCProtocol.ARDAuthentication {
+ 
+             guard randomCredsDataSuccess else { return nil }
+ 
+-			let usernameLength = username.utf8.count
+-			let passwordLength = password.utf8.count
+-
++			// Duo Desktop (#41): the user name and password each go in a 64-byte, NUL-terminated UTF-8 field. Upstream
++			// cut them by Swift characters, so multi-byte text could run past the field (into the password, or past
++			// the 128 bytes). Refuse anything over 63 UTF-8 bytes, or holding a NUL, instead of cutting it.
+ 			let maxLength = 63
+ 
+-			// Cap length at 63 as index is 0
+-			let cappedUsername = usernameLength > maxLength
+-				? String(username[username.startIndex..<username.index(username.startIndex, offsetBy: maxLength)])
+-				: username
++			guard username.utf8.count <= maxLength,
++				  password.utf8.count <= maxLength,
++				  !username.utf8.contains(0),
++				  !password.utf8.contains(0) else {
++				return nil
++			}
+ 
++			let cappedUsername = username
+ 			let cappedUsernameLength = cappedUsername.utf8.count
+ 
+-			let cappedPassword = passwordLength > maxLength
+-				? String(password[password.startIndex..<password.index(password.startIndex, offsetBy: maxLength)])
+-				: password
+-
++			let cappedPassword = password
+ 			let cappedPasswordLength = cappedPassword.utf8.count
+ 
+             // Convert username and password strings into C strings
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDDiffieHellmanKeyAgreement.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDDiffieHellmanKeyAgreement.swift
+index 6b74a588b..e9c15019b 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDDiffieHellmanKeyAgreement.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/Protocol/SecurityTypes/AppleRemoteDesktop/ARDDiffieHellmanKeyAgreement.swift
+@@ -6,6 +6,10 @@ import Foundation
+ 
+ extension VNCProtocol.ARDAuthentication {
+ 	struct DiffieHellmanKeyAgreement {
++		/// Duo Desktop (#43): the largest key size accepted from a server, in bytes (4096 bits). A limit on our work,
++		/// not a protocol limit.
++		static let maximumKeySize = 512
++
+ 		let publicKey: Data
+ 		let privateKey: Data
+ 		let secretKey: Data
+@@ -14,7 +18,10 @@ extension VNCProtocol.ARDAuthentication {
+ 			  generator: Data,
+ 			  peerKey: Data,
+ 			  keyLength: Int) {
+-			guard keyLength > 0 else {
++			guard Self.acceptsParameters(prime: prime,
++										 generator: generator,
++										 peerKey: peerKey,
++										 keyLength: keyLength) else {
+ 				return nil
+ 			}
+ 
+@@ -28,7 +35,8 @@ extension VNCProtocol.ARDAuthentication {
+ 
+ 			guard let secretKey = Self.computeSharedKey(prime: prime,
+ 														peerKey: peerKey,
+-														privateKey: keyPair.privateKey),
++														privateKey: keyPair.privateKey,
++														keyLength: keyLength),
+ 				  !secretKey.isEmpty else {
+ 				return nil
+ 			}
+@@ -37,6 +45,30 @@ extension VNCProtocol.ARDAuthentication {
+ 			self.privateKey = keyPair.privateKey
+ 			self.secretKey = secretKey
+ 		}
++
++		/// Duo Desktop (#43): the server's values, checked before any arithmetic. Key size within bounds; prime and
++		/// peer key exactly that long; a 1- or 2-byte generator; an odd modulus of at least 5; generator and peer key
++		/// strictly between 1 and p - 1. This stops zero-modulus traps, a private-key loop that never ends and trivial
++		/// public values. It does not prove the number is prime or who the server is.
++		static func acceptsParameters(prime: Data,
++									  generator: Data,
++									  peerKey: Data,
++									  keyLength: Int) -> Bool {
++			guard (1...maximumKeySize).contains(keyLength),
++				  prime.count == keyLength,
++				  peerKey.count == keyLength,
++				  (1...2).contains(generator.count),
++				  let modulus = BigNum(data: prime),
++				  !modulus.isLessThan(5),
++				  modulus.isOdd,
++				  let base = BigNum(data: generator),
++				  let peer = BigNum(data: peerKey) else {
++				return false
++			}
++
++			return base.isValidDiffieHellmanPublicValue(modulus: modulus) &&
++				peer.isValidDiffieHellmanPublicValue(modulus: modulus)
++		}
+ 	}
+ }
+ 
+@@ -75,14 +107,10 @@ private extension VNCProtocol.ARDAuthentication.DiffieHellmanKeyAgreement {
+ 			return nil
+ 		}
+ 
+-		// Check key lengths of generated private and public DH keys
+-		guard bigPrivKey.bytesCount == keyLength,
+-			  bigPubKey.bytesCount == keyLength else {
+-			return nil
+-		}
+-
+-		guard let privKey = bigPrivKey.bigEndianData(),
+-			  let pubKey = bigPubKey.bigEndianData() else {
++		// Duo Desktop (#42): the values go at the server's key width. Upstream required both to be exactly that many
++		// bytes without padding, so a key with a leading zero byte (about 1 in 128) failed the sign-in.
++		guard let privKey = bigPrivKey.fixedWidthBigEndianData(length: keyLength),
++			  let pubKey = bigPubKey.fixedWidthBigEndianData(length: keyLength) else {
+ 			return nil
+ 		}
+ 
+@@ -94,7 +122,8 @@ private extension VNCProtocol.ARDAuthentication.DiffieHellmanKeyAgreement {
+ 
+ 	static func computeSharedKey(prime: Data,
+ 								 peerKey: Data,
+-								 privateKey: Data) -> Data? {
++								 privateKey: Data,
++								 keyLength: Int) -> Data? {
+ 		guard let bigPrime = BigNum(data: prime),
+ 			  let bigPrivKey = BigNum(data: privateKey),
+ 			  let bigPeerKey = BigNum(data: peerKey) else {
+@@ -112,7 +141,8 @@ private extension VNCProtocol.ARDAuthentication.DiffieHellmanKeyAgreement {
+ 			return nil
+ 		}
+ 
+-		guard let sharedKey = bigSharedKey.bigEndianData() else {
++		// Duo Desktop (#42): the shared secret is hashed at full width, leading zero bytes included, as the Mac does.
++		guard let sharedKey = bigSharedKey.fixedWidthBigEndianData(length: keyLength) else {
+ 			return nil
+ 		}
+ 
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Connection/VNCConnection+Handshake.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Connection/VNCConnection+Handshake.swift
+index eea15c8f7..91fc5f06a 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Connection/VNCConnection+Handshake.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Connection/VNCConnection+Handshake.swift
+@@ -99,27 +99,15 @@ private extension VNCConnection {
+ 	}
+ 
+ 	func decideSecurityType(supportedTypes: VNCProtocol.SecurityTypes) async throws {
+-		let chosenSecurityType: VNCProtocol.SecurityType
+-
+-		let supportedSecurityTypes = supportedTypes.securityTypes
+-
+-		if supportedSecurityTypes.contains(.none) {
+-			chosenSecurityType = .none
+-		} else if supportedSecurityTypes.contains(.diffieHellman) {
+-			chosenSecurityType = .diffieHellman
+-		} else if supportedSecurityTypes.contains(.ultraVNCMSLogonII) {
+-			chosenSecurityType = .ultraVNCMSLogonII
+-		} else if supportedSecurityTypes.contains(.vnc) {
+-			chosenSecurityType = .vnc
+-		} else if supportedSecurityTypes.contains(.tight) {
+-			chosenSecurityType = .tight
+-		} else {
+-			chosenSecurityType = .invalid
+-		}
++		// Duo Desktop: the Mac's own account (type 30, "Diffie-Hellman Authentication", Apple's account sign-in) and
++		// nothing else. Upstream preferred "none" over 30 and then took MSLogonII, the VNC password and Tight; a Mac
++		// that offers no type 30 is refused here, before any credential is asked for or sent.
++		let offered = supportedTypes.securityTypes.map(\.rawValue)
++
++		logger.logDebug("Server offered security types: \(offered)")
+ 
+-		guard chosenSecurityType != .invalid,
+-			  supportedTypes.securityTypes.contains(chosenSecurityType) else {
+-			throw VNCError.authentication(.clientCouldNotDecideOnSecurityType)
++		guard let chosenSecurityType = Self.duoSecurityType(offered: offered) else {
++			throw VNCError.authentication(.macAccountSignInNotOffered(offered: offered))
+ 		}
+ 
+ 		try await sendAuthenticationData(securityType: chosenSecurityType)
+@@ -324,3 +312,11 @@ private extension VNCConnection {
+ 		try await setEncodingsMessage.send(connection: connection)
+ 	}
+ }
++
++// MARK: - Duo Desktop: Mac-account sign-in only
++extension VNCConnection {
++	/// The one security type Duo Desktop accepts: 30 (the Mac's own account). `nil` when the server does not offer it.
++	static func duoSecurityType(offered: [UInt8]) -> VNCProtocol.SecurityType? {
++		offered.contains(VNCProtocol.SecurityType.diffieHellman.rawValue) ? .diffieHellman : nil
++	}
++}
+diff --git a/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Error/AuthenticationError.swift b/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Error/AuthenticationError.swift
+index bc03a9ebc..e399f614a 100644
+--- a/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Error/AuthenticationError.swift
++++ b/duo-screens/royalvnc/Sources/RoyalVNCKit/SDK/Error/AuthenticationError.swift
+@@ -13,6 +13,8 @@ public extension VNCError {
+ 		case ardAuthenticationFailed
+ 		case ultraVNCMSLogonIIAuthenticationFailed
+ 		case encryptionFailed
++		/// Duo Desktop: the server did not offer the Mac's own account sign-in (type 30). `offered` lists what it did.
++		case macAccountSignInNotOffered(offered: [UInt8])
+ 
+ 		// MARK: - LocalizedError
+ 		public var errorDescription: String? {
+@@ -34,6 +36,8 @@ public extension VNCError {
+ 					return "UltraVNC MS-Logon II authentication failed."
+ 				case .encryptionFailed:
+ 					return "Encryption failed."
++				case .macAccountSignInNotOffered(let offered):
++					return "This computer does not offer sign-in with a Mac account (it offered: \(offered.map(String.init).joined(separator: ", ")))."
+ 			}
+ 		}
+ 	}

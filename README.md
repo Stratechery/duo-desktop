@@ -13,13 +13,16 @@ It has two parts:
   `patches/`).
 
 **Read [Known issues](#known-issues) before you start.** This was built for one person's setup and is not a
-finished product. This page describes **build 0.1 (53)**.
+finished product. The code here is **build 0.1 (72)**. [What changed since build 65](#what-changed-since-build-65)
+lists the newest changes; the rest of this page was written for build 53.
 
 *All pictures on this page are the real app, in the iPhone Duo Simulator (build 53). The Macs in them are Glass
-Act's test host (a stand-in Mac that draws a test picture) under made-up names. No real Mac is shown.*
+Act's test host (a stand-in Mac that draws a test picture) under made-up names. No real Mac is shown. Some pictures
+are older than the app; see the note under [Your Macs](#your-macs).*
 
 Contents:
 
+0. [What changed since build 65](#what-changed-since-build-65)
 1. [Your Macs](#your-macs)
 2. [Held upright: Whole Screen and Follow Pointer](#held-upright-whole-screen-and-follow-pointer)
 3. [Held sideways](#held-sideways)
@@ -37,7 +40,29 @@ Contents:
 
 ---
 
+## What changed since build 65
+
+- **One line per computer in the list.** Each row has a light at the start (green: ready; yellow: it answers but
+  needs something from you; red: not answering; gray: still being checked), the computer's name, then the same three icons
+  on every row: **Screen Sharing**, **Terminal** and **JetKVM**. Tap an icon to open the computer that way. A gray
+  icon means that way in is not set up; tapping it adds it. Tap the **name** to open the computer its usual way
+  (**Opens In**, chosen in its settings). Tap **ⓘ** for its settings.
+- **The views control is on the Terminal and JetKVM screens too.** When a computer has more than one way in, the
+  same control as in Screen Sharing lets you switch between Whole Screen, Follow Pointer, Terminal and JetKVM.
+- **The computer list can sync through iCloud** between your iPhones that use the same Apple Account. It is on by
+  default and can be turned off in the list. Only the list syncs (names, addresses, which ways in each has).
+  Passwords and keys never leave the iPhone. If the same computer was changed on two iPhones, the newest change
+  wins. Removing a computer asks whether to remove it from **All Devices** or **This iPhone Only**. This needs the
+  `DUO_SYNC` build switch and an iCloud container of your own (see [Building](#building)).
+- **The session's top bar starts narrow** (back, the name, one view button) and widens to show every view only when
+  that fits on the screen.
+
+---
+
 ## Your Macs
+
+*The picture below is from build 53. Since build 61 the list is called **Computers**, and since build 72 each row
+is one line with three icons, as described in [What changed since build 65](#what-changed-since-build-65).*
 
 | | |
 |---|---|
@@ -197,7 +222,7 @@ The full, step-by-step guide is in **[docs/INSTALL.md](docs/INSTALL.md)**:
 
 ## Building
 
-One code base, four versions. You choose when you make the Xcode project:
+One code base, several versions. You choose when you make the Xcode project:
 
 | You want | Make the project with |
 |---|---|
@@ -205,9 +230,19 @@ One code base, four versions. You choose when you make the Xcode project:
 | **Terminal** | `DUO_TERMINAL=YES xcodegen generate` |
 | **JetKVM** | `DUO_JETKVM=YES xcodegen generate` |
 | **Both** | `DUO_TERMINAL=YES DUO_JETKVM=YES xcodegen generate` |
+| **List sync through iCloud** (add to any of the above) | `DUO_SYNC=YES` before `xcodegen generate` |
 
-`app/scripts/test.sh` compiles the plain, Terminal-only and JetKVM-only versions and then runs the unit tests on the
-full version; it fails if any version does not compile.
+**List sync (`DUO_SYNC=YES`)** uses the iCloud container `iCloud.<your bundle id>`. Your App ID needs iCloud
+(CloudKit) with that container, and the container needs a record type `Computer` with one field `payload` of type
+**Encrypted Bytes**, deployed to Production in the CloudKit Console. Until then the app says iCloud is not ready and
+keeps the list on the phone. Not run here: setting up a container (it needs your own developer account).
+
+Two more switches exist for work that is **not finished and not available**: `DUO_RDP` (Remote Desktop to a Windows
+PC) and `DUO_VNC` (Basic Screen Sharing for Macs without the Host). They compile, but do not use them.
+
+`app/scripts/test.sh --switches-only` compiles the plain version and one version per switch (Terminal, JetKVM,
+Remote Desktop, list sync, Basic Screen Sharing); without `--switches-only` it then runs the unit tests on the full
+version. It fails if any version does not compile.
 
 The steps (Glass Act for the app, your bundle id and team, the Simulator, your phone, TestFlight) are in
 [Build the iPhone app](docs/INSTALL.md#build-the-iphone-app).
@@ -285,7 +320,11 @@ Those reports were on builds 45 to 47. Nothing else is claimed here. Everything 
   including that the JetKVM retry and the offer-first change fix the intermittent connection, build 48's
   changes (the Mac's one-time question, the lock while starting, the JetKVM failure reported at once) and build
   49's (the Security section, picking the home address from nearby Macs, the SSH user name warnings), and builds
-  50 to 53's layout for a normal (not Duo) iPhone, which this page does not show.
+  50 to 53's layout for a normal (not Duo) iPhone, which this page does not show, and the changes since build 65
+  (one-line rows, the views control on the Terminal and JetKVM screens, list sync, the narrow-first top bar).
+  List sync was tested in the Simulator only, not between two real iPhones.
+- **Remote Desktop and Basic Screen Sharing are not finished.** Their code is here behind build switches; they are
+  not available in the app.
 - **Host on macOS 15:** a first-start crash of the setup window was fixed (the last patch); macOS 15 had only one
   test Mac.
 - **Host settings while a session runs:** if someone at the Mac makes another screen the main one during a

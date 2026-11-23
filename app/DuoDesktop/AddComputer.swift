@@ -388,7 +388,7 @@ struct AddComputerSheet: View {
             e.key = key
             // No `screenSharing` set: the store's carry-over writes a Mac's defaults exactly as before (Screen
             // Sharing, and for a Terminal added later SSH port 22, this iPhone's key, tmux).
-            store.add(e)
+            store.addNew(e, startWith: .screenSharing)
             added = e.id
             result = AddCheckResult(ok: true, text: "Found Glass Act Host. \(e.name) is added.")
         }
@@ -513,7 +513,7 @@ struct AddComputerSheet: View {
             added = e.id
         } else {
             let e = MacEntry.terminalComputer(name: name, address: address, port: p, user: user, signIn: signIn, opens: opens)
-            store.add(e)
+            store.addNew(e, startWith: .terminal)
             added = e.id
         }
         if let id = added { result = nil; Task { await runTerminalCheck(id) } }
@@ -670,13 +670,17 @@ struct AddComputerSheet: View {
             e.terminal = false
             e.jetkvm = true
             e.jetkvmAddress = t(kvmAddress)
-            store.add(e)
+            store.addNew(e, startWith: .jetkvm)
             id = e.id
         }
         // A second try with the Password field left empty keeps the password the first try saved.
         let retry = added != nil && kvmPassword.isEmpty
         let pw = retry ? JetKVMSettings.passwords.password(mac: id) : (kvmPassword.isEmpty ? nil : kvmPassword)
-        if !retry { JetKVMSettings.passwords.setPassword(pw, mac: id) }
+        if !retry {
+            JetKVMSettings.passwords.setPassword(pw, mac: id)
+            // Only whether it has one syncs (list sync): another iPhone then knows to ask for it there.
+            store.update(id) { $0.jetkvmPassword = pw != nil }
+        }
         kvmPassword = ""
         added = id
         result = nil

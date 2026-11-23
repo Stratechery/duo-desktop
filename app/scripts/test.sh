@@ -5,7 +5,8 @@
 #
 # Switch check: the app must compile in every version, not only the full one TestFlight ships. It builds the app
 # (compile only, simulator, unsigned) with NO switches, with only DUO_TERMINAL, with only DUO_JETKVM and with only
-# DUO_RDP (Remote Desktop: FreeRDP, built first by scripts/build-freerdp.sh), and stops
+# DUO_RDP (Remote Desktop: FreeRDP, built first by scripts/build-freerdp.sh), with only DUO_SYNC and with only
+# DUO_VNC (Basic Screen Sharing: our RoyalVNCKit copy in ../royalvnc), and stops
 # with a failure if any of them does not compile. (Build 53 to 57: the plain version did not compile because
 # Screens.swift used a Terminal-only type outside `#if DUO_TERMINAL`; nothing caught it, because every build had
 # both switches on.)
@@ -48,19 +49,21 @@ compile() { # name, then the environment for xcodegen
         failed="$failed $name"
     fi
 }
-compile plain DUO_TERMINAL= DUO_JETKVM= DUO_RDP=
-compile terminal-only DUO_TERMINAL=YES DUO_JETKVM= DUO_RDP=
-compile jetkvm-only DUO_TERMINAL= DUO_JETKVM=YES DUO_RDP=
-compile rdp-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP=YES
+compile plain DUO_TERMINAL= DUO_JETKVM= DUO_RDP= DUO_SYNC= DUO_VNC=
+compile terminal-only DUO_TERMINAL=YES DUO_JETKVM= DUO_RDP= DUO_SYNC= DUO_VNC=
+compile jetkvm-only DUO_TERMINAL= DUO_JETKVM=YES DUO_RDP= DUO_SYNC= DUO_VNC=
+compile rdp-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP=YES DUO_SYNC= DUO_VNC=
+compile sync-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP= DUO_SYNC=YES DUO_VNC=
+compile vnc-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP= DUO_SYNC= DUO_VNC=YES
 if [ -n "$failed" ]; then
     echo "FAILED: not every version compiles:$failed"
     exit 1
 fi
-echo "switch check passed: plain, Terminal only, JetKVM only and Remote Desktop only all compile"
+echo "switch check passed: plain, Terminal only, JetKVM only, Remote Desktop only, iCloud sync only and Basic Screen Sharing only all compile"
 [ "${1:-}" = --switches-only ] && exit 0
 
 # The whole unit suite on the full version (every switch), as TestFlight ships it.
-DUO_TERMINAL=YES DUO_JETKVM=YES DUO_RDP=YES xcodegen generate --quiet
+DUO_TERMINAL=YES DUO_JETKVM=YES DUO_RDP=YES DUO_SYNC=YES DUO_VNC=YES xcodegen generate --quiet
 sim=$(xcrun simctl list devices available | sed -n 's/^ *iPhone Duo (\([0-9A-F-]*\)).*/\1/p' | head -1)
 [ -n "$sim" ] || { echo "no iPhone Duo simulator"; exit 1; }
 if xcodebuild test -project DuoDesktop.xcodeproj -scheme DuoDesktop -destination "id=$sim" \

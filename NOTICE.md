@@ -45,3 +45,13 @@ Terminal versions.
 
 Their full notices are in [app/Notices/JetKVMNotice.txt](app/Notices/JetKVMNotice.txt), bundled only into the
 JetKVM versions.
+
+## Basic Screen Sharing versions only (`DUO_VNC=YES`; not finished)
+
+- **RoyalVNCKit** at commit `090b96eddeee183e9fec293c5cd881d302a4349d` (https://github.com/royalapplications/royalvnc),
+  MIT, `Copyright (c) 2025 Royal Apps`. `royalvnc/` is a copy of it with our changes; its own `LICENSE` is kept there
+  and the changes are listed in `royalvnc/README-DUO.md` and `royalvnc/patches/`.
+- **CryptoSwift** 1.9.0 (https://github.com/krzyzanowskim/CryptoSwift), downloaded at build time, zlib-style licence.
+
+Their full notices are in [app/Notices/BasicScreenSharingNotice.txt](app/Notices/BasicScreenSharingNotice.txt),
+bundled only into those versions.

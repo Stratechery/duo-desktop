@@ -29,6 +29,8 @@ final class SessionModel {
         var title: String
         var text: String
         var offersForgetKey = false
+        /// The computer Screen Sharing did not open (project notes (computers-m3) 2): the alert offers its other ways in.
+        var computerID: String? = nil
     }
 
     var phase: Phase = .idle {
@@ -359,13 +361,15 @@ final class SessionModel {
             guard let self, let controller, self.controller === controller else { return }
             let name = mac.name
             self.endSession()
-            self.notice = .init(title: "Session ended", text: "“\(name)” ended the session: \(reason).")
+            self.notice = .init(title: "Session ended", text: "“\(name)” ended the session: \(reason).",
+                               computerID: self.mac?.id)
         }
         controller.onIncompatibleHost = { [weak self, weak controller] _ in
             guard let self, let controller, self.controller === controller else { return }
             self.endSession()
             self.notice = .init(title: "Different versions",
-                                text: "“\(mac.name)” runs a different Glass Act version than this app.")
+                                text: "“\(mac.name)” runs a different Glass Act version than this app.",
+                                computerID: mac.id)
         }
         controller.onScreenLock = { [weak self, weak controller] state in
             guard let self, let controller, self.controller === controller else { return }
@@ -734,7 +738,8 @@ final class SessionModel {
             let name = mac?.name ?? "the Mac"
             endSession()
             notice = .init(title: "Couldn’t reach “\(name)”",
-                           text: "Check that Glass Act Host is running on that Mac and that this iPhone is on the tailnet.")
+                           text: "Check that Glass Act Host is running on that Mac and that this iPhone is on the tailnet.",
+                           computerID: mac?.id)
             return
         }
         grid = nil
@@ -751,7 +756,7 @@ final class SessionModel {
                        text: "“\(name)” at \(dialHost) presented a different key than the one saved earlier. That happens when a Mac’s "
                            + "identity is reset, and it is also what someone listening in between would look like. "
                            + "Only forget the saved key if you know why it changed.",
-                       offersForgetKey: true)
+                       offersForgetKey: true, computerID: mac?.id)
     }
 
     func forgetSavedKey() {
@@ -798,7 +803,8 @@ final class SessionModel {
             let name = mac?.name ?? "the Mac"
             endSession()
             notice = .init(title: "Not accepting new viewers",
-                           text: "On “\(name)”, choose who can connect in Glass Act Host › Options › New Viewers.")
+                           text: "On “\(name)”, choose who can connect in Glass Act Host › Options › New Viewers.",
+                           computerID: mac?.id)
         case .askOnHost?:
             let askCode = code ?? (outcome.hostFingerprint ?? (pin.isEmpty ? nil : pin)).map {
                 QUICIdentity.verificationCode(hostFingerprint: $0, viewerFingerprint: viewerFingerprint)

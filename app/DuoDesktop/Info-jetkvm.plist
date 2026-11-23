@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- List sync (DUO_SYNC builds): iCloud's silent notices of changes from another iPhone. Unused otherwise. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<!-- Same as Info.plist (keep the two in step); used only by the DUO_JETKVM build (project-jetkvm.yml). -->
 	<!-- Add Mac browses for Glass Act Hosts on the home network (TN3179: browsed Bonjour types must be listed). -->
 	<key>NSBonjourServices</key>

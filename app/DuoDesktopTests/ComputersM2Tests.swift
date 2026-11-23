@@ -43,8 +43,9 @@ final class ComputersM2Tests: XCTestCase {
     }
 
     /// Claim: a computer added by JetKVM alone (no Glass Act Host) is saved, shows in the Computers list with
-    /// "JetKVM", stays out of everything Glass Act reads, and opens on its own screen in its JetKVM view; a
-    /// Terminal-only computer opens in its terminal. A build without the JetKVM keeps it saved but does not list it.
+    /// "JetKVM", stays out of everything Glass Act reads, and its JetKVM icon opens it on its own screen; a
+    /// Terminal-only computer's Terminal icon opens its terminal. A build without the JetKVM keeps it saved but does
+    /// not list it.
     func testJetKVMOnlyComputerIsAddedListedAndOpens() throws {
         let s = store()
         let k = jetkvmOnly("Corner Test Mac")
@@ -54,27 +55,20 @@ final class ComputersM2Tests: XCTestCase {
         XCTAssertFalse(s.macs.contains { $0.id == k.id }, "no Glass Act reader sees it")
         #if DUO_JETKVM
         XCTAssertTrue(s.computers.contains { $0.id == k.id })
-        XCTAssertEqual(saved.waysLine, "JetKVM")
-        XCTAssertEqual(saved.opensOnItsOwn, .jetkvm)
-        XCTAssertTrue(MacListScreen.opensWithoutScreenSharing(saved))
-        ComputerNav.shared.open(saved)
+        XCTAssertEqual(saved.waysInThisBuild, [.jetkvm])
+        ComputerNav.shared.open(saved, in: .jetkvm)
         XCTAssertEqual(ComputerNav.shared.openID, k.id)
         XCTAssertEqual(ComputerNav.shared.way, .jetkvm)
         #else
         XCTAssertFalse(s.computers.contains { $0.id == k.id }, "this build cannot show it: kept, not listed")
-        XCTAssertNil(saved.opensOnItsOwn)
+        XCTAssertFalse(saved.opens(.jetkvm))
         #endif
 
         let t = MacEntry.makeTerminalOnly(name: "Lab Test Server")
         s.add(t)
         #if DUO_TERMINAL
-        XCTAssertEqual(try XCTUnwrap(s.entry(t.id)).opensOnItsOwn, .terminal)
+        XCTAssertTrue(try XCTUnwrap(s.entry(t.id)).opens(.terminal))
         #endif
-        // A Mac with Screen Sharing opens in a Glass Act session, never on its own screen.
-        var mac = MacEntry(name: "Test Mac")
-        mac.set(.home, "test-mac.local")
-        s.add(mac)
-        XCTAssertNil(try XCTUnwrap(s.entry(mac.id)).opensOnItsOwn)
     }
 
     /// Claim: on the ⓘ page any way in can be removed while another remains, and removing the last one removes the

@@ -107,19 +107,16 @@ final class ComputersTests: XCTestCase {
             expected = expected.compactMap { $0.0 == "Side Mac" ? nil : ($0.0, $0.1.replacingOccurrences(of: " · JetKVM", with: "")) }
         }
         XCTAssertEqual(s.computers.map(\.name), expected.map(\.0))
-        XCTAssertEqual(s.computers.map(\.waysLine), expected.map(\.1))
+        XCTAssertEqual(s.computers.map { $0.waysInThisBuild.map(\.label).joined(separator: " · ") }, expected.map(\.1))
         XCTAssertEqual(s.entries.count, 4, "nothing dropped")
 
         let side = try XCTUnwrap(s.entry("K1"))
         if WayIn.inThisBuild.contains(.jetkvm) {
-            XCTAssertEqual(ComputerReach.target(side)?.host, "side-kvm")
-            XCTAssertEqual(ComputerReach.target(side)?.port, 443)
-        } else {
-            XCTAssertNil(ComputerReach.target(side))
+            XCTAssertEqual(ComputerReach.target(side, .jetkvm)?.host, "side-kvm")
+            XCTAssertEqual(ComputerReach.target(side, .jetkvm)?.port, 443)
         }
-        if WayIn.inThisBuild.contains(.terminal) {
-            XCTAssertEqual(ComputerReach.target(try XCTUnwrap(s.entry("T1")))?.port, 22)
-        }
+        XCTAssertNil(ComputerReach.target(side, .screenSharing), "Screen Sharing has Glass Act's own check")
+        XCTAssertEqual(ComputerReach.target(try XCTUnwrap(s.entry("T1")), .terminal)?.port, 22)
     }
 
     /// Claim: no Glass Act reader sees a computer without Screen Sharing: the Mac list (`macs`), the Glass Act

@@ -37,6 +37,9 @@ extension AboutView {
         #if DUO_JETKVM
         f.append(("JetKVMNotice", "txt", "WebRTC (JetKVM view)"))
         #endif
+        #if DUO_VNC
+        f.append(("BasicScreenSharingNotice", "txt", "RoyalVNCKit and CryptoSwift (Basic Screen Sharing)"))
+        #endif
         #if DUO_RDP
         f.append(("RemoteDesktopNotice", "txt", "FreeRDP \(RemoteDesktopEngine.freeRDPVersion) and OpenSSL (Remote Desktop)"))
         #endif

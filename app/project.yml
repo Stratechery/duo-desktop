@@ -9,6 +9,12 @@ include:
   # The Remote Desktop view, only with DUO_RDP=YES in xcodegen's environment (see project-rdp.yml).
   - path: project-rdp.yml
     enable: ${DUO_RDP}
+  # Basic Screen Sharing (a Mac's own Screen Sharing), only with DUO_VNC=YES (see project-vnc.yml).
+  - path: project-vnc.yml
+    enable: ${DUO_VNC}
+  # The list syncing through iCloud, only with DUO_SYNC=YES (see project-sync.yml): its entitlements.
+  - path: project-sync.yml
+    enable: ${DUO_SYNC}
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
@@ -30,6 +36,11 @@ settings:
     DUO_JETKVM_FLAG: ""
     # project-rdp.yml (xcodegen with DUO_RDP=YES) sets DUO_RDP_FLAG and links FreeRDP and OpenSSL.
     DUO_RDP_FLAG: ""
+    # project-sync.yml (xcodegen with DUO_SYNC=YES) sets DUO_SYNC_FLAG and the iCloud entitlements.
+    DUO_SYNC_FLAG: ""
+    # project-vnc.yml (xcodegen with DUO_VNC=YES) sets DUO_VNC_FLAG and adds our RoyalVNCKit copy and CryptoSwift.
+    DUO_VNC_FLAG: ""
+    DUO_ENTITLEMENTS_NAME: DuoDesktop.entitlements
     DUO_INFOPLIST_NAME: Info.plist
     # THE ONE PLACE for the app's name and identifier (the owner 2026-11-20: "Let's just call it Duo Desktop."). The
     # display name, usage texts and all three bundle identifiers below read these. In-app texts in DuoDesktop/*.swift
@@ -64,14 +75,15 @@ targets:
     settings:
       base:
         PRODUCT_NAME: DuoDesktop
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG) $(DUO_SYNC_FLAG) $(DUO_VNC_FLAG)
         PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # The app's one accent colour, #FAA634 (the owner 2026-11-21: "everywhere in the app that is blue. Can we change to
         # FAA634?"). Every tint, selected toggle, switch, cursor and Color.accentColor follows it.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # The phone's key in the Keychain / Secure Enclave needs this (plan section 8; KeychainIdentity.appAccessGroup).
-        CODE_SIGN_ENTITLEMENTS: DuoDesktop/DuoDesktop.entitlements
+        # DuoDesktop-sync.entitlements in the iCloud sync build (project-sync.yml sets DUO_ENTITLEMENTS_NAME).
+        CODE_SIGN_ENTITLEMENTS: DuoDesktop/$(DUO_ENTITLEMENTS_NAME)
         GENERATE_INFOPLIST_FILE: YES
         # Merged with the generated keys: NSBonjourServices is a list, which INFOPLIST_KEY_ cannot express.
         # Info-jetkvm.plist in the JetKVM build (project-jetkvm.yml sets DUO_INFOPLIST_NAME).
@@ -100,7 +112,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID).tests
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG) $(DUO_SYNC_FLAG) $(DUO_VNC_FLAG)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuoDesktop.app/DuoDesktop
         BUNDLE_LOADER: $(TEST_HOST)
         LIBRARY_SEARCH_PATHS: $(SRCROOT)/../vendor/glassact/.build/rust/$(PLATFORM_NAME)

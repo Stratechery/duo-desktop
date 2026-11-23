@@ -18,6 +18,16 @@ enum SimulatorSwitches {
     /// `--force-open-layout`: show the open-screen UI even in compact width (the folded Duo).
     static let forceOpenLayout = args.contains("--force-open-layout")
 
+    /// `--top-bar-reserve N`: the session, Terminal and JetKVM top bars get an empty N pt part at their right
+    /// (`TopBarStandIn`), taking that room from back, the name and the views (project notes (session-top-bar-narrow-first)). It
+    /// stands in for the live activities beside the clock on the owner's phone, which the simulator cannot draw: about 54
+    /// moves the open Duo's room end from about 467 pt (bare simulator) to about 413 pt (the owner's phone).
+    static var topBarReserve: CGFloat? {
+        guard let i = args.firstIndex(of: "--top-bar-reserve"), i + 1 < args.count, let v = Double(args[i + 1])
+        else { return nil }
+        return CGFloat(v)
+    }
+
     /// `--no-app-lock`: this run skips the Touch ID lock (on by default), so scripted runs and UI tests can reach
     /// the Macs. Device builds have no such switch.
     static let noAppLock = args.contains("--no-app-lock")
@@ -105,10 +115,15 @@ enum SimulatorSwitches {
         guard let i = args.firstIndex(of: "--add-way"), i + 1 < args.count else { return nil }
         return WayIn(rawValue: args[i + 1])
     }
-    /// `--open-computer NAME`: open that computer without Screen Sharing at launch (its terminal or JetKVM view).
+    /// `--open-computer NAME`: open that computer at launch in Terminal or JetKVM (`--open-way WAY`, else the first
+    /// of the two it has), as its list icon does.
     static var openComputer: String? {
         guard let i = args.firstIndex(of: "--open-computer"), i + 1 < args.count else { return nil }
         return args[i + 1]
+    }
+    static var openWay: WayIn? {
+        guard let i = args.firstIndex(of: "--open-way"), i + 1 < args.count else { return nil }
+        return WayIn(rawValue: args[i + 1])
     }
     static var addMacAddress: String? {
         guard let i = args.firstIndex(of: "--add-mac-address"), i + 1 < args.count else { return nil }
@@ -278,7 +293,14 @@ enum SimulatorSwitches {
         guard let i = args.firstIndex(of: "--press-remove"), i + 1 < args.count else { return nil }
         return WayIn(rawValue: args[i + 1])
     }
+    /// `--host-answers "NAME"`: that computer's Screen Sharing check answers "sign in needed" (pictures of the list's
+    /// yellow light; Glass Act's test host is not run on the test Mac). Nothing is dialled for it.
+    static var hostAnswersSignIn: String? {
+        guard let i = args.firstIndex(of: "--host-answers"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
     #else
+    static let hostAnswersSignIn: String? = nil
     static let addKVMPasswordFromFile: String? = nil
     static let keychainReport: String? = nil
     static let leaveReopen: (leave: Double, reopen: Double)? = nil
@@ -290,12 +312,14 @@ enum SimulatorSwitches {
     static let addPress = false
     static let addWayOnSettings: WayIn? = nil
     static let openComputer: String? = nil
+    static let openWay: WayIn? = nil
     static let openOverview = false
     static let outerPicture: UIImage? = nil
     static let addMacAddress: String? = nil
     static let showMacSettings: String? = nil
     static let chooseView: SessionView? = nil
     static let forceOpenLayout = false
+    static let topBarReserve: CGFloat? = nil
     static let noAppLock = false
     static let slideSlowdown: Double = 1
     static let testUnlockWord: String? = nil

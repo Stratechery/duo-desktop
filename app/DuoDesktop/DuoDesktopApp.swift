@@ -23,9 +23,9 @@ struct RootView: View {
             // A normal iPhone (not a Duo, by its model identifier: `PhoneKind`): its own layout, upright and sideways;
             // never the outer screen's views. The Duo goes on exactly as before, below.
             if let computer = openComputer, !(sizeClass == .compact && !PhoneKind.current && !SimulatorSwitches.forceOpenLayout) {
-                // A computer without Screen Sharing (project notes, one computer with any connection M2): its own screen, no Glass
-                // Act session: its terminal, or its JetKVM view. Not on the Duo's outer screen, which is for a
-                // Mac's dialogs.
+                // A computer opened in Terminal or JetKVM from the list (project notes (computers-m3) 2): its own screen, no
+                // Glass Act session, whether or not it also has Screen Sharing. Not on the Duo's outer screen, which
+                // is for a Mac's dialogs.
                 ownScreen(computer)
             } else if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
                 if model.showsSession, let grid = model.shownGrid {
@@ -63,6 +63,21 @@ struct RootView: View {
             if locked { model.releaseHeldInput?() } else { model.unlocked(); connectColdOnOuterScreen() }
         }
         .task {
+            // Project notes (computers-m3) 2: the list's Screen Sharing icon starts the Glass Act session from the address the
+            // check found; opening Terminal or JetKVM ends any Glass Act session or attempt first.
+            // A Terminal or JetKVM screen's view switch can start it in Follow Pointer (project notes (view-selector-back)).
+            ComputerNav.shared.startScreenSharing = { [model, list] e, view in
+                model.connect(to: e, via: list.chosen[e.id])
+                if model.mac?.id == e.id { model.openView = view }
+            }
+            ComputerNav.shared.endScreenSharing = { [model] in model.disconnect() }
+            // A computer left the list (removed here or from another iPhone): its open connection ends.
+            list.store.onGone = { [model] id in
+                if model.mac?.id == id { model.disconnect() }
+                if ComputerNav.shared.openID == id { ComputerNav.shared.close() }
+            }
+            // The list sync (plan Part A): on by default; it never starts a connection or reads a password.
+            Task { await CloudComputerSync.shared.start() }
             // One Touch ID (the owner): the saved Mac passwords are read with the app lock's own context.
             model.autoUnlockContext = { [lock] in lock.autoUnlockContext }
             // Review fixes (Reviewer finding 3): the Terminal and JetKVM links follow the same lock.
@@ -91,6 +106,7 @@ struct RootView: View {
                 // neither re-locks nor asks again (`AppLock.willEnterForeground`, `takeAutoAsk`).
                 lock.willEnterForeground()
                 model.willEnterForeground(locked: lock.locked)
+                CloudComputerSync.shared.fetchNow()
                 if !SimulatorSwitches.lockNoPrompt { Task { await lock.autoUnlockIfDue(sceneActive: true) } }
             default: break
             }
@@ -121,7 +137,14 @@ struct RootView: View {
             #endif
         case .jetkvm?:
             #if DUO_JETKVM
-            JetKVMOnlyScreen(entry: e) { ComputerNav.shared.close() }
+            JetKVMOnlyScreen(entry: e, store: list.store) { ComputerNav.shared.close() }
+                .id(e.id)
+            #else
+            EmptyView()
+            #endif
+        case .screenSharing? where e.hasRemoteDesktop:
+            #if DUO_RDP
+            RemoteDesktopScreen(entry: e, store: list.store) { ComputerNav.shared.close() }
                 .id(e.id)
             #else
             EmptyView()
@@ -164,8 +187,9 @@ struct RootView: View {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
         }
         #endif
-        if let name = SimulatorSwitches.openComputer, let e = list.store.withoutScreenSharing.first(where: { $0.name == name }) {
-            ComputerNav.shared.open(e)
+        if let name = SimulatorSwitches.openComputer, let e = list.store.computers.first(where: { $0.name == name }),
+           let way = SimulatorSwitches.openWay ?? e.waysInThisBuild.first(where: { $0 != .screenSharing }) {
+            ComputerNav.shared.open(e, in: way)
             if let lr = SimulatorSwitches.leaveReopen {
                 DispatchQueue.main.asyncAfter(deadline: .now() + lr.leave) {
                     model.note("live check: back to the list")
@@ -175,7 +199,7 @@ struct RootView: View {
                     ComputerNav.shared.close()
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + lr.reopen) {
-                    model.note("live check: opening it again"); ComputerNav.shared.open(e)
+                    model.note("live check: opening it again"); ComputerNav.shared.open(e, in: way)
                 }
             }
         }

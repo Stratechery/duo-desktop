@@ -112,10 +112,12 @@ enum JetKVMAddCheck {
 /// Sideways (project notes, 2026-11-22: "Give the JetKVM-only screen the same sideways overlay trackpad and button
 /// column a Mac session has"): the picture full screen with the session's `HorizontalControls` over it (Keyboard,
 /// the click column, the trackpad, back), driving the JetKVM. The top bar upright: back, and the name bubble with
-/// "JetKVM" under the name; no view switch, since the computer has one way in (HIG Navigation bars: a back button
-/// and a title). Sideways the bar hides, as in a Mac's session.
+/// "JetKVM" under the name, and the session's views control when the computer has other ways in (order
+/// view-selector-back). Opened from the list's JetKVM icon on any computer, with no Glass Act session. Sideways the
+/// bar hides, as in a Mac's session.
 struct JetKVMOnlyScreen: View {
     let entry: MacEntry
+    let store: MacStore
     let leave: () -> Void
     private let link: JetKVMLink
     @State private var keyboard: TouchKeyboardModel
@@ -127,9 +129,14 @@ struct JetKVMOnlyScreen: View {
     @State private var wideNow = false
     @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
     private let normalPhone = PhoneKind.current
+    /// The bar's width (the screen's, upright), for the views control's switch-or-menu rule.
+    @State private var rowWidth: CGFloat = 669
+    /// The bar's narrow-first state (project notes (session-top-bar-narrow-first)).
+    @State private var fit = TopBarFit()
 
-    init(entry: MacEntry, leave: @escaping () -> Void) {
+    init(entry: MacEntry, store: MacStore, leave: @escaping () -> Void) {
         self.entry = entry
+        self.store = store
         self.leave = leave
         let l = JetKVMLink.for(mac: entry.id)
         link = l
@@ -149,6 +156,7 @@ struct JetKVMOnlyScreen: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .onChange(of: proxy.size.width, initial: true) { _, w in if !wide { rowWidth = w } }
                 .onChange(of: wide, initial: true) { _, now in
                     if wideNow != now { wideNow = now }
                     // Turning lets go of every held key and button and puts the keyboard away (as a Mac's session).
@@ -161,15 +169,24 @@ struct JetKVMOnlyScreen: View {
             .background(wideNow ? Color.black : Color(.systemBackground))
             .statusBarHidden(wideNow)
             .persistentSystemOverlays(wideNow ? .hidden : .automatic)
-            .toolbar(wideNow ? .hidden : .visible, for: .navigationBar)
+            .modifier(NarrowFirstBar(fit: fit, rowWidth: rowWidth, parts: WayViewSwitch.shows(current) ? 3 : 2,
+                                     hidden: wideNow, enabled: !normalPhone,
+                                     canWiden: WayViewSwitch.shows(current) && TopBarFit.canWiden(rowWidth: rowWidth)))
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 TopBarItem { BackToMacsButton(action: goBack) }
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
-                TopBarItem { TopRowName(mac: entry.name, screen: "JetKVM", notice: nil, maxWidth: 220) }
+                TopBarItem { TopRowName(mac: entry.name, screen: "JetKVM", notice: nil, maxWidth: views.nameMaxWidth) }
                 ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
                     .sharedBackgroundVisibility(.hidden)
+                // Project notes (view-selector-back): the same views control as the computer's Screen Sharing session (only
+                // with more than one way in).
+                if WayViewSwitch.shows(current) {
+                    ToolbarSpacer(.fixed, placement: .topBarLeading)
+                    TopBarItem { views }
+                }
+                TopBarStandIn(width: SimulatorSwitches.topBarReserve ?? 0)
             }
         }
         .onDisappear { link.parts.releaseAll() }
@@ -179,7 +196,15 @@ struct JetKVMOnlyScreen: View {
         .onChange(of: trackpadSide) { _, _ in link.parts.releaseAll() }
     }
 
-    private func goBack() { link.parts.releaseAll(); link.disconnect(); leave() }
+    private func goBack() { letGo(); leave() }
+    /// Lets go of every held key and closes the JetKVM link (back, or another way in chosen).
+    private func letGo() { link.parts.releaseAll(); link.disconnect() }
+    /// The computer as saved now (its ways in may have changed in its settings).
+    private var current: MacEntry { store.entry(entry.id) ?? entry }
+    /// The views control (project notes (view-selector-back)).
+    private var views: WayViewSwitch {
+        WayViewSwitch(entry: current, current: .jetkvm, fit: fit, normalPhone: normalPhone, leave: letGo)
+    }
 
     /// Sideways, a normal iPhone and the Duo: the picture aspect-fitted to the whole screen, and over it the Mac
     /// session's sideways controls (`HorizontalControls`) on the JetKVM's own keys and trackpad.
@@ -187,7 +212,7 @@ struct JetKVMOnlyScreen: View {
         let insets = normalPhone ? PhoneKind.sidewaysInsets() : (leading: 0, trailing: 0)
         let layout = HorizontalLayout(size: size, side: trackpadSide, leadingInset: insets.leading,
                                       trailingInset: insets.trailing, normalPhone: normalPhone, typing: wideTyping)
-        return JetKVMPanel(link: link, entry: entry)
+        return JetKVMPanel(link: link, entry: entry, offerFor: current, leaveForOther: letGo)
             .frame(width: size.width, height: size.height)
             .background(Color.black)
             .overlay(alignment: .topLeading) {
@@ -208,7 +233,7 @@ struct JetKVMOnlyScreen: View {
         let phone = NormalPhoneLayout(size: size, keyboardInset: NormalPhoneLayout.ownKeyboardHeight(width: size.width),
                                       keyboardGap: 0)
         return VStack(spacing: 0) {
-            JetKVMPanel(link: link, entry: entry)
+            JetKVMPanel(link: link, entry: entry, offerFor: current, leaveForOther: letGo)
                 .frame(width: phone.picture.width, height: phone.picture.height)
                 .background {
                     // The responder holds only the clear click view, so our keys' clicks play and the system
@@ -240,7 +265,7 @@ struct JetKVMOnlyScreen: View {
                                             side: trackpadSide, shape: .sixteenNine)
         let parts = link.parts
         return VStack(spacing: 0) {
-            JetKVMPanel(link: link, entry: entry)
+            JetKVMPanel(link: link, entry: entry, offerFor: current, leaveForOther: letGo)
                 .frame(width: upright.picture.width, height: upright.picture.height)
                 .background {
                     MacTypingField(up: $typing, state: parts.keyboard, pinned: true, macKeysBar: false)

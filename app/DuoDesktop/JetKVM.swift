@@ -722,7 +722,7 @@ final class JetKVMLink {
 
     /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the
     /// new one before the old one goes; the old one's disconnect must not end the new one's connection (live-check
-    /// order 2026-11-22: sideways stuck on "Connecting to the JetKVM…").
+    /// project notes (2026-11-22): sideways stuck on "Connecting to the JetKVM…").
     private(set) var panelsShown = 0
     func panelAppeared(entry: MacEntry?) {
         panelsShown += 1
@@ -964,7 +964,14 @@ struct JetKVMVideo: UIViewRepresentable {
 struct JetKVMPanel: View {
     let link: JetKVMLink
     let entry: MacEntry?
+    /// Project notes (computers-m3) 2: on a computer opened in JetKVM from the list, the computer whose other ways in the
+    /// waiting/failure message offers ("Open in Terminal Instead"), and how to let go of the JetKVM first. nil in a
+    /// Mac session's JetKVM view (its view switch is right there).
+    var offerFor: MacEntry? = nil
+    var leaveForOther: () -> Void = {}
     @Environment(\.scenePhase) private var phase
+    /// Still not live a while after the message went up (or failed at once): the other ways in are offered.
+    @State private var offerOthers = false
 
     var body: some View {
         ZStack {
@@ -979,10 +986,19 @@ struct JetKVMPanel: View {
                             .buttonStyle(.borderedProminent)
                             .accessibilityIdentifier("jetkvmReconnect")
                     }
+                    if let e = offerFor, offerOthers || showsReconnect || isStuck {
+                        OtherWaysOffer(entry: e, current: .jetkvm, onDark: true, leave: leaveForOther)
+                    }
                 }
                 .padding()
                 .accessibilityIdentifier("jetkvmStatus")
             }
+        }
+        .task(id: message == nil) {
+            offerOthers = false
+            guard message != nil else { return }
+            try? await Task.sleep(for: .seconds(4))
+            if !Task.isCancelled, message != nil { offerOthers = true }
         }
         .onAppear { link.panelAppeared(entry: entry) }
         .onDisappear { link.panelDisappeared() }
@@ -999,7 +1015,7 @@ struct JetKVMPanel: View {
         case .retrying(let n, let of): "Trying again (\(n) of \(of))…"
         case .waking: "Waking the display…"
         case .failed(let why): "Could not connect to the JetKVM after \(JetKVMLink.attempts) tries.\n\(why)"
-        case .wrongPassword: "The JetKVM refused the password. Check it in this computer’s settings (ⓘ)."
+        case .wrongPassword: "The JetKVM refused the password. Check it in this computer’s settings (tap its name in the list)."
         case .unsupportedFirmware: "This JetKVM’s firmware is not supported by this version of Duo Desktop."
         case .takenOver: "Taken over by another viewer"
         case .lost(let why): "Lost the connection to the JetKVM.\n\(why)"
@@ -1010,6 +1026,14 @@ struct JetKVMPanel: View {
     private var showsReconnect: Bool {
         switch link.status {
         case .takenOver, .lost, .wrongPassword, .failed: true
+        default: false
+        }
+    }
+
+    /// Will not get further by waiting (nothing to retry).
+    private var isStuck: Bool {
+        switch link.status {
+        case .unsupportedFirmware, .notSet: true
         default: false
         }
     }

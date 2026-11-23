@@ -2,28 +2,24 @@ import Foundation
 import Network
 import SwiftUI
 
-// One list of computers (project notes, one computer with any connection, milestone 1). A computer with Screen Sharing
-// keeps its Glass Act row and check (`MacRow`, `MacList`); a computer without it gets this row and a plain TCP check
-// of its first way in. In every build: the check needs neither the Terminal nor the JetKVM code.
+// One list of computers (project notes). Milestone 3 (the owner's design, 2026-11-22) as changed
+// by project notes (name-opens-default) (the owner 2026-11-23: "Clicking the computer name should also go to the default view; setting
+// should go back inside the (i)"): one line per computer, a light, the name (tap: its Opens In way), the same three
+// way-in icons on every row (Screen Sharing, Terminal, JetKVM), then the (i) (its settings). An icon the computer has
+// opens it exactly that way; a gray one adds that way in. In every build: the checks need neither the Terminal nor
+// the JetKVM code.
 
-// MARK: - Reach: is the first way in there? A plain TCP connect, every time the list appears
+// MARK: - Reach: does each way in answer? A plain TCP connect, every time the list appears
 
-/// Each computer-without-Screen-Sharing's dot. "Reachable" only, never "signed in" (review finding 3): the check
-/// opens a TCP connection to the SSH port or the JetKVM's web port and closes it. No SSH, no password read, no
-/// JetKVM viewer (that would take over whoever is watching it).
+/// The Terminal and JetKVM icons' "answering" state, per computer and way in. "Reachable" only, never "signed in"
+/// (review finding 3): the check opens a TCP connection to the SSH port or the JetKVM's web port and closes it. No SSH,
+/// no password read, no JetKVM viewer (that would take over whoever is watching it). Screen Sharing's own check is
+/// Glass Act's sign-in query (`MacList`).
 @MainActor @Observable
 final class ComputerReach {
     enum State: Equatable {
         case checking, ready, notReachable
-        var label: String {
-            switch self {
-            case .checking: "Checking…"
-            case .ready: "Ready"
-            case .notReachable: "Not reachable"
-            }
-        }
         var reachable: Bool { self == .ready }
-        var color: Color { self == .ready ? .green : .gray }
     }
 
     static let shared = ComputerReach()
@@ -32,37 +28,44 @@ final class ComputerReach {
     /// Tests swap the connect.
     @ObservationIgnored var check: (String, UInt16, TimeInterval, @escaping @Sendable (Bool) -> Void) -> Void = TCPCheck.check
 
-    func state(_ id: String) -> State { states[id] ?? .checking }
+    private static func key(_ id: String, _ way: WayIn) -> String { "\(id).\(way.rawValue)" }
+    func state(_ id: String, _ way: WayIn) -> State { states[Self.key(id, way)] ?? .checking }
 
-    /// Where the check connects: the first way in this build has after Screen Sharing (which has its own check).
-    nonisolated static func target(_ e: MacEntry) -> (host: String, port: UInt16)? {
-        switch e.waysInThisBuild.first(where: { $0 != .screenSharing }) {
-        case .terminal?:
+    /// Where the check for one way in connects (Terminal: the SSH port; JetKVM: its web port). nil for Screen
+    /// Sharing (Glass Act's own check) and for a way in with no address.
+    nonisolated static func target(_ e: MacEntry, _ way: WayIn) -> (host: String, port: UInt16)? {
+        switch way {
+        case .terminal:
             guard let host = e.address(.tailscale) ?? e.address(.home) else { return nil }
             return (host, e.sshPortValue)
-        case .jetkvm?:
+        case .jetkvm:
             guard let host = e.jetkvmHost else { return nil }
             let https = e.jetkvmAddress?.lowercased().hasPrefix("https://") == true
             return (host, https ? 443 : 80)
-        default:
-            return nil
+        case .screenSharing:
+            // A PC's Remote Desktop: a TCP connect to its port (3389), no sign-in (project notes §2).
+            guard e.hasRemoteDesktop, let host = e.address(.tailscale) ?? e.address(.home) else { return nil }
+            return (host, e.rdpPortValue)
         }
     }
 
+    /// Checks every Terminal and JetKVM way in this build has, on every computer (with Screen Sharing or not).
     func probeAll(_ entries: [MacEntry]) {
         generation += 1
         let g = generation
         for e in entries {
-            // The simulator checks these too, as build 59 did (the live Linux-server proof needs it).
-            guard let t = Self.target(e) else { states[e.id] = .notReachable; continue }
-            // Keep the last answer while rechecking (as the Mac rows do), so a tap right after a session works.
-            if states[e.id] == nil { states[e.id] = .checking }
-            let id = e.id
-            check(t.host, t.port, 2) { [weak self] ok in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, self.generation == g else { return }
-                        self.states[id] = ok ? .ready : .notReachable
+            for way in e.waysInThisBuild where way != .screenSharing || e.hasRemoteDesktop {
+                let k = Self.key(e.id, way)
+                // The simulator checks these too, as build 59 did (the live Linux-server proof needs it).
+                guard let t = Self.target(e, way) else { states[k] = .notReachable; continue }
+                // Keep the last answer while rechecking (as the Mac rows do), so a tap right after a session works.
+                if states[k] == nil { states[k] = .checking }
+                check(t.host, t.port, 2) { [weak self] ok in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, self.generation == g else { return }
+                            self.states[k] = ok ? .ready : .notReachable
+                        }
                     }
                 }
             }
@@ -96,86 +99,382 @@ enum TCPCheck {
     }
 }
 
-// MARK: - The row of a computer without Screen Sharing
 
-/// Name, what it has ("Terminal · JetKVM"), the dot of its first way in, and ⓘ. Same layout as `MacRow`.
-struct ComputerRow: View {
-    let entry: MacEntry
-    let reach: ComputerReach.State
-    /// Whether tapping it opens something in this build (milestone 1: a computer with a Terminal).
-    let opens: Bool
-    let enabled: Bool
-    let connect: () -> Void
-    let settings: () -> Void
-    /// Project notes 1: every row's icon sits in one fixed-width, centred column (the HIG Lists pattern of
-    /// Settings: a leading icon column of one width, the text after it), so every name starts at the same place
-    /// whatever the symbol's own width. It grows with Dynamic Type with the icon's own text style.
-    @ScaledMetric(relativeTo: .title2) private var iconColumn: CGFloat = 34
+// MARK: - A way in's icon and words
 
-    static func symbol(_ e: MacEntry) -> String {
-        e.hasScreenSharing ? "desktopcomputer" : (e.waysInThisBuild.first == .terminal ? "terminal" : "cable.connector")
+extension WayIn {
+    /// The list's icon for this way in (HIG SF Symbols). Screen Sharing: a display (the Mac's own screen); Terminal:
+    /// the terminal window, as in the session's view switch; JetKVM: the cable, as in the session's view switch.
+    var symbol: String {
+        switch self {
+        case .screenSharing: "display"
+        case .terminal: "apple.terminal"
+        case .jetkvm: "cable.connector"
+        }
     }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: connect) {
-                HStack(spacing: 12) {
-                    Image(systemName: Self.symbol(entry))
-                        .font(.title2)
-                        .foregroundStyle(reach.reachable ? Color.accentColor : .secondary)
-                        .frame(width: iconColumn, alignment: .center)
-                        .accessibilityIdentifier("computerIcon.\(entry.name)")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.name).font(.headline)
-                        Text(entry.waysLine).font(.caption).foregroundStyle(.secondary)
-                            .accessibilityIdentifier("computerWays.\(entry.name)")
-                    }
-                    // The divider starts where the name starts, on every row.
-                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(reach.color)
-                        Text(reach.label)
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .accessibilityElement(children: .combine)
-                }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+    /// VoiceOver for a list icon (project notes (computers-m3) 1): "Open Guest Mac Mini in Terminal" / "Add Terminal to Guest
+    /// Mac Mini".
+    func openLabel(_ name: String) -> String { "Open \(name) in \(label)" }
+    func addLabel(_ name: String) -> String { "Add \(label) to \(name)" }
+    /// The waiting/failure screens' offer (PLAN: "Open in JetKVM instead").
+    var insteadTitle: String { "Open in \(label) Instead" }
+}
+
+/// How one way-in icon looks on a computer's row (project notes (computers-m3) 1, from the HIG; see project notes):
+/// - not set up: gray (the owner 2026-11-22: "Whichever icons are not there are grayed out"); tap adds it;
+/// - set up: the app's colour; tap opens it that way;
+/// - set up but not answering right now: the app's colour still (it is set up, and a tap still tries it), with a
+///   small exclamation-mark badge on the icon. A shape, not only a colour (HIG Color: "Avoid relying solely on color
+///   to differentiate between objects ... you can use text labels or glyph shapes"), and never gray, which means
+///   "not set up". VoiceOver reads it as the icon's value ("Not answering").
+/// While a check is running, or where it is not made (the simulator's Glass Act check), it shows as set up.
+enum WayLook: Equatable {
+    case notSetUp
+    /// Set up on another iPhone (list sync), but its password is not on this one: gray, and a tap opens its Add sheet
+    /// to type it here, as a gray icon does.
+    case needsSetUpHere
+    case setUp
+    /// Set up, but its check did not answer; the words say why (VoiceOver).
+    case notAnswering(String)
+
+    static let notAnsweringWords = "Not answering"
+    static let needsSetUpHereWords = "Needs setting up here"
+
+    /// Gray icons: a tap opens that way in's Add sheet.
+    var isGray: Bool { self == .notSetUp || self == .needsSetUpHere }
+
+    /// The look of `way` on `entry`: Screen Sharing from the Glass Act check, Terminal and JetKVM from the TCP check.
+    @MainActor static func of(_ entry: MacEntry, _ way: WayIn, mac: MacList.Reach?, reach: ComputerReach,
+                              secrets: DeviceSecretKeeping = DeviceSecrets.shared) -> WayLook {
+        guard entry.opens(way) else { return .notSetUp }
+        if way == .jetkvm, entry.jetkvmPassword == true, !secrets.hasJetKVMPassword(entry.id) { return .needsSetUpHere }
+        switch way {
+        case .screenSharing where entry.hasRemoteDesktop:
+            return reach.state(entry.id, way) == .notReachable ? .notAnswering(notAnsweringWords) : .setUp
+        case .screenSharing:
+            switch mac ?? .checking {
+            case .notReachable: return .notAnswering(notAnsweringWords)
+            case .wrongMac: return .notAnswering(MacList.Reach.wrongMac.label)
+            default: return .setUp
             }
-            .buttonStyle(.plain)
-            .disabled(!opens || !reach.reachable || !enabled)
-            .accessibilityIdentifier("terminalComputer.\(entry.name)")
-            Button("Settings for \(entry.name)", systemImage: "info.circle", action: settings)
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("macSettings.\(entry.name)")
+        case .terminal, .jetkvm:
+            return reach.state(entry.id, way) == .notReachable ? .notAnswering(notAnsweringWords) : .setUp
         }
     }
 }
 
-// MARK: - Which computer is open on its own screen (no Glass Act session)
+// MARK: - The light at the start of a row
 
-/// The computer open on its own screen, and in which way in (milestone 2: a Terminal-only computer in its terminal,
-/// a JetKVM-only computer in its JetKVM view). Outside the build switches, so every build reads it; a way in the
-/// build cannot show is never set here.
+/// The light at the start of a computer's row (the owner 2026-11-23: "We should add the green light at the beginning of the
+/// row if the computer is reachable", "yellow light if reachable but not logged in" and "red light if not
+/// reachable"). The look is the earlier rows' dot (builds 61-65: an 8 pt filled circle); the checks are the ones the
+/// icons' badges already use, so it adds no network traffic. Per way in:
+/// - Screen Sharing, Glass Act's sign-in query: this iPhone is let in = green; the Host answers but wants a sign-in
+///   with the Mac's password, someone at the Mac to allow it, or takes no new viewers = yellow; no answer, or a
+///   different Mac's key = red.
+/// - Terminal and JetKVM, a TCP connect: the port takes it = green; it does not = red. A connect cannot tell whether
+///   the key, the Tailscale sign-in or the JetKVM password will work, so these are never yellow.
+/// The computer's light is the best of its ways in: green if any is green, else yellow if any is yellow, else gray
+/// while any is still being checked (or is never checked, as the simulator's Glass Act check of other hosts), else
+/// red. Gray is never red. Colour is not the only signal: each state has its own VoiceOver label.
+enum ComputerLight: Equatable {
+    /// Not checked yet (or not checked at all): neutral gray.
+    case notChecked
+    case reachable
+    /// Answers, but the app cannot get in until the owner does something; the words say what.
+    case needsSignIn(String)
+    case notReachable
+
+    var color: Color {
+        switch self {
+        case .notChecked: .gray
+        case .reachable: .green
+        case .needsSignIn: .yellow
+        case .notReachable: .red
+        }
+    }
+
+    /// VoiceOver's label for the light.
+    var label: String {
+        switch self {
+        case .notChecked: "Not checked yet"
+        case .reachable: "Reachable"
+        case let .needsSignIn(why): "Reachable, \(why)"
+        case .notReachable: "Not reachable"
+        }
+    }
+
+    /// One way in's light from its check.
+    static func of(screenSharing r: MacList.Reach?) -> ComputerLight {
+        switch r ?? .checking {
+        case .ready: .reachable
+        case .signInNeeded: .needsSignIn("sign in needed")
+        case .askOnMac: .needsSignIn("asks on the Mac")
+        case .closed: .needsSignIn("not taking new viewers")
+        case .notReachable, .wrongMac: .notReachable
+        case .checking, .notChecked: .notChecked
+        }
+    }
+
+    static func of(_ r: ComputerReach.State) -> ComputerLight {
+        switch r {
+        case .ready: .reachable
+        case .notReachable: .notReachable
+        case .checking: .notChecked
+        }
+    }
+
+    /// The computer's light: the best of its ways in (see the type's comment).
+    static func combined(_ ways: [ComputerLight]) -> ComputerLight {
+        if ways.contains(.reachable) { return .reachable }
+        if let y = ways.first(where: { if case .needsSignIn = $0 { true } else { false } }) { return y }
+        if ways.contains(.notChecked) || ways.isEmpty { return .notChecked }
+        return .notReachable
+    }
+
+    /// The light of `entry`'s row, from the same checks as its icons.
+    @MainActor static func of(_ entry: MacEntry, mac: MacList.Reach?, reach: ComputerReach) -> ComputerLight {
+        combined(entry.waysInThisBuild.map { way in
+            way == .screenSharing && !entry.hasRemoteDesktop ? of(screenSharing: mac) : of(reach.state(entry.id, way))
+        })
+    }
+}
+
+/// The light itself: the earlier rows' dot (`circle.fill`, 8 pt), with its own VoiceOver label.
+struct ComputerLightView: View {
+    let light: ComputerLight
+    let name: String
+
+    var body: some View {
+        Image(systemName: "circle.fill")
+            .font(.system(size: 8))
+            .foregroundStyle(light.color)
+            .accessibilityLabel(light.label)
+            .accessibilityIdentifier("light.\(name)")
+    }
+}
+
+// MARK: - The row
+
+/// One computer in the list, on one line: the light, the name (tap: the computer in its Opens In way), the way-in
+/// icons in fixed columns, then the (i) (its settings). the owner 2026-11-23: "Clicking the computer name should also go to
+/// the default view; setting should go back inside the (i)"; the owner 2026-11-22: "I think we can put the icons there.
+/// There's plenty of space. They can go on the right and these rows can be shorter". The (i) sits after the icons, at
+/// the row's trailing end, as Settings › Wi-Fi puts it after a network's lock and signal icons (HIG Lists and tables;
+/// see project notes).
+struct ComputerListRow: View {
+    let entry: MacEntry
+    /// The icons, in the same columns on every row: the ways in this build has (all three in the full build).
+    let columns: [WayIn]
+    let look: (WayIn) -> WayLook
+    let light: ComputerLight
+    /// The name: open the computer in its Opens In way.
+    let openDefault: () -> Void
+    let settings: () -> Void
+    let open: (WayIn) -> Void
+    let add: (WayIn) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var side: CGFloat = 44
+
+    /// At the accessibility text sizes the row stacks: the light and name on their own line, the icons and the (i)
+    /// under it (one line does not leave the name room once the icons have grown with the text).
+    static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
+
+    var body: some View {
+        if Self.stacks(typeSize) {
+            VStack(alignment: .leading, spacing: 0) {
+                nameLine
+                HStack(spacing: 2) { icons; Spacer(minLength: 0); infoButton }
+            }
+            // At these sizes the list's own side margin all but goes; keep the name off the card's edge.
+            .padding(.leading, 12)
+            .padding(.vertical, 6)
+        } else {
+            HStack(spacing: 2) {
+                nameLine
+                icons
+                infoButton
+            }
+        }
+    }
+
+    private var nameLine: some View {
+        HStack(spacing: 10) {
+            ComputerLightView(light: light, name: entry.name)
+            Button(action: openDefault) {
+                HStack(spacing: 0) {
+                    // One line at the usual text sizes (a long name ends in "…"; VoiceOver reads it whole); up to
+                    // three when the row stacks at the accessibility sizes.
+                    Text(entry.name)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(Self.stacks(typeSize) ? 3 : 1)
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // The divider starts where the name starts.
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+            .accessibilityLabel(entry.name)
+            .accessibilityHint(entry.defaultWay.map { "Opens it in \($0.label)." } ?? "")
+            .accessibilityIdentifier("computerName.\(entry.name)")
+        }
+    }
+
+    /// The system's info button. HIG Lists and tables: "An info button shows details about a list item; it doesn't
+    /// support navigation", which is what the settings page is. At least 44 × 44 pt to touch (HIG Buttons).
+    private var infoButton: some View {
+        Button("Settings for \(entry.name)", systemImage: "info.circle", action: settings)
+            .labelStyle(.iconOnly)
+            .font(.title3)
+            .frame(width: max(44, side), height: max(44, side))
+            .contentShape(Rectangle())
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("macSettings.\(entry.name)")
+    }
+
+    private var icons: some View {
+        ForEach(columns) { way in
+            let l = look(way)
+            WayIconButton(way: way, name: entry.name, look: l) {
+                if l.isGray { add(way) } else { open(way) }
+            }
+        }
+    }
+}
+
+/// One way-in icon: at least 44 × 44 pt to touch (HIG Buttons: "a button needs a hit region of at least 44x44 pt"),
+/// growing with Dynamic Type, with its own VoiceOver label.
+struct WayIconButton: View {
+    let way: WayIn
+    let name: String
+    let look: WayLook
+    let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var glyph: CGFloat = 20
+    @ScaledMetric(relativeTo: .body) private var side: CGFloat = 44
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: way.symbol)
+                .font(.system(size: glyph))
+                // Gray is the system's tertiary label gray, never the app's colour faded (which read as orange).
+                .foregroundStyle(look.isGray ? Color(.tertiaryLabel) : Color.accentColor)
+                .overlay(alignment: .bottomTrailing) {
+                    if case .notAnswering = look {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .red)
+                            .font(.system(size: glyph * 0.6, weight: .bold))
+                            .background(Circle().fill(Color(.secondarySystemGroupedBackground)).padding(-1.5))
+                            .offset(x: glyph * 0.3, y: glyph * 0.25)
+                            .accessibilityIdentifier("wayBadge.\(way.rawValue).\(name)")
+                    }
+                }
+                .frame(width: max(44, side), height: max(44, side))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(look == .notSetUp ? way.addLabel(name)
+                            : look == .needsSetUpHere ? "Set up \(way.label) on this iPhone for \(name)" : way.openLabel(name))
+        .accessibilityValue(Self.value(look))
+        .accessibilityIdentifier("way.\(way.rawValue).\(name)")
+    }
+
+    static func value(_ look: WayLook) -> String {
+        if case let .notAnswering(why) = look { return why }
+        if look == .needsSetUpHere { return WayLook.needsSetUpHereWords }
+        return ""
+    }
+}
+
+// MARK: - Opening a computer in one way in
+
+/// The computer open on its own screen, and in which way in. Project notes (computers-m3) 2: each list icon opens exactly its
+/// own way in, with no "first that answers" order. Terminal and JetKVM open here, on their own screens, with no Glass
+/// Act session, whether or not the computer also has Screen Sharing; Screen Sharing starts the Glass Act session.
+/// Outside the build switches, so every build reads it; a way in the build cannot show is never opened.
 @MainActor @Observable final class ComputerNav {
     static let shared = ComputerNav()
-    /// The open computer's id (nil: the list).
+    /// The open computer's id (nil: the list or a Glass Act session).
     private(set) var openID: String?
     private(set) var way: WayIn?
+    /// Set by the root view: start a Glass Act session to this computer, in this view (Whole Screen from the list;
+    /// the chosen one from a Terminal or JetKVM screen's view switch); end any session or attempt.
+    @ObservationIgnored var startScreenSharing: (MacEntry, SessionView) -> Void = { _, _ in }
+    @ObservationIgnored var endScreenSharing: () -> Void = {}
 
-    /// Opens the computer in its own way in (`MacEntry.opensOnItsOwn`); nothing when it has none in this build.
-    func open(_ e: MacEntry) {
-        guard let w = e.opensOnItsOwn else { return }
-        way = w
-        openID = e.id
+    /// Opens `e` in exactly `way` (nothing when this build cannot, or the computer does not have it).
+    func open(_ e: MacEntry, in way: WayIn) {
+        guard e.opens(way) else { return }
+        switch way {
+        case .screenSharing where e.hasRemoteDesktop:
+            // A PC opens on its own screen, with no Glass Act session (project notes §2).
+            endScreenSharing()
+            self.way = way
+            openID = e.id
+        case .screenSharing:
+            close()
+            startScreenSharing(e, .regular)
+        case .terminal, .jetkvm:
+            endScreenSharing()
+            self.way = way
+            openID = e.id
+        }
+    }
+
+    /// Opens `e` in the way in `view` belongs to (the views control on a Terminal or JetKVM screen, order
+    /// view-selector-back): Whole Screen or Follow Pointer start the Screen Sharing session in that view.
+    func open(_ e: MacEntry, view: SessionView) {
+        guard e.opens(view.way) else { return }
+        if view.way == .screenSharing, !e.hasRemoteDesktop {
+            close()
+            startScreenSharing(e, view)
+        } else {
+            open(e, in: view.way)
+        }
+    }
+
+    /// A tap on the name: `e` in its Opens In way (`MacEntry.defaultWay`). Screen Sharing starts in Whole Screen, as
+    /// from its icon. When that way does not answer, its waiting or failure screen offers the others, as from an icon.
+    func openDefault(_ e: MacEntry) {
+        guard let way = e.defaultWay else { return }
+        open(e, in: way)
     }
 
     func close() {
         openID = nil
         way = nil
+    }
+
+    /// The other ways in a screen offers when its own does not answer (or as a switch), in column order.
+    static func others(_ e: MacEntry, than way: WayIn) -> [WayIn] {
+        e.waysInThisBuild.filter { $0 != way }
+    }
+}
+
+/// "Open in JetKVM Instead" and the like, for the computer's other ways in (PLAN: "When the way in that was tapped
+/// does not answer, the waiting/failure screen offers the computer's other ways in right there"). `leave` first lets
+/// go of the way in that did not answer.
+struct OtherWaysOffer: View {
+    let entry: MacEntry
+    let current: WayIn
+    var onDark = false
+    let leave: () -> Void
+
+    var body: some View {
+        ForEach(ComputerNav.others(entry, than: current)) { w in
+            Button {
+                leave()
+                ComputerNav.shared.open(entry, in: w)
+            } label: {
+                Label(w.insteadTitle, systemImage: w.symbol)
+            }
+            .buttonStyle(.bordered)
+            .tint(onDark ? .white : .accentColor)
+            .accessibilityIdentifier("openInstead.\(w.rawValue)")
+        }
     }
 }

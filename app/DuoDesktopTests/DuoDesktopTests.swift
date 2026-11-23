@@ -680,6 +680,13 @@ final class AboutTests: XCTestCase {
         XCTAssertTrue(notices.contains { $0.id == "JetKVMNotice" && $0.text.contains("The WebRTC project authors") },
                       "WebRTC licence")
         #endif
+        #if DUO_VNC
+        expected += 1
+        XCTAssertTrue(notices.contains { $0.id == "BasicScreenSharingNotice" && $0.text.contains("Marcin Krzyzanowski") },
+                      "RoyalVNCKit and CryptoSwift licences")
+        #else
+        XCTAssertFalse(notices.contains { $0.text.contains("RoyalVNCKit") }, "no RoyalVNCKit notice without DUO_VNC")
+        #endif
         #if DUO_RDP
         expected += 1
         XCTAssertTrue(notices.contains { $0.id == "RemoteDesktopNotice" && $0.text.contains("== OpenSSL 3.6.5 ==") },
@@ -1606,6 +1613,7 @@ final class TopRowTests: XCTestCase {
             throw XCTSkip("needs the simulator upright: the clock's row exists only upright, and the scene cannot "
                           + "be turned from code. Turn the simulator upright to run it.")
         }
+        try Self.needsScreen(atLeast: 669, scene)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 669, height: 951)
         window.rootViewController = host
@@ -1697,6 +1705,7 @@ final class TopRowTests: XCTestCase {
         if scene.effectiveGeometry.interfaceOrientation.isLandscape {
             throw XCTSkip("needs the simulator upright (the scene cannot be turned from code)")
         }
+        try Self.needsScreen(atLeast: 669, scene)
         let cases: [(String, String?)] = [("Test host", nil), ("My Mac mini", "Studio Display (2)"),
                                            ("My Mac mini", "All Screens"),
                                            ("a-very-long-mac-name-that-cannot-fit", "Another Very Long Screen Name")]
@@ -1729,8 +1738,7 @@ final class TopRowTests: XCTestCase {
                 XCTAssertFalse(labels.contains("Key Info"), "the info button is gone")
                 XCTAssertGreaterThanOrEqual(name.minX, back.maxX + 4, "name right of back")
                 XCTAssertLessThanOrEqual(name.maxX + 4, sel.minX, "switch right of the name")
-                XCTAssertLessThanOrEqual(name.width, SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: selW) + 4)
-                XCTAssertLessThanOrEqual(sel.maxX, 669 - SessionTopRow.leadingEndFromRight + 0.5, "inside the kept area")
+                XCTAssertLessThanOrEqual(name.width, TopBarFit.nameCap + 4)
                 XCTAssertTrue(controls.filter { $0.minX > sel.maxX }.isEmpty, "nothing right of the switch")
                 if mac == "My Mac mini", screen == "Studio Display (2)" {
                     let free = UIHostingController(rootView: TopRowName(mac: mac, screen: screen, notice: nil,
@@ -1769,7 +1777,15 @@ final class TopRowTests: XCTestCase {
             ("phone menu", [.regular, .centred], true, 402),
             ("phone all", SessionView.normalPhoneChoices(terminal: true, jetkvm: true), true, 402),
         ]
+        // Each row runs only on a screen of its own width (`screenFits`); the others say they were skipped.
+        try Self.needsScreen(atLeast: 402, scene)
+        var ran = 0
         for (label, choices, menu, width) in rows {
+            guard Self.screenFits(width, scene) else {
+                print("DUO-TEST glass \(label): skipped here (screen \(scene.screen.bounds.width) pt)")
+                continue
+            }
+            ran += 1
             for (mac, screen) in names {
                 let host = UIHostingController(rootView: TopRowProbe(frames: FrameLog(), preview: (mac, screen),
                                                                      choices: choices, viewMenu: menu,
@@ -1788,6 +1804,28 @@ final class TopRowTests: XCTestCase {
                 window.isHidden = true
             }
         }
+        if ran == 0 { throw XCTSkip("no row's width matches this simulator's screen (\(scene.screen.bounds.width) pt)") }
+    }
+
+    /// Project notes (view-selector-back): why these tests failed on the folded Duo (30 failures in builds 59-66). The bar lays
+    /// out at the simulator SCREEN's width, whatever the test window's, and the folded Duo's outer screen (466 pt) lays
+    /// a bar out its own way (back and the views in a column by the clock), so a 669 pt or 402 pt row measured there
+    /// found no back button and two glass shapes, not three: nothing about the row itself. A row is measured only on a
+    /// screen of its own width (as `testTopBarKeepsBackAndNameForEveryMixOfWaysIn` does), and the folded Duo's outer
+    /// screen, which shows no session top bar, runs none.
+    @MainActor static func needsScreen(atLeast width: CGFloat, _ scene: UIWindowScene) throws {
+        let w = scene.screen.bounds.width
+        if !PhoneKind.current, w < 600 {
+            throw XCTSkip("the folded Duo's outer screen (\(w) pt) lays the bar out in its own way; run on the open Duo "
+                          + "or a regular iPhone")
+        }
+        if w + 1 < width { throw XCTSkip("measures a \(width) pt row; this screen is \(w) pt (the bar lays out at the screen's width)") }
+    }
+
+    /// The bar is laid out at this width only on a screen of about that width.
+    @MainActor static func screenFits(_ width: CGFloat, _ scene: UIWindowScene) -> Bool {
+        let w = scene.screen.bounds.width
+        return width <= w + 1 && width >= w - 70
     }
 
     /// Project notes 7 (the owner: "I added a key. The next time I launched Robin, the top menu bar was gone": a
@@ -1858,8 +1896,8 @@ final class TopRowTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(ran, 0, "no width matched this simulator")
-        XCTAssertFalse(SessionTopRow.switchFits(rowWidth: 466, count: 4), "four views do not fit folded")
-        XCTAssertTrue(SessionTopRow.switchFits(rowWidth: 669, count: 4), "four views fit open")
+        XCTAssertFalse(TopBarFit.canWiden(rowWidth: 466) && !SimulatorSwitches.forceOpenLayout, "folded: one button")
+        XCTAssertTrue(TopBarFit.canWiden(rowWidth: 669), "open: the wide form is tried")
     }
 
     /// Glass a bar item draws itself, in window points: SwiftUI's `glassEffect` renders through a view whose
@@ -1879,16 +1917,6 @@ final class TopRowTests: XCTestCase {
             .filter { !$0.isHidden && $0.bounds.width > 4 && String(describing: type(of: $0)).contains("NavigationBarPlatter") }
             .map { $0.convert($0.bounds, to: nil).integral }
             .filter { $0.width < view.bounds.width - 1 }   // the bar's own full-width background
-    }
-
-    /// The full build's four-choice switch: the bubble's widest size still ends the switch where the bar
-    /// keeps the leading parts (measured; build 56: about x 500), and the test names fit under it.
-    func testFourChoiceRowFitsBesideTheClock() {
-        let w = SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: 4 * ViewSelector.target)
-        XCTAssertEqual(w, 192)
-        XCTAssertLessThanOrEqual(SessionTopRow.beforeSwitch + w + 4 * ViewSelector.target,
-                                 669 - SessionTopRow.leadingEndFromRight)
-        XCTAssertEqual(SessionTopRow.nameMaxWidth(rowWidth: 669, selectorWidth: 2 * ViewSelector.target), 288)
     }
 
     /// The bubble's two lines (the owner 2026-11-21, the Claude app's two-line title): one screen, the Mac's name alone
@@ -2489,7 +2517,7 @@ final class ConnectReleaseTests: XCTestCase {
     }
 }
 
-// MARK: - Coming back from another app (ReturnFlow, order 2026-11-20 "return without reconnect")
+// MARK: - Coming back from another app (ReturnFlow, project notes (2026-11-20) "return without reconnect")
 
 final class ReturnFlowTests: XCTestCase {
     private func live() -> ReturnFlow {
@@ -2614,7 +2642,7 @@ final class ReturnFlowTests: XCTestCase {
     }
 }
 
-// MARK: - Checking the session is alive on return (order 2026-11-20 "check live on return", the owner: "Go ahead")
+// MARK: - Checking the session is alive on return (project notes (2026-11-20) "check live on return", the owner: "Go ahead")
 
 final class ReturnCheckTests: XCTestCase {
     private let back: UInt64 = 50_000_000 // the return, in the engine's microseconds
@@ -2998,3 +3026,4 @@ final class SlowLinkTests: XCTestCase {
         XCTAssertEqual(stalled.returnBoundUS, ReturnCheck.floorUS)
     }
 }
+

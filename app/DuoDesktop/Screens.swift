@@ -13,6 +13,8 @@ struct MacListScreen: View {
     @State private var showAdd = SimulatorSwitches.addComputerWay != nil
     @State private var settingsFor: String? = SimulatorSwitches.showMacSettings
     @State private var removing: MacEntry?
+    /// A gray icon was tapped: that way in's Add sheet for that computer.
+    @State private var addingWay: AddWayTarget?
     @State private var confirmLockOff = false
     @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
     @AppStorage(KeyFeedback.hapticsKey) private var keyboardHaptics = false
@@ -32,26 +34,23 @@ struct MacListScreen: View {
                         }
                     }
                 } else {
-                    // One list, no sections (project notes, one computer with any connection; the owner 2026-11-22: "I don't think we
-                    // need to separate Macs and terminals. They are just computers."), in the order added. A
-                    // computer with Screen Sharing keeps its Glass Act row and opens as before; one without it
-                    // has the plain-check row and opens its Terminal (milestone 1; the rest is milestones 2-3).
+                    // One list, no sections (project notes; the owner 2026-11-22: "I don't think we
+                    // need to separate Macs and terminals. They are just computers."), in the order added. Milestone
+                    // 3 and project notes (name-opens-default): one line each, the light, the name (its Opens In way), the
+                    // three way-in icons, then the (i) (`ComputerListRow`).
                     Section {
                         ForEach(list.store.computers) { e in
-                            Group {
-                                if e.hasScreenSharing {
-                                    MacRow(mac: e, reach: list.reach[e.id] ?? .checking, chosen: list.chosen[e.id],
-                                           enabled: model.phase == .idle,
-                                           connect: { model.connect(to: e, via: list.chosen[e.id]) },
-                                           settings: { settingsFor = e.id })
-                                } else {
-                                    ComputerRow(entry: e, reach: ComputerReach.shared.state(e.id),
-                                                opens: Self.opensWithoutScreenSharing(e),
-                                                enabled: model.phase == .idle,
-                                                connect: { openWithoutScreenSharing(e) },
-                                                settings: { settingsFor = e.id })
-                                }
-                            }
+                            ComputerListRow(entry: e, columns: WayIn.inThisBuild,
+                                            look: { WayLook.of(e, $0, mac: list.reach[e.id], reach: ComputerReach.shared) },
+                                            light: ComputerLight.of(e, mac: list.reach[e.id], reach: ComputerReach.shared),
+                                            openDefault: { ComputerNav.shared.openDefault(e) },
+                                            settings: { settingsFor = e.id },
+                                            open: { open(e, in: $0) },
+                                            add: { addingWay = AddWayTarget(id: e.id, way: $0) })
+                            // Shorter rows (the owner: "these rows can be shorter"): the icons' own 44 pt touch targets give the
+                            // height, so the list's extra top and bottom padding goes; the last icon's target reaches
+                            // close to the edge.
+                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 8))
                             .swipeActions(edge: .trailing) {
                                 Button("Remove", role: .destructive) { removing = e }
                             }
@@ -71,6 +70,11 @@ struct MacListScreen: View {
                         }
                         if case let .awaitingApproval(code) = model.phase {
                             LabeledContent("Code", value: code).font(.body.monospaced())
+                        }
+                        // Project notes (computers-m3) 2: while Screen Sharing is still trying, the computer's other ways in
+                        // are right here ("Open in JetKVM Instead"); choosing one ends this attempt.
+                        if let e = model.mac.flatMap({ list.store.entry($0.id) }) {
+                            OtherWaysOffer(entry: e, current: .screenSharing) { model.disconnect() }
                         }
                     }
                 }
@@ -96,6 +100,9 @@ struct MacListScreen: View {
                     Text(lock.message ?? AutoUnlockRules.securityFooter)
                 }
                 .id("security")
+
+                // List sync (the owner 2026-11-22: "CloudKit", "On"): one switch, its footer says what syncs and what not.
+                SyncSection(sync: ComputerSync.shared)
 
                 Section {
                     LabeledContent("Key") {
@@ -142,11 +149,18 @@ struct MacListScreen: View {
             }
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showAdd, onDismiss: probe) { AddComputerSheet(store: list.store, identity: model.identity) }
+            // A gray icon: that way in's Add sheet (the owner 2026-11-22: "If you tap them you go to their settings"), the
+            // same sheet as the settings page's "Add Terminal…" row.
+            .sheet(item: $addingWay, onDismiss: probe) { t in
+                AddComputerSheet(store: list.store, identity: model.identity, existingID: t.id, fixedWay: t.way)
+            }
             .navigationDestination(item: $settingsFor) { id in
                 ComputerSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
                                        identity: model.identity)
             }
-            .modifier(RemoveMacAlert(mac: $removing) { list.store.remove($0.id) })
+            .modifier(RemoveMacAlert(mac: $removing, asksWhere: { list.store.sync?.asksOnRemove($0) ?? false }) { e, everywhere in
+                list.store.remove(e.id, everywhere: everywhere)
+            })
             .alert(UnlockMethod.current.turnOffAlertTitle, isPresented: $confirmLockOff) {
                 Button("Turn Off", role: .destructive) {
                     Task {
@@ -172,6 +186,13 @@ struct MacListScreen: View {
                 if model.notice?.offersForgetKey == true {
                     Button("Forget Saved Key", role: .destructive) { model.forgetSavedKey() }
                 }
+                // Project notes (computers-m3) 2: Screen Sharing did not open; the computer's other ways in, right here.
+                // The notice's own words stay (a sign-in or identity failure is said plainly: review finding 3).
+                if let e = model.notice?.computerID.flatMap({ list.store.entry($0) }) {
+                    ForEach(ComputerNav.others(e, than: .screenSharing)) { w in
+                        Button(w.insteadTitle) { model.notice = nil; ComputerNav.shared.open(e, in: w) }
+                    }
+                }
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(model.notice?.text ?? "")
@@ -196,17 +217,13 @@ struct MacListScreen: View {
 
     private func probe() {
         list.probeAll(identity: model.identity)
-        ComputerReach.shared.probeAll(list.store.withoutScreenSharing)
+        ComputerReach.shared.probeAll(list.store.computers)
     }
 
-    /// A computer without Screen Sharing opens on its own screen: its Terminal, else its JetKVM view (milestone 2's
-    /// minimum; Opens In and the full opening rules are milestone 3).
-    static func opensWithoutScreenSharing(_ e: MacEntry) -> Bool {
-        e.opensOnItsOwn != nil
-    }
-
-    private func openWithoutScreenSharing(_ e: MacEntry) {
-        ComputerNav.shared.open(e)
+    /// An icon the computer has: open it exactly that way (Screen Sharing: the Glass Act session, from the address the
+    /// check found; Terminal and JetKVM: their own screens, no Glass Act session).
+    private func open(_ e: MacEntry, in way: WayIn) {
+        ComputerNav.shared.open(e, in: way)
     }
 
     /// ＋: Add Computer, one sheet (project notes, one computer with any connection M2: the Mac / Terminal Computer menu is gone;
@@ -223,7 +240,13 @@ struct MacListScreen: View {
 
 }
 
-/// The list's words that cover both kinds (project notes, terminal-only computers, §1). Mac-only screens keep "Mac".
+/// The list's words that cover both kinds (project notes §1). Mac-only screens keep "Mac".
+/// The way in a gray icon adds, on which computer (the list's Add sheet).
+struct AddWayTarget: Identifiable, Hashable {
+    let id: String
+    let way: WayIn
+}
+
 enum ListWords {
     static let title = "Computers"
     /// What can be added in this build (Screen Sharing always; Terminal and JetKVM with their switches).
@@ -234,55 +257,14 @@ enum ListWords {
         let list = ways.count > 1 ? ways.dropLast().joined(separator: ", ") + ", or " + ways.last! : ways[0]
         return "Add \(list)."
     }
-    static let footer = "Tap a computer to connect. Tap ⓘ for its settings."
+    /// The footer says what the light, the name, the icons and the (i) do (project notes (name-opens-default)).
+    static let footer = "Tap a name to open it in its Opens In choice, or an icon to open it that way; a gray icon adds "
+        + "that way in. Tap ⓘ for its settings. Green: it answers. Yellow: it answers but needs you first (a sign-in, "
+        + "or allowing it on the Mac). Red: it does not answer. An exclamation mark means that way in is not answering."
 }
 
-/// One Mac in the list (plan §5.1): name, which way it answered, its state, and ⓘ for its settings (the system's
-/// detail button, as in Settings › Wi-Fi).
-struct MacRow: View {
-    let mac: MacEntry
-    let reach: MacList.Reach
-    let chosen: AddressKind?
-    let enabled: Bool
-    let connect: () -> Void
-    let settings: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: connect) {
-                HStack(spacing: 12) {
-                    Image(systemName: "desktopcomputer")
-                        .font(.title2)
-                        .foregroundStyle(reach.reachable ? Color.accentColor : .secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(mac.name).font(.headline)
-                        Text(secondLine).font(.caption).foregroundStyle(.secondary)
-                            .accessibilityIdentifier("computerWays.\(mac.name)")
-                    }
-                    Spacer()
-                    if reach != .wrongMac {
-                        Label(reach.label, systemImage: "circle.fill")
-                            .labelStyle(StatusDotStyle(color: Self.color(for: reach)))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!reach.reachable || !enabled)
-            Button("Settings for \(mac.name)", systemImage: "info.circle", action: settings)
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("macSettings.\(mac.name)")
-        }
-    }
-
-    /// What it has ("Screen Sharing · Terminal · JetKVM"); a wrong Mac says so here, since it shows no dot.
-    private var secondLine: String { reach == .wrongMac ? reach.label : mac.waysLine }
-
+/// The outer screen's words and colours for a Mac (on hold, unchanged). The open screen's row is `ComputerListRow`.
+enum MacRow {
     /// The outer screen's compact list's second line (which address answered; on hold, unchanged).
     static func secondLine(mac: MacEntry, reach: MacList.Reach, chosen: AddressKind?) -> String {
         if let chosen, reach.answered { return chosen.label }
@@ -299,16 +281,6 @@ struct MacRow: View {
         case .ready: .green
         case .signInNeeded, .askOnMac: .orange
         default: .gray
-        }
-    }
-}
-
-private struct StatusDotStyle: LabelStyle {
-    let color: Color
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) {
-            configuration.icon.font(.system(size: 8)).foregroundStyle(color)
-            configuration.title
         }
     }
 }
@@ -930,45 +902,24 @@ struct SessionTopRow: ViewModifier {
         return SessionView.choices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered)
     }
 
-    /// The widest the name bubble may be, with no info button in the row (the owner 2026-11-21, after build 46 truncated a
-    /// long name: "No, no truncation. Cut it again"). Measured on the open Duo upright (669 pt, `TopRowTests`, a
-    /// sweep of caps with four views and a name too long to fit): the bar keeps the leading parts only while they
-    /// end by x 512 (157 pt from the right edge); a 204 pt cap ends the switch at 511.7, 208 drops the whole group
-    /// off the row. Before the switch the parts take 116 pt plus the cap (margin and back to x 90, the bubble
-    /// running 3.3 pt past its cap, 22 pt to the switch). 669 pt wide: 204 pt with four views, 300 pt with two
-    /// ("My Mac mini" / "Studio Display (2)" needs about 180, so it shows in full).
-    static func nameMaxWidth(rowWidth: CGFloat, selectorWidth: CGFloat) -> CGFloat {
-        max(80, rowWidth - leadingEndFromRight - beforeSwitch - selectorWidth)
-    }
-
-    static let leadingEndFromRight: CGFloat = 157
-
-    /// Project notes 7 (the owner: "the top menu bar was gone", a computer with Screen Sharing, Terminal and
-    /// JetKVM): the narrowest the name bubble may get beside the switch. Narrower than this, the row would not fit
-    /// and the bar folded its parts (back and name included) into "•••"; so the switch gives way instead.
-    static let nameFloor: CGFloat = 120
-
-    /// Whether back, a readable name and the switch with `count` views all fit on the row. When not, the views
-    /// collapse into ONE view button with a menu (`ViewMenuButton`); back and the name always stay.
-    static func switchFits(rowWidth: CGFloat, count: Int) -> Bool {
-        rowWidth - leadingEndFromRight - beforeSwitch - ViewSelector.target * CGFloat(count) >= nameFloor
-    }
-    /// Build 56 (every part on the bar's own glass), measured with four views and an over-long two-line name: the
-    /// gap before the switch grew from 22 to 26 pt and the bubble runs up to 16 pt past its cap, so 128 (cap 192:
-    /// the switch ends at x 503.7; cap 200 sent the whole row into "•••").
-    static let beforeSwitch: CGFloat = 128
-
     /// The name bubble: the Mac's name, and on a multi-screen Mac the screen under it, as the screen menu. HIG
     /// Pop-up buttons: "A pop-up button helps people make a choice that affects their content or the surrounding
     /// view", and it "can update its content to indicate the current selection." The two lines follow the Claude
     /// app's own title capsule (the owner's reference picture): a semibold first line, a smaller secondary second line.
     /// The views as one menu button: a normal iPhone always; the Duo when the switch would not fit (fixes 7).
-    private var usesMenu: Bool { viewMenu || !Self.switchFits(rowWidth: rowWidth, count: choices.count) }
+    private var usesMenu: Bool { viewMenu || !fit.wide }
+
+    /// Project notes (session-top-bar-narrow-first) (2026-11-23): the bar starts narrow (back, the name, one view button) and
+    /// shows the full switch only once it has seen the wide form shown whole (`TopBarFit`).
+    /// Tests pass their own, to read the form.
+    @State var fit = TopBarFit()
+    /// Tests: room taken at the bar's right, standing in for the clock area's live activities (`TopBarStandIn`).
+    var standIn: CGFloat = SimulatorSwitches.topBarReserve ?? 0
+    /// Tests: try the wide form at any width (the real rule tries it only on the open Duo, `TopBarFit.canWiden`).
+    var widenAnyWidth = false
 
     @ViewBuilder private var nameBubble: some View {
-        let maxWidth = nameMaxOverride
-            ?? Self.nameMaxWidth(rowWidth: rowWidth,
-                                 selectorWidth: ViewSelector.target * CGFloat(usesMenu ? 1 : choices.count))
+        let maxWidth = nameMaxOverride ?? fit.nameMax
         if screenName != nil {
             Menu {
                 ScreenMenuItems(model: model)
@@ -1005,14 +956,185 @@ struct SessionTopRow: ViewModifier {
                     .sharedBackgroundVisibility(.hidden)
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 TopBarItem {
-                    Group {
-                        if usesMenu { ViewMenuButton(view: $view, choices: choices) }
-                        else { ViewSelector(view: $view, choices: choices) }
-                    }
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
+                    ViewSwitch(view: $view, choices: choices, usesMenu: usesMenu)
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
+                }
+                TopBarStandIn(width: standIn)
+            }
+            // Duo bar only; a normal iPhone's bar sits under the clock and keeps its own one-button form.
+            .modifier(NarrowFirstBar(fit: fit, rowWidth: rowWidth, parts: 3, hidden: hidden,
+                                     enabled: nameMaxOverride == nil && !viewMenu,
+                                     canWiden: widenAnyWidth || TopBarFit.canWiden(rowWidth: rowWidth)))
+    }
+}
+
+/// Project notes (session-top-bar-narrow-first) (the owner 2026-11-23: "Ok on the bar fix"). On the open Duo the system folds the
+/// bar's leading parts (back, the name, the views) into its own "…" when they reach the clock area, and that area's
+/// width changes with what sits beside the clock (live activities, a Focus moon, a location arrow). No fixed number
+/// can know it, so the bar does not guess:
+/// 1. It starts NARROW: back, the name (at most `nameCap`), ONE view button (the menu).
+/// 2. Once the narrow form is laid out whole, it tries the WIDE form (the full switch) once. If the bar shows it
+///    whole, it stays wide. If the system folds it, the bar goes back to narrow and stays there.
+/// 3. If even the narrow form folds, the name drops to `nameFloor` (FLOOR).
+/// One try per appearance and per size (the `.task` restarts on a new width, a turn upright, a fold). While a try is
+/// being settled the bar is drawn see-through (its alpha 0), so nobody sees the "…" or the form change: the bar
+/// appears a moment later, already in its final form. After that a watch looks once a second; when something new
+/// beside the clock folds the bar (a live activity starting), it steps down (wide to narrow, narrow to floor) at
+/// once. It never steps up again until the next size change or appearance.
+@MainActor @Observable final class TopBarFit {
+    enum Form: Equatable { case narrow, wide, floor }
+    private(set) var form: Form = .narrow
+    /// The bar is taken away for a moment so it lays out afresh: a folded bar stays folded even when its parts
+    /// shrink (seen on the unfolded simulator, build 71).
+    private(set) var rebuilding = false
+    /// Tests: every form drawn and every look at the bar, in order ("narrow", "wide", "floor", "folded", "whole").
+    private(set) var log: [String] = []
+    /// True once the try is settled and the bar is shown.
+    private(set) var settled = false
+
+    /// The name's widest size in the narrow and wide forms alike (only the views change between them, so the name
+    /// does not jump). 200: back, a 200 pt name and one view button end near x 376, inside the 413 pt where the "…"
+    /// ended on the owner's phone.
+    static let nameCap: CGFloat = 200
+    /// When even the narrow form folds: the narrowest name that still reads a few letters.
+    static let nameFloor: CGFloat = 80
+    var nameMax: CGFloat { form == .floor ? Self.nameFloor : Self.nameCap }
+    var wide: Bool { form == .wide }
+
+    /// The wide form is tried only on the open Duo (669 pt upright). The folded Duo (466 pt) keeps its one button,
+    /// as before; `--force-open-layout` (simulator only) lets a narrower screen try it, for tests.
+    static func canWiden(rowWidth: CGFloat) -> Bool { rowWidth >= 600 || SimulatorSwitches.forceOpenLayout }
+
+    /// The one rule, pure (for the tests): having seen the bar in `form`, folded or whole, what to draw next; nil
+    /// when nothing changes. `tried`: the wide form has had its one try at this size.
+    static func next(after form: Form, folded: Bool, tried: Bool) -> Form? {
+        switch (form, folded) {
+        case (.narrow, false): return tried ? nil : .wide
+        case (.narrow, true): return .floor
+        case (.wide, true): return .narrow
+        case (.wide, false), (.floor, _): return nil
+        }
+    }
+
+    /// One appearance at one size: settle the form while the bar is see-through, show it, then watch.
+    func run(rowWidth: CGFloat, parts: Int, canWiden: Bool) async {
+        form = .narrow
+        settled = false
+        log.append("narrow")
+        var tried = !canWiden
+        // The bar of this width (it may take a moment to exist while the screen is pushed in).
+        var bar: UINavigationBar?
+        for _ in 0..<20 where bar == nil && !Task.isCancelled {
+            bar = TopBarFold.bar(rowWidth: rowWidth)
+            if bar == nil { try? await Task.sleep(for: .milliseconds(25)) }
+        }
+        bar?.alpha = 0
+        defer { bar?.alpha = 1 }
+        // Settle: at most narrow -> wide -> narrow -> floor.
+        for _ in 0..<4 {
+            try? await Task.sleep(for: .milliseconds(120))
+            if Task.isCancelled { return }
+            let folded = TopBarFold.folded(rowWidth: rowWidth, parts: parts)
+            log.append(folded ? "folded" : "whole")
+            guard let n = Self.next(after: form, folded: folded, tried: tried) else { break }
+            if n == .wide { tried = true }
+            await step(to: n, rebuild: folded)
+        }
+        bar?.alpha = 1
+        settled = true
+        // Watch: something new beside the clock can fold the bar at any time; step down, never up.
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, TopBarFold.folded(rowWidth: rowWidth, parts: parts),
+                  let n = Self.next(after: form, folded: true, tried: true) else { continue }
+            log.append("folded")
+            await step(to: n, rebuild: true)
+        }
+    }
+
+    private func step(to n: Form, rebuild: Bool) async {
+        form = n
+        log.append(n == .wide ? "wide" : n == .narrow ? "narrow" : "floor")
+        guard rebuild else { return }
+        rebuilding = true
+        try? await Task.sleep(for: .milliseconds(50))
+        rebuilding = false
+    }
+}
+
+/// The bar's narrow-first behaviour on a screen with a top bar (the session, the Terminal and the JetKVM screens).
+/// `parts`: how many glass parts the bar shows when whole (back, the name, the views, Hide Keyboard).
+struct NarrowFirstBar: ViewModifier {
+    let fit: TopBarFit
+    let rowWidth: CGFloat
+    let parts: Int
+    let hidden: Bool
+    let enabled: Bool
+    let canWiden: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar(hidden || fit.rebuilding ? .hidden : .visible, for: .navigationBar)
+            .task(id: "\(rowWidth) \(hidden) \(enabled) \(parts)") {
+                guard enabled, !hidden else { return }
+                await fit.run(rowWidth: rowWidth, parts: parts, canWiden: canWiden)
+            }
+    }
+}
+
+/// Simulator and tests only (`--top-bar-reserve N`): an empty, glassless part of N pt at the bar's right that takes
+/// room from the leading parts, standing in for live activities beside the clock (the simulator cannot draw them).
+/// N = 0 (every real phone): nothing.
+struct TopBarStandIn: ToolbarContent {
+    let width: CGFloat
+
+    var body: some ToolbarContent {
+        if width > 0 {
+            ToolbarItem(placement: .topBarTrailing) { Color.clear.frame(width: width, height: 1) }
+                .sharedBackgroundVisibility(.hidden)
+        }
+    }
+}
+
+/// Reads the system's navigation bar (read only; nothing in it is changed but its see-through while a try settles).
+/// Whole, the bar has one round glass platter per part, back first at x 20. Folded, our parts sit in the system's
+/// own "…": ONE platter (48 pt) where they were (seen in the view tree on the unfolded simulator, build 71).
+@MainActor enum TopBarFold {
+    /// The bar of the key window first (the screen in front); another window can hold a bar of the same width.
+    static func bar(rowWidth: CGFloat) -> UINavigationBar? {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let scene = scene as? UIWindowScene else { continue }
+            let windows = scene.windows.filter { $0.isKeyWindow } + scene.windows.filter { !$0.isKeyWindow }
+            for window in windows where !window.isHidden {
+                if let bar = bars(in: window).first(where: { abs($0.bounds.width - rowWidth) < 1 && !$0.isHidden }) {
+                    return bar
                 }
             }
-            .toolbar(hidden ? .hidden : .visible, for: .navigationBar)
+        }
+        return nil
+    }
+
+    /// Whether the bar of that width has folded our parts into its "…": the platter count is short of `parts`, or
+    /// only the "…" is left.
+    static func folded(rowWidth: CGFloat, parts: Int) -> Bool {
+        guard let bar = bar(rowWidth: rowWidth) else { return false }
+        let platters = glass(in: bar).map { $0.convert($0.bounds, to: bar) }
+            .filter { $0.width > 0 && $0.minX >= 0 && $0.maxX <= bar.bounds.width }
+        if platters.count == 1, let f = platters.first, f.width < 60, f.minX > 100 { return true }
+        return platters.count < parts
+    }
+
+    private static func bars(in view: UIView) -> [UINavigationBar] {
+        if let bar = view as? UINavigationBar { return [bar] }
+        return view.subviews.flatMap(bars)
+    }
+
+    /// The bar's glass platters, one per part (the outermost glass view of each).
+    private static func glass(in view: UIView) -> [UIView] {
+        if !view.isHidden, view.alpha > 0, String(describing: type(of: view)).contains("GlassInteractionView") {
+            return [view]
+        }
+        return view.subviews.flatMap(glass)
     }
 }
 
@@ -1052,6 +1174,57 @@ struct BackToMacsButton: View {
         }
         .accessibilityLabel("Back to Macs")
         .accessibilityIdentifier("backToMacs")
+    }
+}
+
+/// The views control on the top bar, the ONE control for every view of a computer (project notes (view-selector-back), the owner on
+/// build 66: "The new Duo Desktop update removed the selector from within the view that let you change between
+/// screen sharing and terminal and whatnot. We should still have that there"): the Mac session, and the Terminal and
+/// JetKVM screens opened from the list's icons. The switch (`ViewSelector`) when it fits beside back and a readable
+/// name; otherwise, and always on a normal iPhone, one view button with the same choices as a menu (`ViewMenuButton`).
+struct ViewSwitch: View {
+    @Binding var view: SessionView
+    let choices: [SessionView]
+    let usesMenu: Bool
+
+    var body: some View {
+        if usesMenu { ViewMenuButton(view: $view, choices: choices) }
+        else { ViewSelector(view: $view, choices: choices) }
+    }
+}
+
+/// The views control on a Terminal or JetKVM screen opened from the list (project notes (view-selector-back)): the same
+/// `ViewSwitch` with the same choices that computer's Screen Sharing session shows (Whole Screen and Follow Pointer
+/// when it has Screen Sharing, then Terminal, then JetKVM), shown whenever it has more than one way in. The current
+/// view is this screen's. Choosing another lets go of this one (`leave`) and opens that: Whole Screen or Follow
+/// Pointer start the Screen Sharing session in that view; Terminal or JetKVM open their own screens. Milestone 3's
+/// rule stays: a list icon opens exactly its way in; this switch changes it from inside.
+struct WayViewSwitch: View {
+    let entry: MacEntry
+    let current: SessionView
+    /// The bar's narrow-first state (`TopBarFit`): the full switch only once the wide form was seen whole.
+    let fit: TopBarFit
+    let normalPhone: Bool
+    let leave: () -> Void
+
+    static func shows(_ e: MacEntry) -> Bool { e.waysInThisBuild.count > 1 }
+
+    var choices: [SessionView] { SessionView.choices(for: entry, normalPhone: normalPhone) }
+    static func usesMenu(normalPhone: Bool, wide: Bool) -> Bool { normalPhone || !wide }
+    var usesMenu: Bool { Self.usesMenu(normalPhone: normalPhone, wide: fit.wide) }
+    /// The name bubble's widest size beside this switch (the session's rule on the Duo).
+    var nameMaxWidth: CGFloat { normalPhone ? 220 : fit.nameMax }
+
+    var body: some View {
+        if Self.shows(entry) {
+            ViewSwitch(view: Binding(get: { current }, set: { choose($0) }), choices: choices, usesMenu: usesMenu)
+        }
+    }
+
+    private func choose(_ v: SessionView) {
+        guard v != current else { return }
+        leave()
+        ComputerNav.shared.open(entry, view: v)
     }
 }
 
@@ -1609,6 +1782,34 @@ extension SessionView {
     /// Whole Screen (the normal iPhone's Mac view is Follow Pointer only: "The display on the Mac is square").
     static func normalPhoneChoices(terminal: Bool, jetkvm: Bool = false) -> [SessionView] {
         choices(terminal: terminal, jetkvm: jetkvm).filter { $0 != .regular }
+    }
+
+    /// A computer's views by its ways in, as its Screen Sharing session's switch shows them (order
+    /// view-selector-back): Whole Screen and Follow Pointer for Screen Sharing (a normal iPhone: Follow Pointer
+    /// only), then Terminal, then JetKVM, each only when the computer has that way in and this build shows it.
+    static func choices(for e: MacEntry, normalPhone: Bool) -> [SessionView] {
+        var c: [SessionView] = []
+        if e.opens(.screenSharing) { c += normalPhone ? [.centred] : [.regular, .centred] }
+        #if DUO_TERMINAL
+        if e.opens(.terminal) { c.append(.terminal) }
+        #endif
+        #if DUO_JETKVM
+        if e.opens(.jetkvm) { c.append(.jetkvm) }
+        #endif
+        return c
+    }
+
+    /// The way in a view belongs to.
+    var way: WayIn {
+        switch self {
+        case .regular, .centred: .screenSharing
+        #if DUO_TERMINAL
+        case .terminal: .terminal
+        #endif
+        #if DUO_JETKVM
+        case .jetkvm: .jetkvm
+        #endif
+        }
     }
 
     /// A stored choice that is no longer offered (Terminal turned off since) falls back to Whole Screen.

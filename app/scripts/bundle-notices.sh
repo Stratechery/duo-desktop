@@ -28,3 +28,9 @@ if [ -n "${DUO_RDP_FLAG:-}" ]; then
 else
   rm -f "$DEST/RemoteDesktopNotice.txt"
 fi
+# The Basic Screen Sharing build only: RoyalVNCKit (our copy), CryptoSwift and D3DES.
+if [ -n "${DUO_VNC_FLAG:-}" ]; then
+  cp "$SRCROOT/Notices/BasicScreenSharingNotice.txt" "$DEST/BasicScreenSharingNotice.txt"
+else
+  rm -f "$DEST/BasicScreenSharingNotice.txt"
+fi

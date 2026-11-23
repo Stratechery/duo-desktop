@@ -379,14 +379,25 @@ struct TerminalComputerSection: View {
 
 // MARK: - The session screen
 
-/// A terminal-only computer open: the terminal fills the screen, with the key band over the system keyboard. The top
-/// bar has the back caret, a name bubble ("Terminal" under the name, no screen menu) and, in place of the view
-/// switch, Hide Keyboard (tapping the terminal brings it back).
+/// A computer open in Terminal from the list (project notes (computers-m3) 2), with no Glass Act session, whether or not it also
+/// has Screen Sharing: the terminal fills the screen, with the key band over the system keyboard. The top bar has the
+/// back caret, a name bubble ("Terminal" under the name, no screen menu), the view button when the computer has other
+/// ways in (`WayViewSwitch`, the session's own views control), and Hide Keyboard (tapping the terminal brings it back). While it cannot connect, the
+/// status offers the computer's other ways in ("Open in JetKVM Instead").
 struct TerminalOnlyScreen: View {
     let entry: MacEntry
     let store: MacStore
     let leave: () -> Void
     @State private var session: TerminalSession
+    /// The status has stayed up a while (not connected): offer the other ways in.
+    @State private var offerOthers = false
+    /// The bar's width (the screen's), for the views control's switch-or-menu rule.
+    @State private var rowWidth: CGFloat = 669
+    /// The bar's narrow-first state (project notes (session-top-bar-narrow-first)).
+    @State private var fit = TopBarFit()
+    /// How long "not connected" lasts before the other ways in are offered (a refused sign-in or a dead address shows
+    /// its words by then; a link that is only slow to come up does not flash the offer).
+    static let offerAfterSeconds = 4.0
 
     init(entry: MacEntry, store: MacStore, leave: @escaping () -> Void) {
         self.entry = entry
@@ -401,27 +412,39 @@ struct TerminalOnlyScreen: View {
                 TerminalHost(session: session)
                     .overlay(alignment: .top) {
                         if let s = session.status {
-                            Text(s).font(.footnote).multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                .glassEffect(.regular, in: .rect(cornerRadius: 16)).padding(8)
-                                .accessibilityIdentifier("terminalStatus")
+                            VStack(spacing: 8) {
+                                Text(s).font(.footnote).multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("terminalStatus")
+                                if offerOthers {
+                                    OtherWaysOffer(entry: current, current: .terminal, leave: leaveTerminal)
+                                        .controlSize(.small)
+                                }
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 16)).padding(8)
                         }
                     }
                 TerminalKeysBand(session: session)
                     .background(KeyLook.panel)
             }
             .background(Color.black)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { rowWidth = $0 }
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                TopBarItem { BackToMacsButton(action: { session.disconnect(); leave() }) }
+                TopBarItem { BackToMacsButton(action: { leaveTerminal(); leave() }) }
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 TopBarItem {
-                    TopRowName(mac: entry.name, screen: "Terminal", notice: nil, maxWidth: 220)
+                    TopRowName(mac: entry.name, screen: "Terminal", notice: nil, maxWidth: views.nameMaxWidth)
                 }
                 ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
                     .sharedBackgroundVisibility(.hidden)
+                // Project notes (view-selector-back): the same views control as the computer's Screen Sharing session.
+                if WayViewSwitch.shows(current) {
+                    ToolbarSpacer(.fixed, placement: .topBarLeading)
+                    TopBarItem { views }
+                }
                 ToolbarSpacer(.fixed, placement: .topBarLeading)
                 TopBarItem {
                     Button {
@@ -433,11 +456,41 @@ struct TerminalOnlyScreen: View {
                     }
                     .accessibilityIdentifier("hideKeyboard")
                 }
+                TopBarStandIn(width: SimulatorSwitches.topBarReserve ?? 0)
             }
+            // Back, the name, the views (when shown) and Hide Keyboard.
+            .modifier(NarrowFirstBar(fit: fit, rowWidth: rowWidth, parts: WayViewSwitch.shows(current) ? 4 : 3,
+                                     hidden: false, enabled: !PhoneKind.current,
+                                     canWiden: WayViewSwitch.shows(current) && TopBarFit.canWiden(rowWidth: rowWidth)))
         }
         .onAppear {
-            session.whenAppOpen { [session, entry] in session.connectComputer(entry) }
+            session.whenAppOpen { [session, entry, store] in
+                if entry.hasScreenSharing {
+                    // A Mac with Glass Act Host: its Terminal exactly as in its session (this iPhone's key, the
+                    // Host asked for the key only over a running session, which there is none of here).
+                    TerminalKeyByHost.thenConnect(session, entry: entry, store: store)
+                } else {
+                    session.connectComputer(entry)
+                }
+            }
+        }
+        .task(id: session.status == nil) {
+            offerOthers = false
+            guard session.status != nil else { return }
+            try? await Task.sleep(for: .seconds(Self.offerAfterSeconds))
+            if !Task.isCancelled, session.status != nil { offerOthers = true }
         }
     }
+
+    /// The computer as saved now (its ways in may have changed in its settings).
+    private var current: MacEntry { store.entry(entry.id) ?? entry }
+
+    /// The views control (project notes (view-selector-back)).
+    private var views: WayViewSwitch {
+        WayViewSwitch(entry: current, current: .terminal, fit: fit, normalPhone: PhoneKind.current,
+                      leave: leaveTerminal)
+    }
+
+    private func leaveTerminal() { session.disconnect() }
 }
 #endif

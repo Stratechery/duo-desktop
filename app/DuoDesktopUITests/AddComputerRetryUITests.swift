@@ -50,7 +50,7 @@ final class AddComputerRetryUITests: XCTestCase {
         app.buttons["addDone"].tap()
 
         // One computer of that name, not two.
-        let rows = app.buttons.matching(identifier: "terminalComputer.\(name)")
+        let rows = app.buttons.matching(identifier: "macSettings.\(name)")
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "listed")
         XCTAssertEqual(rows.count, 1, "the corrected try updated the same computer")
         print("ADD-RETRY ROWS: \(rows.count)")

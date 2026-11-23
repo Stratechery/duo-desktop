@@ -134,6 +134,7 @@ struct ComputerSettingsScreen: View {
                 Section("Name") {
                     TextField("Name", text: field(\.name)).accessibilityIdentifier("settingsName")
                 }
+                opensIn(entry)
                 if entry.hasScreenSharing {
                     screenSharing(entry)
                 } else {
@@ -214,8 +215,8 @@ struct ComputerSettingsScreen: View {
         } message: { way in
             Text(Self.removeWayMessage(way, name: draft?.name ?? ""))
         }
-        .modifier(RemoveMacAlert(mac: $removing) { e in
-            store.remove(e.id)
+        .modifier(RemoveMacAlert(mac: $removing, asksWhere: { store.sync?.asksOnRemove($0) ?? false }) { e, everywhere in
+            store.remove(e.id, everywhere: everywhere)
             dismiss()
         })
     }
@@ -287,6 +288,26 @@ struct ComputerSettingsScreen: View {
         removeRow(.screenSharing)
     }
 
+    /// Opens In (project notes (name-opens-default) 2): which way in a tap on the computer's name opens, from only the ways in it
+    /// has. A picker when there is a choice; with one way in, just that way.
+    @ViewBuilder private func opensIn(_ entry: MacEntry) -> some View {
+        let ways = entry.waysInThisBuild
+        Section {
+            if ways.count > 1 {
+                Picker("Opens In", selection: Binding(get: { entry.defaultWay ?? ways[0] },
+                                                      set: { w in store.update(id) { $0.opensIn = w } })) {
+                    ForEach(ways) { w in Text(w.label).tag(w) }
+                }
+                .accessibilityIdentifier("settingsOpensIn")
+            } else if let only = ways.first {
+                LabeledContent("Opens In", value: only.label)
+                    .accessibilityIdentifier("settingsOpensIn")
+            }
+        } footer: {
+            Text("What tapping its name in the list opens. Each icon in the list still opens its own way in.")
+        }
+    }
+
     /// A way in that is not set up: one row, "Add Terminal…" (an ellipsis: it opens a sheet that asks for more).
     private func addRow(_ way: WayIn, footer: String) -> some View {
         Section {
@@ -345,19 +366,41 @@ struct ComputerSettingsScreen: View {
     }
 }
 
-/// "Remove “my-mac”?" (plan §5.3; HIG Alerts: a Cancel button, a one-word destructive action).
+/// "Remove “my-mac”?" (plan §5.3; HIG Alerts: a Cancel button, a one-word destructive action). With list sync
+/// (the owner 2026-11-22: "Maybe ask if it deletes everywhere?") it asks where: Remove from All Devices, or Remove from This
+/// iPhone Only (`asksWhere`: sync is on, or iCloud has this computer).
 struct RemoveMacAlert: ViewModifier {
     @Binding var mac: MacEntry?
-    let remove: (MacEntry) -> Void
+    var asksWhere: (MacEntry) -> Bool = { _ in false }
+    /// The computer, and whether it goes from all devices.
+    let remove: (MacEntry, Bool) -> Void
 
     func body(content: Content) -> some View {
         content.alert("Remove “\(mac?.name ?? "")”?", isPresented: Binding(get: { mac != nil }, set: { if !$0 { mac = nil } }),
                       presenting: mac) { e in
-            Button("Remove", role: .destructive) { remove(e) }
+            if asksWhere(e) {
+                Button(Self.allDevices, role: .destructive) { remove(e, true) }
+                    .accessibilityIdentifier("removeAllDevices")
+                Button(Self.thisIPhoneOnly, role: .destructive) { remove(e, false) }
+                    .accessibilityIdentifier("removeThisIPhoneOnly")
+            } else {
+                Button("Remove", role: .destructive) { remove(e, true) }
+            }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text(mac?.hasScreenSharing == false ? "Its settings are deleted from this iPhone. The computer is not changed."
-                 : "Its key and settings are deleted from this iPhone. The Mac is not changed.")
+        } message: { e in
+            Text(Self.message(e, asksWhere: asksWhere(e)))
         }
+    }
+
+    static let allDevices = "Remove from All Devices"
+    static let thisIPhoneOnly = "Remove from This iPhone Only"
+
+    static func message(_ e: MacEntry, asksWhere: Bool) -> String {
+        if asksWhere {
+            return "All Devices removes it from every iPhone using your iCloud. This iPhone Only keeps it on the others. "
+                + "Either way its passwords are deleted from this iPhone, and the computer is not changed."
+        }
+        return e.hasScreenSharing ? "Its key and settings are deleted from this iPhone. The Mac is not changed."
+            : "Its settings are deleted from this iPhone. The computer is not changed."
     }
 }

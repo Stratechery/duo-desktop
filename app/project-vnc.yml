@@ -1,0 +1,21 @@
+# Basic Screen Sharing (project notes; the owner 2026-11-22: "We should probably add basic VNC
+# support for Macs, if glasshost isn't available" / "Yes on RoyalVNCKit"). Included by project.yml only when xcodegen
+# runs with DUO_VNC=YES in its environment:
+#   DUO_VNC=YES xcodegen generate   → our copy of RoyalVNCKit (../royalvnc) and upstream CryptoSwift 1.9.0 linked
+#   xcodegen generate               → no Basic Screen Sharing code, no RoyalVNCKit, no CryptoSwift
+packages:
+  # Our own copy of RoyalVNCKit (MIT) at 090b96e with our patches; CryptoSwift is pinned exactly in its Package.swift.
+  RoyalVNCKit:
+    path: ../royalvnc
+targets:
+  DuoDesktop:
+    dependencies:
+      - package: RoyalVNCKit
+        product: RoyalVNCKit
+    settings:
+      base:
+        DUO_VNC_FLAG: DUO_VNC
+  DuoDesktopTests:
+    settings:
+      base:
+        DUO_VNC_FLAG: DUO_VNC

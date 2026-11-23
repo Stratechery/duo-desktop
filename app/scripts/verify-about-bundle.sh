@@ -40,6 +40,15 @@ if [ -f "$APP/RemoteDesktopNotice.txt" ]; then
     then echo "ok       RemoteDesktopNotice.txt carries $(basename "$l") whole"; else echo "ABSENT   $(basename "$l")"; fail=1; fi
   done
 fi
+# The Basic Screen Sharing build (DUO_VNC) only: RoyalVNCKit's licence (our copy) and CryptoSwift's, whole.
+if [ -f "$APP/BasicScreenSharingNotice.txt" ]; then
+  check BasicScreenSharingNotice.txt "== RoyalVNCKit (commit $(cat "$HERE/../royalvnc/ROYALVNC_COMMIT")) =="
+  check BasicScreenSharingNotice.txt "== CryptoSwift 1.9.0 =="
+  check BasicScreenSharingNotice.txt "This product includes software developed by the \"Marcin Krzyzanowski\""
+  check BasicScreenSharingNotice.txt "Olivetti & Oracle Research Laboratory"
+  if python3 -c 'import sys; sys.exit(open(sys.argv[1]).read() not in open(sys.argv[2]).read())' "$HERE/../royalvnc/LICENSE" "$APP/BasicScreenSharingNotice.txt"
+  then echo "ok       BasicScreenSharingNotice.txt carries RoyalVNCKit's LICENSE whole"; else echo "ABSENT   RoyalVNCKit LICENSE"; fail=1; fi
+fi
 # The copied source files still carry their MIT header.
 for f in SessionModel.swift CanvasView.swift; do
   if head -2 "$HERE/DuoDesktop/$f" | grep -q "MIT licensed"; then echo "ok       source header: $f"

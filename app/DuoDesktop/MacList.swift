@@ -39,7 +39,9 @@ enum EntryKind: String, Codable, Hashable {
     case mac, terminal
 }
 
-/// One way in to a computer (project notes, one computer with any connection), in the fallback order.
+/// One way in to a computer (project notes), in the list's column order. Each list icon
+/// opens exactly its own way in; a tap on the name opens the computer's Opens In way (`MacEntry.defaultWay`; the owner
+/// 2026-11-23: "Clicking the computer name should also go to the default view").
 enum WayIn: String, Codable, CaseIterable, Hashable, Identifiable {
     case screenSharing, terminal, jetkvm
 
@@ -151,6 +153,33 @@ struct MacEntry: Identifiable, Hashable, Codable {
     var jetkvm: Bool?
     /// The JetKVM's address (its password is in the Keychain, never here).
     var jetkvmAddress: String?
+    /// Opens In, the ⓘ page's choice: the way in a tap on the name opens (project notes (name-opens-default) 2; the owner earlier:
+    /// "You should be able to choose which opens first"). Set to the Start With way when the computer is added; nil
+    /// in entries saved before it (they open in their first way in: `defaultWay`).
+    var opensIn: WayIn?
+    /// When a synced field was last changed by the person (list sync, plan §A9.3): newest wins between iPhones. nil in
+    /// entries saved before sync (read as the earliest time, never given a new one). Last used, last address, view and
+    /// Unlock Automatically do not change it.
+    var editedAt: Date?
+    /// The computer's id in iCloud when it differs from `id` (it joined a copy already there, plan §A9.1). Passwords,
+    /// SSH pins and the hidden mark stay under `id`, so nothing in the Keychain moves.
+    var syncID: String?
+    /// The JetKVM has a password (the yes/no only; the password is in this iPhone's Keychain). Synced, so another
+    /// iPhone without that password shows JetKVM as needing setting up there. nil: not known (saved before sync).
+    var jetkvmPassword: Bool?
+    /// Remote Desktop fills the Screen Sharing slot on a Windows PC (project notes: "Remote Desktop
+    /// ... lands as a second kind of Screen Sharing in the same slot"; project notes milestone 1). Kept apart
+    /// from Glass Act's `screenSharing`, so nothing Glass Act (`MacStore.macs`) ever sees a PC. nil read as off.
+    var remoteDesktop: Bool?
+    /// Remote Desktop's port (3389 when nil), user name, and the session it asks Windows for (`RDPScreen`).
+    var rdpPort: UInt16?
+    var rdpUser: String?
+    var rdpSize: RDPScreen.Size?
+    var rdpTextSize: RDPScreen.TextSize?
+    /// The PC's certificate, trusted on first use (SHA-256, hex): a different one is refused (plan §4).
+    var rdpCertificate: String?
+    /// "Don't Ask Again for This PC": the takeover notice before each connect is skipped (plan §3).
+    var rdpSkipTakeover: Bool?
 
     /// The entry in today's shape (review finding 1, the exact mapping). Already carried over: unchanged.
     /// - A Mac (no kind, or `.mac`): Screen Sharing with its own address, port and key; Terminal and JetKVM as its
@@ -178,45 +207,61 @@ struct MacEntry: Identifiable, Hashable, Codable {
     }
 
     var hasScreenSharing: Bool { screenSharing ?? (kind != .terminal) }
+    /// Its Screen Sharing slot is Windows' Remote Desktop (never together with Glass Act's).
+    var hasRemoteDesktop: Bool { (remoteDesktop ?? false) && !hasScreenSharing }
+    var rdpPortValue: UInt16 { rdpPort ?? 3389 }
+    /// The session Remote Desktop asks for (default 1920 x 1080, text at 200%: the owner 2026-11-23 "yes 1080p at 200%").
+    var rdpScreen: RDPScreen { RDPScreen(size: rdpSize ?? .default, textSize: rdpTextSize ?? .default) }
     var hasTerminal: Bool { terminal ?? false }
     /// The JetKVM switch is on and its address is set (what the view switch has always required).
     var hasJetKVM: Bool { (jetkvm ?? false) && jetkvmHost != nil }
 
-    /// The ways in this computer has, in the fallback order.
+    /// The ways in this computer has, in the list's column order.
     var waysIn: [WayIn] {
         WayIn.allCases.filter {
             switch $0 {
-            case .screenSharing: hasScreenSharing
+            case .screenSharing: hasScreenSharing || hasRemoteDesktop
             case .terminal: hasTerminal
             case .jetkvm: hasJetKVM
             }
         }
     }
 
-    /// The ways in this computer has that this build can show.
-    var waysInThisBuild: [WayIn] { waysIn.filter(WayIn.inThisBuild.contains) }
+    /// The ways in this computer has that this build can show (a PC's Screen Sharing only in a DUO_RDP build).
+    var waysInThisBuild: [WayIn] {
+        waysIn.filter { WayIn.inThisBuild.contains($0) && ($0 != .screenSharing || hasScreenSharing || RDPScreen.inThisBuild) }
+    }
 
-    /// The list row's second line: what it has, in order ("Screen Sharing · Terminal · JetKVM").
-    var waysLine: String { waysInThisBuild.map(\.label).joined(separator: " · ") }
+    /// Whether this build can open the computer in `way` (it has that way in, and the build has its code).
+    func opens(_ way: WayIn) -> Bool { waysInThisBuild.contains(way) }
+
+    /// The way in a tap on the name opens (project notes (name-opens-default) 2):
+    /// - the Opens In choice, while this build can open it;
+    /// - else the next way in it has after that one, in column order (wrapping round);
+    /// - with no choice saved (a computer added before Opens In): its first way in, so Screen Sharing if set up, else
+    ///   Terminal, else JetKVM.
+    /// nil only when this build can open none of them (such a computer is not in the list).
+    var defaultWay: WayIn? { Self.next(from: opensIn, in: waysInThisBuild) }
+
+    /// `way` if it is in `ways`, else the first of `ways` after it in column order (wrapping); with no `way`, the
+    /// first of `ways`.
+    static func next(from way: WayIn?, in ways: [WayIn]) -> WayIn? {
+        guard let way else { return WayIn.allCases.first(where: ways.contains) }
+        let all = WayIn.allCases
+        let i = all.firstIndex(of: way)!
+        return (0..<all.count).lazy.map { all[(i + $0) % all.count] }.first(where: ways.contains)
+    }
 
     /// The ways in that are set up, in any build (the JetKVM counts once its switch is on, address or not). The ⓘ
     /// page shows a section for each; removing the last of these removes the computer (milestone 2).
     var setUpWays: [WayIn] {
         WayIn.allCases.filter {
             switch $0 {
-            case .screenSharing: hasScreenSharing
+            case .screenSharing: hasScreenSharing || hasRemoteDesktop
             case .terminal: hasTerminal
             case .jetkvm: jetkvm ?? false
             }
         }
-    }
-
-    /// Milestone 2's minimum opening rule for a computer without Screen Sharing: the first way in this build has
-    /// after Screen Sharing (Terminal, then JetKVM). nil: it has Screen Sharing (a Glass Act session), or nothing
-    /// this build can open. Opens In and the full rules are milestone 3.
-    var opensOnItsOwn: WayIn? {
-        guard !hasScreenSharing else { return nil }
-        return waysInThisBuild.first { $0 != .screenSharing }
     }
 
     /// This entry with one way in taken away (the ⓘ page's Remove). Screen Sharing takes its key, last address,
@@ -228,6 +273,8 @@ struct MacEntry: Identifiable, Hashable, Codable {
         switch way {
         case .screenSharing:
             e.screenSharing = false
+            e.remoteDesktop = false
+            e.rdpCertificate = nil
             e.key = nil
             e.lastAddress = nil
             e.view = nil
@@ -238,6 +285,9 @@ struct MacEntry: Identifiable, Hashable, Codable {
             e.jetkvm = false
         }
         e.kind = e.hasScreenSharing ? nil : .terminal
+        // Project notes (name-opens-default) 2: "If that way is removed, it falls to the next that exists" (saved, so adding it
+        // back later does not change what the name opens).
+        if e.opensIn == way { e.opensIn = Self.next(from: way, in: e.setUpWays) }
         return e
     }
 
@@ -270,8 +320,8 @@ struct MacEntry: Identifiable, Hashable, Codable {
     }
 }
 
-/// The list's own file in the app's storage (plan §3). Not synchronised anywhere; the OS backup follows the
-/// phone's settings (Reviewer wording correction).
+/// The list's own file in the app's storage (plan §3). Synced through iCloud by `ComputerSync` (the allow-listed
+/// fields only); the OS backup follows the phone's settings (Reviewer wording correction).
 @MainActor @Observable
 final class MacStore {
     /// A fresh install starts with no Macs (the owner 2026-11-21: "There absolutely should not be any hard coding of
@@ -300,8 +350,6 @@ final class MacStore {
     /// The Computers list (project notes, one computer with any connection): every computer with a way in this build can show, in
     /// the order added. One this build cannot show at all stays saved, untouched, and out of the list.
     var computers: [MacEntry] { entries.filter { !$0.waysInThisBuild.isEmpty } }
-    /// The computers without Screen Sharing (they open on their own screens, not in a Glass Act session).
-    var withoutScreenSharing: [MacEntry] { computers.filter { !$0.hasScreenSharing } }
     private let url: URL
     private let defaults: UserDefaults
     /// What happened at load, for the log ("loaded 4", "carried over 4").
@@ -327,12 +375,72 @@ final class MacStore {
 
     func entry(_ id: String) -> MacEntry? { entries.first { $0.id == id } }
 
+    /// The entry with this iCloud id (its own id unless it joined another copy).
+    func entry(syncID sid: String) -> MacEntry? { entries.first { ($0.syncID ?? $0.id) == sid } }
+
+    /// The list sync (set by `ComputerSync`); nil in tests that do not sync.
+    @ObservationIgnored weak var sync: ComputerSync?
+    /// The clock for edit times (tests set it).
+    @ObservationIgnored var now: () -> Date = Date.init
+    /// This iPhone's other secrets for a computer (the JetKVM password), in every build.
+    @ObservationIgnored var secrets: DeviceSecretKeeping = DeviceSecrets.shared
+    /// A computer left the list (removed here, or from another iPhone): its open connection ends (set by the root view).
+    @ObservationIgnored var onGone: (String) -> Void = { _ in }
+
     /// The entry already holding this Mac key, if any ("Same Mac twice", plan §5.2).
     func entry(withKey key: String) -> MacEntry? { macs.first { $0.key != nil && $0.key == key } }
 
     func add(_ e: MacEntry) {
-        entries.append(e.carriedOver())
+        var e = e.carriedOver()
+        e.editedAt = now()
+        entries.append(e)
         save()
+        sync?.changed(e)
+    }
+
+    /// A computer new from Add Computer: its Opens In starts as the Start With way it was added with (order
+    /// name-opens-default 2). Ways in added to it later do not change it. A computer this iPhone hid (Remove from This
+    /// iPhone Only) comes back as itself, with the way in just added (plan §A9.1), under the new local id the sheet
+    /// already holds.
+    func addNew(_ e: MacEntry, startWith way: WayIn) {
+        var e = e
+        e.opensIn = way
+        if let (sid, hidden) = sync?.takeHidden(matching: e) {
+            e = Self.reAdded(hidden: hidden, typed: e, way: way)
+            e.syncID = sid
+        }
+        add(e)
+    }
+
+    /// The hidden copy, with the name and the way in just typed in Add Computer.
+    static func reAdded(hidden h: MacEntry, typed t: MacEntry, way: WayIn) -> MacEntry {
+        var e = t
+        let keep = SyncedComputer(h)
+        keep.apply(to: &e)
+        e.name = t.name
+        e.opensIn = way
+        switch way {
+        case .screenSharing:
+            e.screenSharing = true
+            e.home = t.home ?? h.home
+            e.tailscale = t.tailscale ?? h.tailscale
+            e.port = t.port
+            e.key = t.key ?? h.key
+        case .terminal:
+            e.terminal = true
+            e.home = t.home ?? h.home
+            e.tailscale = t.tailscale ?? h.tailscale
+            e.sshUser = t.sshUser
+            e.sshPort = t.sshPort
+            e.terminalSignIn = t.terminalSignIn
+            e.terminalOpens = t.terminalOpens
+        case .jetkvm:
+            e.jetkvm = true
+            e.jetkvmAddress = t.jetkvmAddress
+            e.jetkvmPassword = t.jetkvmPassword
+        }
+        e.kind = e.hasScreenSharing ? nil : .terminal
+        return e
     }
 
     func update(_ id: String, _ change: (inout MacEntry) -> Void) {
@@ -342,22 +450,89 @@ final class MacStore {
         // Older builds read only `kind`: keep it saying whether Glass Act is there.
         e.kind = e.hasScreenSharing ? nil : .terminal
         guard e != entries[i] else { return }
+        // Only a synced field is an edit (plan §A9.3): last used, last address, view and Unlock Automatically are not.
+        let edited = SyncedComputer(e) != SyncedComputer(entries[i])
+        if edited { e.editedAt = now() }
         entries[i] = e
         save()
+        if edited { sync?.changed(e) }
     }
 
     /// Where the Macs' passwords are (tests pass their own).
     @ObservationIgnored var passwords: MacPasswordKeeping = MacPasswordKeychain.shared
 
-    func remove(_ id: String) {
-        // Removing the Mac deletes its saved password (project notes).
-        passwords.delete(macID: id)
-        AutoUnlockFailures.set(id, failed: false, in: defaults)
+    /// Removes a computer from the list. `everywhere` (Remove from All Devices, the default): a dated removal mark
+    /// goes to iCloud. Otherwise (This iPhone Only) it is kept hidden on this iPhone. Either way this iPhone's
+    /// passwords for it are deleted and an open connection to it ends.
+    func remove(_ id: String, everywhere: Bool = true) {
+        guard let e = entry(id) else { return }
+        forgetHere(e)
         entries.removeAll { $0.id == id }
         save()
+        if everywhere { sync?.removedEverywhere(e, at: now()) } else { sync?.hiddenHere(e) }
+        onGone(id)
+    }
+
+    /// This iPhone's own secrets and pins for a computer, in every build (review finding 2): the Mac password for Unlock
+    /// Automatically (project notes), the JetKVM password, and the Terminal's SSH key pins.
+    private func forgetHere(_ e: MacEntry) {
+        passwords.delete(macID: e.id)
+        AutoUnlockFailures.set(e.id, failed: false, in: defaults)
+        secrets.deleteJetKVMPassword(e.id)
         #if DUO_JETKVM
-        JetKVMSettings.macRemoved(id)
+        JetKVMSettings.macRemoved(e.id)
         #endif
+        for port in Set([22, Int(e.sshPortValue)]) {
+            defaults.removeObject(forKey: "terminalHostKey.ssh:\(e.id):\(port)")
+        }
+    }
+
+    // MARK: Changes from iCloud (ComputerSync): never an edit here, never sent back
+
+    /// Another iPhone's newer copy of a synced computer. A way in taken away there takes this iPhone's password for it.
+    func applyRemote(_ id: String, _ c: SyncedComputer, editedAt: Date) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        let old = entries[i]
+        var e = old
+        c.apply(to: &e)
+        e.editedAt = SyncedComputer.stored(editedAt)
+        guard e != old else { return }
+        if old.hasScreenSharing && !e.hasScreenSharing {
+            passwords.delete(macID: id)
+            AutoUnlockFailures.set(id, failed: false, in: defaults)
+        }
+        if (old.jetkvm ?? false) && !(e.jetkvm ?? false) { secrets.deleteJetKVMPassword(id) }
+        entries[i] = e
+        save()
+    }
+
+    /// A computer new to this iPhone (added on another).
+    func insertRemote(_ e: MacEntry) {
+        guard entry(e.id) == nil else { return }
+        entries.append(e)
+        save()
+    }
+
+    /// Removed from all devices on another iPhone.
+    func dropRemote(_ id: String) {
+        guard let e = entry(id) else { return }
+        forgetHere(e)
+        entries.removeAll { $0.id == id }
+        save()
+        onGone(id)
+    }
+
+    /// This iPhone's copy joined the one in iCloud (first join).
+    func setSyncID(_ id: String, _ sid: String) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].syncID = sid == id ? nil : sid
+        save()
+    }
+
+    /// A different iCloud account was chosen: each computer starts again under its own id.
+    func clearSyncIDs() {
+        for i in entries.indices { entries[i].syncID = nil }
+        save()
     }
 
     /// Takes one way in away from a computer (the ⓘ page). The last way in removes the computer itself (the page
@@ -375,6 +550,7 @@ final class MacStore {
             passwords.delete(macID: id)
             AutoUnlockFailures.set(id, failed: false, in: defaults)
         case .jetkvm:
+            secrets.deleteJetKVMPassword(id)
             #if DUO_JETKVM
             JetKVMSettings.macRemoved(id)
             #endif
@@ -444,6 +620,7 @@ final class MacList {
         let g = generation
         for mac in macs {
             perAddress[mac.id] = [:]
+            if mac.name == SimulatorSwitches.hostAnswersSignIn { reach[mac.id] = .signInNeeded; continue }
             let addresses = mac.addresses.filter { Self.mayProbe($0.host) }
             if addresses.isEmpty {
                 reach[mac.id] = mac.addresses.isEmpty ? .notReachable : .notChecked
