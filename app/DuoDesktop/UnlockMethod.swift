@@ -15,13 +15,58 @@ enum UnlockMethod: String, CaseIterable, Sendable {
 
     /// What this phone has now: the enrolled method, read from `LAContext.biometryType` after `canEvaluatePolicy`;
     /// `.passcode` when nothing is enrolled or there is no such hardware.
+    /// Read from the cache (`Device`), never from LocalAuthentication in a view's body.
     static var current: UnlockMethod {
         #if targetEnvironment(simulator)
         if let forced = SimulatorSwitches.unlockMethod { return forced }
         #endif
-        let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return .passcode }
-        return from(context.biometryType)
+        return Device.now.current
+    }
+
+    // MARK: The device read, kept (First-launch Face ID fix (project notes))
+
+    /// What LocalAuthentication said about this phone, read once and kept. `canEvaluatePolicy` is a synchronous call
+    /// to the system's authentication service; it used to run in view bodies (the lock screen, the Mac list, about
+    /// five per redraw), and a system alert redraws the app. While the app's first-time Face ID question is up, that
+    /// service is busy with this app's own request; the reads now happen only when no request is pending: at launch
+    /// before the first one, after each one finishes, and on a real return (`AppLock` calls `refresh`).
+    struct Device: Sendable, Equatable {
+        var current: UnlockMethod
+        var hardware: UnlockMethod?
+        var refused: UnlockMethod?
+        var canAuthenticate: Bool
+
+        /// How many times LocalAuthentication was asked (tests).
+        nonisolated(unsafe) static var readCount = 0
+
+        static func read() -> Device {
+            readCount += 1
+            let bio = LAContext()
+            var error: NSError?
+            let ok = bio.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+            let type = from(bio.biometryType)
+            let code = error.map { LAError.Code(rawValue: $0.code) } ?? nil
+            return Device(current: ok ? type : .passcode,
+                          hardware: type == .passcode ? nil : type,
+                          refused: ok ? nil : UnlockMethod.refused(code: code, type: bio.biometryType),
+                          canAuthenticate: LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil))
+        }
+
+        private static let kept = NSLock()
+        nonisolated(unsafe) private static var value: Device?
+
+        /// The kept read (made now if there is none yet).
+        static var now: Device {
+            kept.lock(); let v = value; kept.unlock()
+            return v ?? refresh()
+        }
+
+        /// Read again and keep it. Only when no Face ID / passcode request is pending.
+        @discardableResult static func refresh() -> Device {
+            let v = read()
+            kept.lock(); value = v; kept.unlock()
+            return v
+        }
     }
 
     /// The method the phone's hardware offers even when it is not set up (for "Set up … in Settings"); nil: none.
@@ -29,10 +74,30 @@ enum UnlockMethod: String, CaseIterable, Sendable {
         #if targetEnvironment(simulator)
         if let forced = SimulatorSwitches.unlockMethod { return forced == .passcode ? nil : forced }
         #endif
-        let context = LAContext()
-        _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) // sets biometryType
-        let m = from(context.biometryType)
+        return Device.now.hardware
+    }
+
+    /// The phone has Face ID (or Touch ID / Optic ID) set up, but this app was refused it: "Don't Allow" at the
+    /// first-use question, or turned off later in Settings > Duo Desktop. LocalAuthentication then reports
+    /// `biometryNotAvailable` for the biometrics policy while `biometryType` still names the hardware; the lock goes on
+    /// with the device passcode (`.deviceOwnerAuthentication`). nil: not refused (or no such hardware).
+    static var refused: UnlockMethod? {
+        #if targetEnvironment(simulator)
+        if SimulatorSwitches.biometryDenied { return .faceID }
+        #endif
+        return Device.now.refused
+    }
+
+    /// The rule behind `refused`, testable.
+    static func refused(code: LAError.Code?, type: LABiometryType) -> UnlockMethod? {
+        guard code == .biometryNotAvailable else { return nil }
+        let m = from(type)
         return m == .passcode ? nil : m
+    }
+
+    /// What the lock screen says when the app was refused Face ID, with the way to turn it on.
+    var refusedText: String {
+        "\(name) is off for Duo Desktop, so it uses your passcode. To use \(name), turn it on in Settings > Duo Desktop."
     }
 
     static func from(_ type: LABiometryType) -> UnlockMethod {

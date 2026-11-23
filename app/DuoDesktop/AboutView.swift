@@ -124,6 +124,7 @@ struct AboutList: View {
 struct LockedView: View {
     let lock: AppLock
     private let method = UnlockMethod.current
+    private let refused = UnlockMethod.refused
 
     var body: some View {
         VStack(spacing: 20) {
@@ -142,8 +143,18 @@ struct LockedView: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .disabled(lock.busy)
+            .accessibilityIdentifier("unlockButton")
             if let m = lock.message {
                 Text(m).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            // First-launch Face ID fix: Face ID refused for the app ("Don't Allow"): say so, and the way back.
+            if let r = refused {
+                Text(r.refusedText).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .accessibilityIdentifier("biometryRefused")
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                .font(.footnote)
             }
         }
         .padding(32)

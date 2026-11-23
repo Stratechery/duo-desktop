@@ -145,6 +145,9 @@ enum SimulatorSwitches {
     static let confirmLockOff = args.contains("--confirm-lock-off")
     /// `--lock-no-prompt`: locked at launch without the system's prompt, so the lock screen can be pictured.
     static let lockNoPrompt = args.contains("--lock-no-prompt")
+    /// `--biometry-denied`: Face ID shows as turned off for the app in Settings (the simulator never asks the
+    /// first-use question, so "Don't Allow" cannot be answered there; first-launch Face ID pictures).
+    static let biometryDenied = args.contains("--biometry-denied")
 
     /// `--show-about` (README pictures): the Mac list opens with About showing.
     static let showAbout = args.contains("--show-about")
@@ -314,6 +317,7 @@ enum SimulatorSwitches {
     static let appLockPassed = false
     static let confirmLockOff = false
     static let lockNoPrompt = false
+    static let biometryDenied = false
     static let chooseScreen: UInt32? = nil
     static let pointerWalk: [(at: Double, dx: Double, dy: Double, n: Int)] = []
     @MainActor static var inputDemo: ((SessionModel) -> Void)? { nil }

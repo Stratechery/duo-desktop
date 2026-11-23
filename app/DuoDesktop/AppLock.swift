@@ -18,6 +18,11 @@ final class AppLock {
     private(set) var busy = false
     var message: String?
     @ObservationIgnored private var backgroundedAt: Date?
+    /// An automatic request for Face ID / Touch ID is due: once at launch, and once after each real return from the
+    /// background while locked. Spent when it is made. First-launch Face ID fix (project notes): the system's own
+    /// Face ID alerts (the first-use "Allow … to use Face ID?" question, "Face Not Recognized", the passcode pad)
+    /// make the app inactive and then active again; that is not a return, so it must never start another request.
+    @ObservationIgnored private(set) var autoAskDue: Bool
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let authenticate: (String) async -> Result<LAContext?, Error>
     /// The context the last successful unlock evaluated (project notes, "One Touch ID"): the saved Mac passwords
@@ -34,7 +39,10 @@ final class AppLock {
         self.authenticate = authenticate
         let on = passedForPicture || (!bypass && Self.isOn(in: defaults))
         required = on
-        locked = passedForPicture ? false : on
+        let startsLocked = passedForPicture ? false : on
+        locked = startsLocked
+        autoAskDue = startsLocked
+        UnlockMethod.Device.refresh() // before any request
     }
 
     /// The stored setting, on when never set.
@@ -53,10 +61,30 @@ final class AppLock {
         accessMayHaveChanged()
     }
 
+    /// The scene is active again. Only a real return (after `didEnterBackground`) can lock or make a request due;
+    /// active after inactive alone (a system alert, Control Center) changes nothing.
     func willEnterForeground(now: Date = Date()) {
+        guard backgroundedAt != nil else { return }
+        if !busy { UnlockMethod.Device.refresh() } // Settings may have changed while away
         if Self.shouldLock(required: required, backgroundedAt: backgroundedAt, now: now) { lockNow() }
+        if locked { autoAskDue = true }
         backgroundedAt = nil
         accessMayHaveChanged()
+    }
+
+    /// Whether to put up the system's request now, by itself: the scene is active (the window is on screen), one is
+    /// due, none is pending. Spends the due request, so a cancelled or failed one leaves the lock screen and its
+    /// button, and is never asked again until the next launch or real return.
+    func takeAutoAsk(sceneActive: Bool) -> Bool {
+        guard sceneActive, autoAskDue, locked, !busy else { return false }
+        autoAskDue = false
+        return true
+    }
+
+    /// Asks by itself when due (`takeAutoAsk`).
+    func autoUnlockIfDue(sceneActive: Bool) async {
+        guard takeAutoAsk(sceneActive: sceneActive) else { return }
+        await unlock()
     }
 
     /// Lock, dropping the context the saved passwords are read with.
@@ -84,14 +112,17 @@ final class AppLock {
 
     /// The device can do the app lock at all (passcode set, so Touch ID or the passcode).
     nonisolated static func deviceCanAuthenticate() -> Bool {
-        LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
+        UnlockMethod.Device.now.canAuthenticate
     }
 
     func unlock() async {
         guard locked, !busy else { return }
         busy = true
         defer { busy = false }
-        switch await authenticate(Self.reason) {
+        message = nil // the last answer's words go while the new request is up
+        let answer = await authenticate(Self.reason)
+        UnlockMethod.Device.refresh() // the request is over: the first-time answer may have changed what is allowed
+        switch answer {
         case let .success(context):
             authContext = context
             locked = false
@@ -108,7 +139,9 @@ final class AppLock {
         guard on != required, !busy else { return }
         busy = true
         defer { busy = false }
-        switch await authenticate(UnlockMethod.current.setRequiredReason(on)) {
+        let answer = await authenticate(UnlockMethod.current.setRequiredReason(on))
+        UnlockMethod.Device.refresh()
+        switch answer {
         case let .success(context):
             if on, !locked { authContext = context }
             if !on { authContext?.invalidate(); authContext = nil }

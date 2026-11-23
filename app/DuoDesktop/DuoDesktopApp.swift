@@ -69,7 +69,8 @@ struct RootView: View {
             lock.onAccessChange = { AppAccess.set($0) }
             AppAccess.set(lock.access)
             model.note("window on the \(sizeClass == .compact ? "outer" : "open") screen, session \(ObjectIdentifier(model).hashValue)")
-            if lock.locked, !SimulatorSwitches.lockNoPrompt { await lock.unlock() }
+            // Asked only once the scene is active, so the window is on screen first (first-launch Face ID fix).
+            if !SimulatorSwitches.lockNoPrompt { await lock.autoUnlockIfDue(sceneActive: scenePhase == .active) }
             connectColdOnOuterScreen()
         }
         // Folding or unfolding: held input is let go; the picture keeps coming (the outer screen shows it too).
@@ -86,9 +87,11 @@ struct RootView: View {
                 model.didEnterBackground()
             case .active where old == .background || old == .inactive:
                 // The lock decides first: after 5 minutes away the rejoin waits for Touch ID.
+                // Active after only inactive (a system alert such as Face ID's own) is not a return: the lock
+                // neither re-locks nor asks again (`AppLock.willEnterForeground`, `takeAutoAsk`).
                 lock.willEnterForeground()
                 model.willEnterForeground(locked: lock.locked)
-                if lock.locked, !SimulatorSwitches.lockNoPrompt { Task { await lock.unlock() } }
+                if !SimulatorSwitches.lockNoPrompt { Task { await lock.autoUnlockIfDue(sceneActive: true) } }
             default: break
             }
         }
