@@ -5,6 +5,8 @@ import Foundation
 //   duo-ssh-probe pubkey   <keyfile>
 //   duo-ssh-probe exec     <host> <user> <keyfile> <hostkeys.json> <command>...
 //   duo-ssh-probe reattach <host> <user> <keyfile> <hostkeys.json>
+//   duo-ssh-probe tailscale <host> <user> <hostkeys.json> <command>...   (Tailscale SSH: the `none` sign-in, no key;
+//                                                                        prints any sign-in banner the server sends)
 let a = CommandLine.arguments
 func say(_ s: String) { print(s); fflush(stdout) }
 
@@ -38,6 +40,20 @@ do {
     case "exec":
         try await runExec(a[2], a[3], PhoneKey.file(URL(fileURLWithPath: a[4])),
                           FileHostKeyStore(url: URL(fileURLWithPath: a[5])), Array(a[6...]))
+    case "tailscale":
+        let (host, user) = (a[2], a[3])
+        let store = FileHostKeyStore(url: URL(fileURLWithPath: a[4]))
+        let t0 = Date()
+        let c = try await SSHConnection.connect(host: host, user: user, signIn: .tailscale, hostKeys: store,
+                                                hostKeyID: sshHostKeyID(mac: host),
+                                                onBanner: { say("BANNER: \($0.debugDescription)") })
+        say(String(format: "signed in with `none` in %.2f s (no banner unless shown above)", Date().timeIntervalSince(t0)))
+        for cmd in a[5...] {
+            let r = try await c.run(cmd)
+            say("$ \(cmd)   [exit \(r.status)]\n\(r.output)")
+        }
+        c.closeTransport()
+        say("disconnected")
     case "reattach":
         let (host, user) = (a[2], a[3])
         let key = try PhoneKey.file(URL(fileURLWithPath: a[4]))

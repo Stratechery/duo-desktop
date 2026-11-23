@@ -11,6 +11,7 @@ struct MacListScreen: View {
     let lock: AppLock
     @State private var showAbout = SimulatorSwitches.showAbout
     @State private var showAdd = SimulatorSwitches.showAddMac
+    @State private var showAddTerminal = SimulatorSwitches.showAddTerminal
     @State private var settingsFor: String? = SimulatorSwitches.showMacSettings
     @State private var removing: MacEntry?
     @State private var confirmLockOff = false
@@ -20,18 +21,21 @@ struct MacListScreen: View {
     var body: some View {
         NavigationStack {
             List {
-                if list.macs.isEmpty {
+                if list.macs.isEmpty && terminals.isEmpty {
                     // Plan §5.1: a new install (or the public build) starts here.
                     Section {
                         ContentUnavailableView {
-                            Label("No Macs Yet", systemImage: "desktopcomputer")
+                            Label("No Computers Yet", systemImage: "desktopcomputer")
                         } description: {
-                            Text("Add a Mac running Glass Act Host.")
+                            Text(ListWords.emptyDescription)
                         } actions: {
-                            Button("Add Mac") { showAdd = true }.buttonStyle(.borderedProminent)
+                            addMenu(prominent: true)
                         }
                     }
                 } else {
+                    // Terminal-only computers (project notes, terminal-only computers, §1): a section of their own; the
+                    // headers show only when both kinds exist.
+                    if !list.macs.isEmpty {
                     Section {
                         ForEach(list.macs) { mac in
                             MacRow(mac: mac, reach: list.reach[mac.id] ?? .checking, chosen: list.chosen[mac.id],
@@ -42,9 +46,31 @@ struct MacListScreen: View {
                                     Button("Remove", role: .destructive) { removing = mac }
                                 }
                         }
+                    } header: {
+                        if !terminals.isEmpty { Text("Macs") }
                     } footer: {
-                        Text("Tap a Mac to connect. Tap ⓘ for its settings.")
+                        if terminals.isEmpty { Text(ListWords.footer) }
                     }
+                    }
+                    #if DUO_TERMINAL
+                    if !terminals.isEmpty {
+                        Section {
+                            ForEach(terminals) { e in
+                                TerminalComputerRow(entry: e, reach: TerminalReach.shared.state(e.id),
+                                                    enabled: model.phase == .idle,
+                                                    connect: { TerminalComputerNav.shared.openID = e.id },
+                                                    settings: { settingsFor = e.id })
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Remove", role: .destructive) { removing = e }
+                                    }
+                            }
+                        } header: {
+                            if !list.macs.isEmpty { Text("Terminal Only") }
+                        } footer: {
+                            Text(ListWords.footer)
+                        }
+                    }
+                    #endif
                 }
 
                 if model.phase != .idle {
@@ -92,7 +118,7 @@ struct MacListScreen: View {
                     }
                     // Two different stores (reviewer): the phone's own key, and the Macs' keys it has trusted.
                     LabeledContent("Key kept in", value: model.viewerKeySource.isEmpty ? "—" : model.viewerKeySource)
-                    LabeledContent("Macs’ keys kept in", value: "The Mac list, in this app")
+                    LabeledContent("Computers’ keys kept in", value: "The list, in this app")
                 } header: {
                     Text("This iPhone")
                 }
@@ -119,21 +145,30 @@ struct MacListScreen: View {
             }
             // HIG Toolbars, Titles: "Don't title windows with your app name" (DESIGN rule 7). The large title
             // sits under the clock's row; the About button is a system toolbar item in that row (rule 1).
-            .navigationTitle("Macs")
+            .navigationTitle(ListWords.title)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add Mac", systemImage: "plus") { showAdd = true }
-                        .accessibilityIdentifier("addMac")
-                }
+                ToolbarItem(placement: .topBarTrailing) { addMenu(prominent: false) }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("About", systemImage: "info.circle") { showAbout = true }
                 }
             }
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showAdd, onDismiss: probe) { AddMacSheet(store: list.store, identity: model.identity) }
+            #if DUO_TERMINAL
+            .sheet(isPresented: $showAddTerminal, onDismiss: probe) { AddTerminalComputerSheet(store: list.store) }
+            #endif
             .navigationDestination(item: $settingsFor) { id in
+                #if DUO_TERMINAL
+                if list.store.entry(id)?.isTerminal == true {
+                    TerminalComputerSettingsScreen(store: list.store, id: id)
+                } else {
+                    MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
+                                      identity: model.identity)
+                }
+                #else
                 MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
                                   identity: model.identity)
+                #endif
             }
             .modifier(RemoveMacAlert(mac: $removing) { list.store.remove($0.id) })
             .alert(UnlockMethod.current.turnOffAlertTitle, isPresented: $confirmLockOff) {
@@ -185,8 +220,62 @@ struct MacListScreen: View {
 
     private func probe() {
         list.probeAll(identity: model.identity)
+        #if DUO_TERMINAL
+        TerminalReach.shared.probeAll(list.store.terminals)
+        #endif
     }
 
+    /// The terminal-only computers (none in a build without the Terminal).
+    private var terminals: [MacEntry] {
+        #if DUO_TERMINAL
+        list.store.terminals
+        #else
+        []
+        #endif
+    }
+
+    /// ＋: a pull-down menu, Mac or Terminal Computer (HIG Pull-down buttons: the button names the action, the menu
+    /// picks the kind). A build without the Terminal has only Macs, so ＋ opens Add Mac directly, as before.
+    @ViewBuilder private func addMenu(prominent: Bool) -> some View {
+        #if DUO_TERMINAL
+        Menu {
+            Button("Mac", systemImage: "desktopcomputer") { showAdd = true }
+                .accessibilityIdentifier("addKind.mac")
+            Button("Terminal Computer", systemImage: "terminal") { showAddTerminal = true }
+                .accessibilityIdentifier("addKind.terminal")
+        } label: {
+            if prominent { Text("Add") } else { Label("Add", systemImage: "plus") }
+        }
+        .modifier(ProminentIf(on: prominent))
+        .accessibilityIdentifier("addMac")
+        #else
+        if prominent {
+            Button("Add Mac") { showAdd = true }.buttonStyle(.borderedProminent)
+        } else {
+            Button("Add Mac", systemImage: "plus") { showAdd = true }
+                .accessibilityIdentifier("addMac")
+        }
+        #endif
+    }
+
+}
+
+/// The list's words that cover both kinds (project notes, terminal-only computers, §1). Mac-only screens keep "Mac".
+enum ListWords {
+    static let title = "Computers"
+    #if DUO_TERMINAL
+    static let emptyDescription = "Add a Mac running Glass Act Host, or a computer you reach over SSH."
+    #else
+    static let emptyDescription = "Add a Mac running Glass Act Host."
+    #endif
+    static let footer = "Tap a computer to connect. Tap ⓘ for its settings."
+}
+
+private struct ProminentIf: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on { content.buttonStyle(.borderedProminent) } else { content }
+    }
 }
 
 /// One Mac in the list (plan §5.1): name, which way it answered, its state, and ⓘ for its settings (the system's

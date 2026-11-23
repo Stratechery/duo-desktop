@@ -22,7 +22,11 @@ struct RootView: View {
         Group {
             // A normal iPhone (not a Duo, by its model identifier: `PhoneKind`): its own layout, upright and sideways;
             // never the outer screen's views. The Duo goes on exactly as before, below.
-            if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
+            if let computer = openComputer, !(sizeClass == .compact && !PhoneKind.current && !SimulatorSwitches.forceOpenLayout) {
+                // A terminal-only computer (project notes, terminal-only computers, M2): its own screen, no Glass Act session.
+                // Not on the Duo's outer screen, which is for a Mac's dialogs.
+                terminalOnly(computer)
+            } else if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
                 if model.showsSession, let grid = model.shownGrid {
                     SessionScreen(model: model, grid: grid, normalPhone: true)
                 } else {
@@ -97,6 +101,22 @@ struct RootView: View {
         }
     }
 
+    /// The open terminal-only computer's entry, if one is open (always nil without the Terminal).
+    private var openComputer: MacEntry? {
+        #if DUO_TERMINAL
+        TerminalComputerNav.shared.openID.flatMap { list.store.entry($0) }
+        #else
+        nil
+        #endif
+    }
+
+    @ViewBuilder private func terminalOnly(_ e: MacEntry) -> some View {
+        #if DUO_TERMINAL
+        TerminalOnlyScreen(entry: e, store: list.store) { TerminalComputerNav.shared.openID = nil }
+            .id(e.id)
+        #endif
+    }
+
     /// Opened cold on the outer screen with one Mac: connect to it (more than one: the list). Once per launch, after
     /// the lock. Needing a sign-in or approval leaves the outer screen's one line.
     private func connectColdOnOuterScreen() {
@@ -128,6 +148,11 @@ struct RootView: View {
         if args.contains("--sideways"),
            let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+        }
+        #endif
+        #if DUO_TERMINAL
+        if let name = SimulatorSwitches.openComputer, let e = list.store.terminals.first(where: { $0.name == name }) {
+            TerminalComputerNav.shared.openID = e.id
         }
         #endif
         guard let i = args.firstIndex(of: "--connect"), i + 1 < args.count,

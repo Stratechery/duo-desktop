@@ -8,11 +8,32 @@ import NIOSSH
 public enum SSHSignIn: Sendable {
     case key(PhoneKey)
     case password(String)
+    /// Tailscale SSH (project notes, terminal-only computers, §2): the computer's Tailscale already knows who this phone is
+    /// over WireGuard, so the sign-in offers SSH's `none` method and carries no key and no password.
+    case tailscale
 }
 
 public struct SSHSignInRefused: Error, CustomStringConvertible, Sendable {
+    /// What the server said, when it said why (Tailscale's banner: "tailnet policy does not permit you to SSH as
+    /// user …").
+    public var reason: String?
+    public init(reason: String? = nil) { self.reason = reason }
+    public var description: String { reason ?? "The Mac did not accept the sign-in." }
+}
+
+/// The server took the connection but never finished the sign-in in time.
+public struct SSHSignInTimedOut: Error, CustomStringConvertible, Sendable {
     public init() {}
-    public var description: String { "The Mac did not accept the sign-in." }
+    public var description: String { "The sign-in did not finish in time." }
+}
+
+/// Tailscale SSH refuses a user it does not allow with a banner and then holds the connection open (measured
+/// 2026-11-22: still open after 90 s). That banner is read as a refusal.
+public enum TailscaleBanner {
+    public static func isRefusal(_ banner: String) -> Bool {
+        let b = banner.lowercased()
+        return b.contains("tailscale") && (b.contains("does not permit") || b.contains("not permitted"))
+    }
 }
 
 final class SignInDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
@@ -31,6 +52,9 @@ final class SignInDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked S
                                                offer: .privateKey(.init(privateKey: k.sshKey))))
         case .password(let p) where availableMethods.contains(.password):
             nextChallengePromise.succeed(.init(username: user, serviceName: "", offer: .password(.init(password: p))))
+        case .tailscale:
+            // `none` is offered first, whatever the list says; a second call means Tailscale refused this user.
+            nextChallengePromise.succeed(.init(username: user, serviceName: "", offer: .none))
         default:
             nextChallengePromise.fail(SSHSignInRefused())
         }
@@ -91,7 +115,12 @@ public final class SSHConnection: @unchecked Sendable {
     public static func connect(host: String, port: Int = 22, user: String, signIn: SSHSignIn,
                                hostKeys: HostKeyStore, hostKeyID: String,
                                timeout: TimeAmount = .seconds(10),
-                               attempt: SSHConnectAttempt? = nil) async throws -> SSHConnection {
+                               attempt: SSHConnectAttempt? = nil,
+                               onBanner: (@Sendable (String) -> Void)? = nil,
+                               signInTimeout: TimeAmount = .seconds(30)) async throws -> SSHConnection {
+        let refuses: (@Sendable (String) -> Bool)? = {
+            if case .tailscale = signIn { return TailscaleBanner.isRefusal } else { return nil }
+        }()
         let validator = TOFUHostKeyValidator(store: hostKeys, id: hostKeyID)
         let auth = SignInDelegate(user: user, signIn: signIn)
         let ready = group.next().makePromise(of: Void.self)
@@ -105,7 +134,8 @@ public final class SSHConnection: @unchecked Sendable {
                     let ssh = NIOSSHHandler(role: .client(.init(userAuthDelegate: auth, serverAuthDelegate: validator)),
                                             allocator: ch.allocator, inboundChildChannelInitializer: nil)
                     try ch.pipeline.syncOperations.addHandler(ssh)
-                    try ch.pipeline.syncOperations.addHandler(ReadyWatcher(ready: ready))
+                    try ch.pipeline.syncOperations.addHandler(ReadyWatcher(ready: ready, onBanner: onBanner, refuses: refuses,
+                                                                              deadline: signInTimeout))
                 }
             }
             .connect(host: host, port: port).get()
@@ -209,9 +239,34 @@ final class OutputBox: @unchecked Sendable {
 final class ReadyWatcher: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = Any
     let ready: EventLoopPromise<Void>
+    /// The server's sign-in banner (SSH_MSG_USERAUTH_BANNER), such as Tailscale check mode's sign-in link.
+    let onBanner: (@Sendable (String) -> Void)?
+    /// A banner that means "refused" (Tailscale's), failing the sign-in at once.
+    let refuses: (@Sendable (String) -> Bool)?
+    let deadline: TimeAmount?
     var done = false
-    init(ready: EventLoopPromise<Void>) { self.ready = ready }
+    init(ready: EventLoopPromise<Void>, onBanner: (@Sendable (String) -> Void)? = nil,
+         refuses: (@Sendable (String) -> Bool)? = nil, deadline: TimeAmount? = nil) {
+        self.ready = ready; self.onBanner = onBanner; self.refuses = refuses; self.deadline = deadline
+    }
+    func handlerAdded(context: ChannelHandlerContext) {
+        guard let deadline else { return }
+        let ctx = context
+        context.eventLoop.scheduleTask(in: deadline) { [self] in
+            guard !done else { return }
+            done = true; ready.fail(SSHSignInTimedOut()); ctx.close(promise: nil)
+        }
+    }
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let b = event as? NIOUserAuthBannerEvent {
+            onBanner?(b.message)
+            if refuses?(b.message) == true, !done {
+                done = true
+                ready.fail(SSHSignInRefused(reason: b.message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                context.close(promise: nil)
+                return
+            }
+        }
         if event is UserAuthSuccessEvent, !done { done = true; ready.succeed(()) }
         context.fireUserInboundEventTriggered(event)
     }

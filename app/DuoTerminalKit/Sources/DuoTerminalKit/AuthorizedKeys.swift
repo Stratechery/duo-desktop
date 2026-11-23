@@ -56,4 +56,11 @@ public enum ShellCommand {
     else echo 'Duo Desktop: tmux is not on this Mac, so this is a plain shell (it ends if the link drops).'; \
     exec "${SHELL:-/bin/zsh}" -l; fi
     """
+    /// The same for a terminal-only computer (a Linux server): the notice names the computer, not a Mac, and the
+    /// fallback shell is `/bin/sh`.
+    public static let tmuxOrShellComputer = """
+    PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"; if command -v tmux >/dev/null 2>&1; then exec tmux -u new -A -s \(session); \
+    else echo 'Duo Desktop: tmux is not on this computer, so this is a plain shell (it ends if the link drops).'; \
+    exec "${SHELL:-/bin/sh}" -l; fi
+    """
 }

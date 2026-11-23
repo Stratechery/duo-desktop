@@ -82,6 +82,18 @@ enum SimulatorSwitches {
 
     /// `--add-mac`: the Mac list opens with Add Mac showing, for a screenshot. `--add-mac-address A`: types A.
     static let showAddMac = args.contains("--add-mac")
+    /// `--add-terminal "Name|address|user"`: open Add Terminal Computer with these made-up fields (pictures).
+    static var addTerminalFields: (name: String, address: String, user: String)? {
+        guard let i = args.firstIndex(of: "--add-terminal"), i + 1 < args.count else { return nil }
+        let p = args[i + 1].split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        return p.count == 3 ? (p[0], p[1], p[2]) : nil
+    }
+    static var showAddTerminal: Bool { addTerminalFields != nil }
+    /// `--open-computer NAME`: open that terminal-only computer at launch (the M2 pictures and live proof).
+    static var openComputer: String? {
+        guard let i = args.firstIndex(of: "--open-computer"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
     static var addMacAddress: String? {
         guard let i = args.firstIndex(of: "--add-mac-address"), i + 1 < args.count else { return nil }
         return args[i + 1]
@@ -215,6 +227,9 @@ enum SimulatorSwitches {
     }
     #else
     @MainActor static var screenTour: ((SessionModel) -> Void)? { nil }
+    static let addTerminalFields: (name: String, address: String, user: String)? = nil
+    static let showAddTerminal = false
+    static let openComputer: String? = nil
     static let openOverview = false
     static let outerPicture: UIImage? = nil
     static let showAddMac = false

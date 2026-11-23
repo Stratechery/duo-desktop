@@ -204,7 +204,7 @@ final class TerminalLinkStartupLockTests: XCTestCase {
         var isStalled: Bool { l.withLock { stalled != nil } }
         func releaseOpen() { l.withLock { () -> CheckedContinuation<Void, Never>? in defer { stalled = nil }; return stalled }?.resume() }
 
-        func openShell(pty: (cols: Int, rows: Int), command: String, onData: @escaping @Sendable ([UInt8]) -> Void,
+        func openShell(pty: (cols: Int, rows: Int), command: String?, onData: @escaping @Sendable ([UInt8]) -> Void,
                        proceed: @escaping @Sendable () -> Bool) async throws -> TerminalLinkShell {
             l.withLock { _opens += 1 }
             guard proceed() else { throw CancellationError() }

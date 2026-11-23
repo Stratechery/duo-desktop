@@ -13,15 +13,18 @@ public final class TerminalLink: @unchecked Sendable {
 
     public struct Target: Sendable {
         public var host: String, port: Int, user: String, hostKeyID: String
-        public init(host: String, port: Int = 22, user: String, hostKeyID: String) {
-            self.host = host; self.port = port; self.user = user; self.hostKeyID = hostKeyID
+        /// Sign in with Tailscale SSH (`none`) instead of the phone's key (terminal-only computers).
+        public var tailscale: Bool
+        public init(host: String, port: Int = 22, user: String, hostKeyID: String, tailscale: Bool = false) {
+            self.host = host; self.port = port; self.user = user; self.hostKeyID = hostKeyID; self.tailscale = tailscale
         }
     }
 
     let target: Target
     let key: PhoneKey
     let hostKeys: HostKeyStore
-    let command: String
+    /// What the PTY runs; nil = the login shell the computer starts (no tmux).
+    let command: String?
     public var onOutput: @Sendable ([UInt8]) -> Void = { _ in }
     public var onState: @Sendable (State) -> Void = { _ in }
     /// Touch ID clarity B: each failed attempt's error (a refused sign-in too, just before `.stopped`), so the
@@ -30,13 +33,18 @@ public final class TerminalLink: @unchecked Sendable {
     /// Review fixes (review finding 3): asked before every connect and retry, and before input is sent. The app
     /// passes its lock state; false = wait (parked, no attempt) until `wake()`.
     public var mayConnect: @Sendable () -> Bool = { true }
+    /// The server's sign-in banner, if it sends one (Tailscale check mode would send its link this way).
+    public var onBanner: @Sendable (String) -> Void = { _ in }
 
     /// Review fixes 2 (review finding 3): how one attempt connects. The real one is SSH; tests stub it to hold a
     /// connect in flight across a lock. It must honour `attempt` (cancelled = close and throw).
-    public var connector: @Sendable (Target, PhoneKey, HostKeyStore, SSHConnectAttempt) async throws
-        -> TerminalLinkTransport = { t, key, hostKeys, attempt in
-            try await SSHConnection.connect(host: t.host, port: t.port, user: t.user, signIn: .key(key),
-                                            hostKeys: hostKeys, hostKeyID: t.hostKeyID, attempt: attempt)
+    public lazy var connector: @Sendable (Target, PhoneKey, HostKeyStore, SSHConnectAttempt) async throws
+        -> TerminalLinkTransport = { [weak self] t, key, hostKeys, attempt in
+            let banner = self?.onBanner
+            return try await SSHConnection.connect(host: t.host, port: t.port, user: t.user,
+                                                   signIn: t.tailscale ? .tailscale : .key(key),
+                                                   hostKeys: hostKeys, hostKeyID: t.hostKeyID, attempt: attempt,
+                                                   onBanner: { banner?($0) })
         }
 
     private let lock = NSLock()
@@ -56,7 +64,7 @@ public final class TerminalLink: @unchecked Sendable {
     private var held = false
     private var parked: CheckedContinuation<Void, Never>?
 
-    public init(target: Target, key: PhoneKey, hostKeys: HostKeyStore, command: String = ShellCommand.tmuxOrShell) {
+    public init(target: Target, key: PhoneKey, hostKeys: HostKeyStore, command: String? = ShellCommand.tmuxOrShell) {
         self.target = target; self.key = key; self.hostKeys = hostKeys; self.command = command
     }
 
@@ -182,7 +190,9 @@ public final class TerminalLink: @unchecked Sendable {
                 guard owns(g) else { break }
                 lock.withLock { wanted = false }
                 onAttemptFailed(e)
-                onState(.stopped("The Mac did not accept this phone's key. Add it in the Mac's settings.")); return
+                onState(.stopped(target.tailscale
+                    ? "Tailscale refused “\(target.user)” for this iPhone."
+                    : "The Mac did not accept this phone's key. Add it in the Mac's settings.")); return
             } catch {
                 lock.withLock { if pending === a { pending = nil } }
                 // Cancelled by the lock: no wait, the loop parks at once.
@@ -200,7 +210,7 @@ public final class TerminalLink: @unchecked Sendable {
 /// Review fixes 2 (review finding 3): what `TerminalLink` needs of one connection, so a test can hold a connect or an
 /// open across a lock. `proceed` is asked before each step that reaches the Mac (channel, PTY, command).
 public protocol TerminalLinkTransport: AnyObject, Sendable {
-    func openShell(pty: (cols: Int, rows: Int), command: String, onData: @escaping @Sendable ([UInt8]) -> Void,
+    func openShell(pty: (cols: Int, rows: Int), command: String?, onData: @escaping @Sendable ([UInt8]) -> Void,
                    proceed: @escaping @Sendable () -> Bool) async throws -> TerminalLinkShell
     func closeTransport()
     func waitClosed() async
@@ -214,7 +224,7 @@ public protocol TerminalLinkShell: AnyObject, Sendable {
 extension SSHShell: TerminalLinkShell {}
 
 extension SSHConnection: TerminalLinkTransport {
-    public func openShell(pty: (cols: Int, rows: Int), command: String, onData: @escaping @Sendable ([UInt8]) -> Void,
+    public func openShell(pty: (cols: Int, rows: Int), command: String?, onData: @escaping @Sendable ([UInt8]) -> Void,
                           proceed: @escaping @Sendable () -> Bool) async throws -> TerminalLinkShell {
         try await open(pty: pty, command: command, onData: onData, proceed: proceed)
     }

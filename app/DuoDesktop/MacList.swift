@@ -32,6 +32,12 @@ enum AddressKind: String, Codable, CaseIterable, Hashable {
     }
 }
 
+/// What a list entry is (project notes, terminal-only computers, §1): a Mac running Glass Act Host, or a computer reached only
+/// over SSH for its terminal. Entries saved before this existed have no kind and read as a Mac.
+enum EntryKind: String, Codable, Hashable {
+    case mac, terminal
+}
+
 /// One Mac, stored on the phone (plan §4). The id is fixed, so renaming the Mac or changing its addresses keeps
 /// everything. The Mac's key lives here, not with an address: every address is checked against the same key.
 struct MacEntry: Identifiable, Hashable, Codable {
@@ -51,11 +57,16 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// The slot for a custom layout per Mac; only "standard" exists.
     var layout: String = "standard"
     var lastUsed: Date?
+    /// nil = a Mac (every entry saved before terminal-only computers).
+    var kind: EntryKind?
     #if DUO_TERMINAL
     /// The Terminal switch (Terminal.swift: `terminalOn`); nil in entries saved before it existed, read as off.
     var terminal: Bool?
-    /// The Mac account the terminal signs in as over SSH (M2 on).
+    /// The Mac account the terminal signs in as over SSH (M2 on); a terminal-only computer's user name.
     var sshUser: String?
+    /// A terminal-only computer: how it signs in and what it opens (nil in Mac entries).
+    var terminalSignIn: TerminalSignIn?
+    var terminalOpens: TerminalOpens?
     #endif
     #if DUO_JETKVM
     /// The JetKVM switch (JetKVM.swift: `jetkvmOn`); nil in entries saved before it existed, read as off.
@@ -63,6 +74,8 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// The JetKVM's address (its password is in the Keychain, never here).
     var jetkvmAddress: String?
     #endif
+
+    var isTerminal: Bool { kind == .terminal }
 
     func address(_ kind: AddressKind) -> String? {
         let a = (kind == .home ? home : tailscale)?.trimmingCharacters(in: .whitespaces)
@@ -103,7 +116,13 @@ final class MacStore {
         defaults: .standard,
         knownHosts: KnownHosts(url: AppPaths.dataDirectory.appendingPathComponent(IdentityFiles.knownHosts)))
 
-    private(set) var macs: [MacEntry] = []
+    /// Every entry, in the order added (what the file holds).
+    private(set) var entries: [MacEntry] = []
+    /// The Macs only: everything Glass Act (probes, sessions, the outer screen, auto-unlock) reads this, so a
+    /// terminal-only computer never reaches any of it.
+    var macs: [MacEntry] { entries.filter { !$0.isTerminal } }
+    /// The terminal-only computers.
+    var terminals: [MacEntry] { entries.filter(\.isTerminal) }
     private let url: URL
     private let defaults: UserDefaults
     /// What happened at load, for the log ("loaded 4", "carried over 4").
@@ -113,32 +132,32 @@ final class MacStore {
         self.url = url
         self.defaults = defaults
         if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([MacEntry].self, from: data) {
-            macs = list
-            loadNote = "loaded \(list.count) Macs"
+            entries = list
+            loadNote = "loaded \(list.count) entries"
         } else {
             // No stored list: nothing is invented (a stored list, such as one carried over by an earlier build, is
             // kept untouched above).
-            macs = Self.starting
-            loadNote = "no stored list: \(macs.count) Macs"
+            entries = Self.starting
+            loadNote = "no stored list: \(entries.count) Macs"
         }
     }
 
-    func entry(_ id: String) -> MacEntry? { macs.first { $0.id == id } }
+    func entry(_ id: String) -> MacEntry? { entries.first { $0.id == id } }
 
     /// The entry already holding this Mac key, if any ("Same Mac twice", plan §5.2).
     func entry(withKey key: String) -> MacEntry? { macs.first { $0.key != nil && $0.key == key } }
 
     func add(_ e: MacEntry) {
-        macs.append(e)
+        entries.append(e)
         save()
     }
 
     func update(_ id: String, _ change: (inout MacEntry) -> Void) {
-        guard let i = macs.firstIndex(where: { $0.id == id }) else { return }
-        var e = macs[i]
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        var e = entries[i]
         change(&e)
-        guard e != macs[i] else { return }
-        macs[i] = e
+        guard e != entries[i] else { return }
+        entries[i] = e
         save()
     }
 
@@ -149,7 +168,7 @@ final class MacStore {
         // Removing the Mac deletes its saved password (project notes).
         passwords.delete(macID: id)
         AutoUnlockFailures.set(id, failed: false, in: defaults)
-        macs.removeAll { $0.id == id }
+        entries.removeAll { $0.id == id }
         save()
         #if DUO_JETKVM
         JetKVMSettings.macRemoved(id)
@@ -159,7 +178,7 @@ final class MacStore {
     private func save() {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(macs).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try JSONEncoder().encode(entries).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         } catch {
             SessionModel.log.error("couldn't save the Mac list: \(error.localizedDescription, privacy: .public)")
         }

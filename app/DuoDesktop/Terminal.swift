@@ -249,6 +249,79 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         }
     }
 
+    /// A terminal-only computer (project notes, terminal-only computers, M2): no Glass Act Host behind it, so no key request;
+    /// signs in with Tailscale (`none`) or this iPhone's key, and opens tmux `duo` (or a login shell with a notice
+    /// when the computer has no tmux), or the login shell itself. Reconnects and rejoins as a Mac's terminal does.
+    func connectComputer(_ entry: MacEntry) {
+        guard let user = entry.sshUser, !user.isEmpty else {
+            status = "Set the user name in \(entry.name)’s settings."; problem = nil; return
+        }
+        guard let host = entry.address(.tailscale) ?? entry.address(.home) else {
+            status = "\(entry.name) has no address."; return
+        }
+        let tailscale = entry.signIn == .tailscale
+        let k = "\(user)@\(host):\(entry.port):\(tailscale):\(entry.opens.rawValue)"
+        guard linkKey != k else { return }
+        guard AppAccess.isOpen else { whenOpen = { [weak self] in self?.connectComputer(entry) }; return }
+        link?.stop()
+        do {
+            let key = try TerminalKeys.phoneKey()
+            let l = TerminalLink(target: .init(host: host, port: Int(entry.port), user: user,
+                                               hostKeyID: sshHostKeyID(mac: entry.id, port: Int(entry.port)),
+                                               tailscale: tailscale),
+                                 key: key, hostKeys: TerminalKeys.hostKeys, command: entry.opens.command)
+            l.onOutput = { [weak self] b in DispatchQueue.main.async { self?.view.feed(byteArray: b[...]) } }
+            let id = entry.id, name = entry.name
+            l.onBanner = { text in
+                // M2 proof: Tailscale sends no banner in accept mode; anything it does send is shown in the
+                // terminal itself, so a check-mode sign-in link would be seen.
+                let lines = Array(("\r\n" + text.replacingOccurrences(of: "\n", with: "\r\n")).utf8)
+                DispatchQueue.main.async { MainActor.assumeIsolated { TerminalComputerBanners.shared.last[id] = text } }
+                DispatchQueue.main.async { [weak self] in self?.view.feed(byteArray: lines[...]) }
+            }
+            l.onAttemptFailed = { [weak self] error in
+                let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(entry.port),
+                                                         tailscale: tailscale)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.status = p.text + (p.retries ? " Trying again…" : "")
+                        TerminalComputerProblems.shared.set(p, for: id)
+                    }
+                }
+            }
+            l.onState = { [weak self] st in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        switch st {
+                        case .connected:
+                            self?.status = nil; self?.problem = nil
+                            TerminalComputerProblems.shared.set(nil, for: id)
+                        case .connecting, .waiting:
+                            if TerminalComputerProblems.shared.problems[id] == nil { self?.status = "Connecting to \(name)…" }
+                        case .stopped(let why):
+                            self?.status = TerminalComputerProblems.shared.problems[id]?.text ?? why
+                        case .idle, .held: break
+                        }
+                    }
+                }
+            }
+            l.resize(cols: size.cols, rows: size.rows)
+            l.mayConnect = { AppAccess.isOpen }
+            link = l; linkKey = k
+            l.start()
+        } catch {
+            status = "This iPhone’s key is not available (\(error))."
+        }
+    }
+
+    /// Leaving a terminal-only computer (the back button): the link closes; tmux keeps the session on the computer.
+    func disconnect() {
+        link?.stop()
+        link = nil
+        linkKey = nil
+        status = nil
+    }
+
     /// Bytes typed into the terminal (keyboard, band, paste) go to the Mac; no local echo while there is a link.
     /// Without a link (no SSH user yet) nothing is sent.
     func deliver(_ bytes: [UInt8]) {
@@ -344,7 +417,7 @@ struct TerminalPanel: View {
     }
 }
 
-private struct TerminalHost: UIViewRepresentable {
+struct TerminalHost: UIViewRepresentable {
     let session: TerminalSession
 
     func makeUIView(context: Context) -> UIView {
@@ -840,9 +913,12 @@ struct TerminalKeyInstallSheet: View {
 @MainActor enum TerminalDemo {
     private static var done = false
     static func run(_ s: TerminalSession) {
-        guard CommandLine.arguments.contains("--terminal-demo"), !done else { return }
+        let args = CommandLine.arguments
+        // `--terminal-demo-text TEXT`: type this instead (the terminal-only pictures).
+        let text = args.firstIndex(of: "--terminal-demo-text").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        guard args.contains("--terminal-demo") || text != nil, !done else { return }
         done = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { s.view.send(txt: "hostname; ls ~/Desktop\r") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { s.view.send(txt: (text ?? "hostname; ls ~/Desktop") + "\r") }
     }
 }
 #endif
