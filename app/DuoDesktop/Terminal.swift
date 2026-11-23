@@ -260,14 +260,14 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             status = "\(entry.name) has no address."; return
         }
         let tailscale = entry.signIn == .tailscale
-        let k = "\(user)@\(host):\(entry.port):\(tailscale):\(entry.opens.rawValue)"
+        let k = "\(user)@\(host):\(entry.sshPortValue):\(tailscale):\(entry.opens.rawValue)"
         guard linkKey != k else { return }
         guard AppAccess.isOpen else { whenOpen = { [weak self] in self?.connectComputer(entry) }; return }
         link?.stop()
         do {
             let key = try TerminalKeys.phoneKey()
-            let l = TerminalLink(target: .init(host: host, port: Int(entry.port), user: user,
-                                               hostKeyID: sshHostKeyID(mac: entry.id, port: Int(entry.port)),
+            let l = TerminalLink(target: .init(host: host, port: Int(entry.sshPortValue), user: user,
+                                               hostKeyID: sshHostKeyID(mac: entry.id, port: Int(entry.sshPortValue)),
                                                tailscale: tailscale),
                                  key: key, hostKeys: TerminalKeys.hostKeys, command: entry.opens.command)
             l.onOutput = { [weak self] b in DispatchQueue.main.async { self?.view.feed(byteArray: b[...]) } }
@@ -280,7 +280,7 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
                 DispatchQueue.main.async { [weak self] in self?.view.feed(byteArray: lines[...]) }
             }
             l.onAttemptFailed = { [weak self] error in
-                let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(entry.port),
+                let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(entry.sshPortValue),
                                                          tailscale: tailscale)
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {

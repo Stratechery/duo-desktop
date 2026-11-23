@@ -35,32 +35,32 @@ final class TerminalComputersTests: XCTestCase {
         try Data(old.utf8).write(to: dir.appendingPathComponent("macs.json"))
         let s = store()
         XCTAssertEqual(s.macs.map(\.name), ["my-mac"])
-        XCTAssertFalse(try XCTUnwrap(s.entry("A")).isTerminal)
+        XCTAssertTrue(try XCTUnwrap(s.entry("A")).hasScreenSharing)
         s.add(labServer())
         let again = store()
         XCTAssertEqual(again.macs.map(\.name), ["my-mac"], "the Mac list (probes, sessions, outer screen) is unchanged")
-        let t = try XCTUnwrap(again.terminals.first)
+        let t = try XCTUnwrap(again.withoutScreenSharing.first)
         XCTAssertEqual(t.name, "Lab Server")
         XCTAssertEqual(t.kind, .terminal)
-        XCTAssertEqual(t.port, 22)
+        XCTAssertEqual(t.sshPort, 22)
         XCTAssertEqual(t.sshUser, "lab")
         XCTAssertEqual(t.signIn, .tailscale)
         XCTAssertEqual(t.opens, .tmux)
         again.remove(t.id)
-        XCTAssertTrue(store().terminals.isEmpty)
+        XCTAssertTrue(store().withoutScreenSharing.isEmpty)
     }
 
     /// Claim (M1): the address is filed by the Mac rule (a home name is Home, anything else Tailscale); the row's
-    /// second line names what it opens and how it signs in.
+    /// second line names what it has (project notes, one computer with any connection: "Terminal").
     func testNewEntryAddressAndRowWords() {
         let t = labServer()
         XCTAssertEqual(t.tailscale, "lab-server")
         XCTAssertNil(t.home)
-        XCTAssertEqual(t.terminalSecondLine, "tmux · Tailscale sign-in")
+        XCTAssertEqual(t.waysLine, "Terminal")
         var w = MacEntry.terminalComputer(name: "Windows PC", address: "windows-pc.local", port: 22, user: "me",
                                           signIn: .phoneKey, opens: .loginShell)
         XCTAssertEqual(w.home, "windows-pc.local")
-        XCTAssertEqual(w.terminalSecondLine, "Login shell · This iPhone’s key")
+        XCTAssertEqual(w.waysLine, "Terminal")
         w.setTerminalAddress("windows-pc")
         XCTAssertEqual(w.tailscale, "windows-pc")
         XCTAssertNil(w.home)
@@ -79,7 +79,7 @@ final class TerminalComputersTests: XCTestCase {
     /// Claim (M1): the list row's reach is a TCP check of the entry's own port: Ready when it connects, Not
     /// reachable when not; no SSH sign-in.
     func testReachUsesTheTCPCheckOnTheEntrysPort() {
-        let reach = TerminalReach()
+        let reach = ComputerReach()
         var asked: [(String, UInt16)] = []
         reach.check = { host, port, _, done in asked.append((host, port)); done(host == "lab-server") }
         var off = labServer(); off.id = "B"; off.setTerminalAddress("gone-server")
@@ -144,5 +144,44 @@ final class TerminalComputersTests: XCTestCase {
         XCTAssertEqual(ListWords.footer, "Tap a computer to connect. Tap ⓘ for its settings.")
         XCTAssertEqual(ListWords.emptyDescription, "Add a Mac running Glass Act Host, or a computer you reach over SSH.")
     }
+
+    /// Claim (Terminal review): the Add check stops when the app locks. The pending connect's attempt is
+    /// cancelled at the lock, and a sign-in that still finishes afterwards is not reported as signed in.
+    func testAddCheckStopsWhenTheAppLocks() async throws {
+        let before = AppAccess.state
+        defer { AppAccess.set(before) }
+        AppAccess.set(.open)
+        let gate = CheckGate()
+        let task = Task { @MainActor in
+            await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, attempt in
+                await gate.hold(attempt)
+            }
+        }
+        while !gate.holding { await Task.yield() }
+        AppAccess.set(.locked)
+        XCTAssertTrue(try XCTUnwrap(gate.attempt).isCancelled, "the pending connect is cancelled at the lock")
+        gate.release() // the sign-in "finishes" after the lock
+        let r = await task.value
+        XCTAssertFalse(r.ok)
+        XCTAssertEqual(r.text, TerminalComputerCheck.lockedText)
+
+        // Open throughout: the same stub reports success (the check itself is unchanged).
+        AppAccess.set(.open)
+        let ok = await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, _ in }
+        XCTAssertTrue(ok.ok)
+    }
+}
+
+/// Holds a stubbed connect until the test releases it.
+private final class CheckGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var c: CheckedContinuation<Void, Never>?
+    private var a: SSHConnectAttempt?
+    var holding: Bool { lock.withLock { c != nil } }
+    var attempt: SSHConnectAttempt? { lock.withLock { a } }
+    func hold(_ attempt: SSHConnectAttempt) async {
+        await withCheckedContinuation { cont in lock.withLock { c = cont; a = attempt } }
+    }
+    func release() { lock.withLock { () -> CheckedContinuation<Void, Never>? in defer { c = nil }; return c }?.resume() }
 }
 #endif

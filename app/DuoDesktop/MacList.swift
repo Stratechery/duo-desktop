@@ -32,19 +32,94 @@ enum AddressKind: String, Codable, CaseIterable, Hashable {
     }
 }
 
-/// What a list entry is (project notes, terminal-only computers, §1): a Mac running Glass Act Host, or a computer reached only
-/// over SSH for its terminal. Entries saved before this existed have no kind and read as a Mac.
+/// What a list entry was before one computer could have several ways in (project notes, terminal-only computers, §1): a Mac
+/// running Glass Act Host, or a computer reached only over SSH. Entries saved before this existed have no kind and
+/// read as a Mac. Now only read for the carry-over, and still written so an older build reads the list as before.
 enum EntryKind: String, Codable, Hashable {
     case mac, terminal
 }
 
-/// One Mac, stored on the phone (plan §4). The id is fixed, so renaming the Mac or changing its addresses keeps
-/// everything. The Mac's key lives here, not with an address: every address is checked against the same key.
+/// One way in to a computer (project notes, one computer with any connection), in the fallback order.
+enum WayIn: String, Codable, CaseIterable, Hashable {
+    case screenSharing, terminal, jetkvm
+
+    var label: String {
+        switch self {
+        case .screenSharing: "Screen Sharing"
+        case .terminal: "Terminal"
+        case .jetkvm: "JetKVM"
+        }
+    }
+
+    /// The ways in this build can show (review finding 4: the plain, Terminal-only, JetKVM-only and full builds). A
+    /// way in a build cannot show keeps its saved settings; it is only not offered.
+    static var inThisBuild: [WayIn] {
+        var w: [WayIn] = [.screenSharing]
+        #if DUO_TERMINAL
+        w.append(.terminal)
+        #endif
+        #if DUO_JETKVM
+        w.append(.jetkvm)
+        #endif
+        return w
+    }
+}
+
+/// How a computer's Terminal signs in. Outside the Terminal switch so a build without it keeps the setting.
+enum TerminalSignIn: String, Codable, CaseIterable, Identifiable, Hashable {
+    /// Tailscale SSH: the computer's Tailscale knows this iPhone; no key, no password (SSH `none`).
+    case tailscale
+    /// The iPhone's own SSH key, which the computer must list.
+    case phoneKey
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .tailscale: "Tailscale"
+        case .phoneKey: "This iPhone’s Key"
+        }
+    }
+    /// The list row's words.
+    var rowLabel: String {
+        switch self {
+        case .tailscale: "Tailscale sign-in"
+        case .phoneKey: "This iPhone’s key"
+        }
+    }
+}
+
+/// What a computer's Terminal opens. Outside the Terminal switch so a build without it keeps the setting.
+enum TerminalOpens: String, Codable, CaseIterable, Identifiable, Hashable {
+    /// tmux session `duo`, rejoined when the link drops (a plain login shell with a notice when there is no tmux).
+    case tmux
+    /// Whatever the computer starts (PowerShell on Windows); a dropped link ends it.
+    case loginShell
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .tmux: "tmux"
+        case .loginShell: "Login Shell"
+        }
+    }
+    var rowLabel: String {
+        switch self {
+        case .tmux: "tmux"
+        case .loginShell: "Login shell"
+        }
+    }
+}
+
+/// One computer, stored on the phone (plan §4; project notes, one computer with any connection). The id is fixed, so renaming it
+/// or changing its addresses keeps everything (SSH trust, JetKVM and unlock passwords are keyed by it). A computer
+/// has any of three ways in: Screen Sharing (Glass Act Host), Terminal (SSH) and JetKVM. Every field is stored in
+/// every build, so a build without the Terminal or the JetKVM keeps their settings.
 struct MacEntry: Identifiable, Hashable, Codable {
     var id: String = UUID().uuidString
     var name: String
     var home: String?
     var tailscale: String?
+    /// Glass Act's port (Screen Sharing). The Terminal's port is `sshPort`.
     var port: UInt16 = 4433
     /// The Mac's Glass Act key (SHA-256 of its public key), learned the first time either address answers.
     var key: String?
@@ -57,25 +132,82 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// The slot for a custom layout per Mac; only "standard" exists.
     var layout: String = "standard"
     var lastUsed: Date?
-    /// nil = a Mac (every entry saved before terminal-only computers).
+    /// Before ways in: nil = a Mac, `.terminal` = terminal only. Read by `carriedOver()`; kept written for older builds.
     var kind: EntryKind?
-    #if DUO_TERMINAL
-    /// The Terminal switch (Terminal.swift: `terminalOn`); nil in entries saved before it existed, read as off.
+    /// Screen Sharing is set up (Glass Act Host). nil only in entries saved before ways in (see `carriedOver()`).
+    var screenSharing: Bool?
+    /// The Terminal is set up (the Mac's Terminal switch, `terminalOn`); nil read as off.
     var terminal: Bool?
-    /// The Mac account the terminal signs in as over SSH (M2 on); a terminal-only computer's user name.
+    /// The account the Terminal signs in as over SSH.
     var sshUser: String?
-    /// A terminal-only computer: how it signs in and what it opens (nil in Mac entries).
+    /// The Terminal's SSH port (22 when nil).
+    var sshPort: UInt16?
+    /// How the Terminal signs in and what it opens.
     var terminalSignIn: TerminalSignIn?
     var terminalOpens: TerminalOpens?
-    #endif
-    #if DUO_JETKVM
-    /// The JetKVM switch (JetKVM.swift: `jetkvmOn`); nil in entries saved before it existed, read as off.
+    /// JetKVM is set up (the JetKVM switch, `jetkvmOn`); nil read as off.
     var jetkvm: Bool?
     /// The JetKVM's address (its password is in the Keychain, never here).
     var jetkvmAddress: String?
-    #endif
 
-    var isTerminal: Bool { kind == .terminal }
+    /// The entry in today's shape (review finding 1, the exact mapping). Already carried over: unchanged.
+    /// - A Mac (no kind, or `.mac`): Screen Sharing with its own address, port and key; Terminal and JetKVM as its
+    ///   switches were. Its Terminal keeps what it always did: SSH port 22, this iPhone's key, tmux.
+    /// - A terminal-only computer: Terminal only, with its own SSH port, sign-in and Opens (absent sign-in was read
+    ///   as Tailscale, absent Opens as tmux); Glass Act's port goes back to its default for Screen Sharing later.
+    func carriedOver() -> MacEntry {
+        guard screenSharing == nil else { return self }
+        var e = self
+        if kind == .terminal {
+            e.screenSharing = false
+            e.terminal = true
+            e.sshPort = port
+            e.port = MacEntry(name: "").port
+            e.terminalSignIn = terminalSignIn ?? .tailscale
+            e.terminalOpens = terminalOpens ?? .tmux
+        } else {
+            e.screenSharing = true
+            e.sshPort = sshPort ?? 22
+            e.terminalSignIn = terminalSignIn ?? .phoneKey
+            e.terminalOpens = terminalOpens ?? .tmux
+        }
+        e.kind = e.screenSharing == true ? nil : .terminal
+        return e
+    }
+
+    var hasScreenSharing: Bool { screenSharing ?? (kind != .terminal) }
+    var hasTerminal: Bool { terminal ?? false }
+    /// The JetKVM switch is on and its address is set (what the view switch has always required).
+    var hasJetKVM: Bool { (jetkvm ?? false) && jetkvmHost != nil }
+
+    /// The ways in this computer has, in the fallback order.
+    var waysIn: [WayIn] {
+        WayIn.allCases.filter {
+            switch $0 {
+            case .screenSharing: hasScreenSharing
+            case .terminal: hasTerminal
+            case .jetkvm: hasJetKVM
+            }
+        }
+    }
+
+    /// The ways in this computer has that this build can show.
+    var waysInThisBuild: [WayIn] { waysIn.filter(WayIn.inThisBuild.contains) }
+
+    /// The list row's second line: what it has, in order ("Screen Sharing · Terminal · JetKVM").
+    var waysLine: String { waysInThisBuild.map(\.label).joined(separator: " · ") }
+
+    /// The Terminal's SSH port.
+    var sshPortValue: UInt16 { sshPort ?? 22 }
+
+    /// The JetKVM's address as typed (host name or IP; a scheme or path is ignored), nil when blank.
+    var jetkvmHost: String? {
+        guard let raw = jetkvmAddress?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        var h = raw
+        if let r = h.range(of: "://") { h = String(h[r.upperBound...]) }
+        if let slash = h.firstIndex(of: "/") { h = String(h[..<slash]) }
+        return h.isEmpty ? nil : h
+    }
 
     func address(_ kind: AddressKind) -> String? {
         let a = (kind == .home ? home : tailscale)?.trimmingCharacters(in: .whitespaces)
@@ -118,11 +250,14 @@ final class MacStore {
 
     /// Every entry, in the order added (what the file holds).
     private(set) var entries: [MacEntry] = []
-    /// The Macs only: everything Glass Act (probes, sessions, the outer screen, auto-unlock) reads this, so a
-    /// terminal-only computer never reaches any of it.
-    var macs: [MacEntry] { entries.filter { !$0.isTerminal } }
-    /// The terminal-only computers.
-    var terminals: [MacEntry] { entries.filter(\.isTerminal) }
+    /// The computers with Screen Sharing only: everything Glass Act (probes, sessions, the outer screen, cold
+    /// connect, key matching, auto-unlock) reads this, so a computer without Glass Act never reaches any of it.
+    var macs: [MacEntry] { entries.filter(\.hasScreenSharing) }
+    /// The Computers list (project notes, one computer with any connection): every computer with a way in this build can show, in
+    /// the order added. One this build cannot show at all stays saved, untouched, and out of the list.
+    var computers: [MacEntry] { entries.filter { !$0.waysInThisBuild.isEmpty } }
+    /// The computers without Screen Sharing (they open on their own screens, not in a Glass Act session).
+    var withoutScreenSharing: [MacEntry] { computers.filter { !$0.hasScreenSharing } }
     private let url: URL
     private let defaults: UserDefaults
     /// What happened at load, for the log ("loaded 4", "carried over 4").
@@ -132,12 +267,16 @@ final class MacStore {
         self.url = url
         self.defaults = defaults
         if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([MacEntry].self, from: data) {
-            entries = list
-            loadNote = "loaded \(list.count) entries"
+            // Every entry in today's shape (project notes, one computer with any connection: nothing re-added, no new sign-ins),
+            // saved back at once when anything was carried over.
+            entries = list.map { $0.carriedOver() }
+            let carried = zip(list, entries).filter { $0 != $1 }.count
+            loadNote = "loaded \(list.count) entries" + (carried > 0 ? ", carried over \(carried)" : "")
+            if carried > 0 { save() }
         } else {
             // No stored list: nothing is invented (a stored list, such as one carried over by an earlier build, is
             // kept untouched above).
-            entries = Self.starting
+            entries = Self.starting.map { $0.carriedOver() }
             loadNote = "no stored list: \(entries.count) Macs"
         }
     }
@@ -148,7 +287,7 @@ final class MacStore {
     func entry(withKey key: String) -> MacEntry? { macs.first { $0.key != nil && $0.key == key } }
 
     func add(_ e: MacEntry) {
-        entries.append(e)
+        entries.append(e.carriedOver())
         save()
     }
 
@@ -156,6 +295,8 @@ final class MacStore {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         var e = entries[i]
         change(&e)
+        // Older builds read only `kind`: keep it saying whether Glass Act is there.
+        e.kind = e.hasScreenSharing ? nil : .terminal
         guard e != entries[i] else { return }
         entries[i] = e
         save()

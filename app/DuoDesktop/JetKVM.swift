@@ -23,15 +23,6 @@ extension MacEntry {
         get { jetkvm ?? false }
         set { jetkvm = newValue }
     }
-
-    /// The JetKVM's address as typed (host name or IP; a scheme or path is ignored), nil when blank.
-    var jetkvmHost: String? {
-        guard let raw = jetkvmAddress?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
-        var h = raw
-        if let r = h.range(of: "://") { h = String(h[r.upperBound...]) }
-        if let slash = h.firstIndex(of: "/") { h = String(h[..<slash]) }
-        return h.isEmpty ? nil : h
-    }
 }
 
 /// Where JetKVM passwords live. The app uses the Keychain; tests use memory.

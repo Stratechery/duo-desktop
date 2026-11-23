@@ -402,7 +402,7 @@ struct RemoveMacAlert: ViewModifier {
             Button("Remove", role: .destructive) { remove(e) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text(mac?.isTerminal == true ? "Its settings are deleted from this iPhone. The computer is not changed."
+            Text(mac?.hasScreenSharing == false ? "Its settings are deleted from this iPhone. The computer is not changed."
                  : "Its key and settings are deleted from this iPhone. The Mac is not changed.")
         }
     }

@@ -10,49 +10,9 @@ import UIKit
 
 // MARK: - What a terminal-only entry keeps
 
-/// How a terminal-only computer signs in.
-enum TerminalSignIn: String, Codable, CaseIterable, Identifiable, Hashable {
-    /// Tailscale SSH: the computer's Tailscale knows this iPhone; no key, no password (SSH `none`).
-    case tailscale
-    /// The iPhone's own SSH key, which the computer must list.
-    case phoneKey
+// `TerminalSignIn` and `TerminalOpens` are in MacList.swift, outside the Terminal switch, so every build keeps them.
 
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .tailscale: "Tailscale"
-        case .phoneKey: "This iPhone’s Key"
-        }
-    }
-    /// The list row's words.
-    var rowLabel: String {
-        switch self {
-        case .tailscale: "Tailscale sign-in"
-        case .phoneKey: "This iPhone’s key"
-        }
-    }
-}
-
-/// What a terminal-only computer opens.
-enum TerminalOpens: String, Codable, CaseIterable, Identifiable, Hashable {
-    /// tmux session `duo`, rejoined when the link drops (a plain login shell with a notice when there is no tmux).
-    case tmux
-    /// Whatever the computer starts (PowerShell on Windows); a dropped link ends it.
-    case loginShell
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .tmux: "tmux"
-        case .loginShell: "Login Shell"
-        }
-    }
-    var rowLabel: String {
-        switch self {
-        case .tmux: "tmux"
-        case .loginShell: "Login shell"
-        }
-    }
+extension TerminalOpens {
     /// What the PTY runs; nil = the SSH `shell` request, no command (POSIX lines fail in PowerShell).
     var command: String? {
         switch self {
@@ -70,8 +30,11 @@ extension MacEntry {
     /// is filed as Tailscale or Home by the same rule as a Mac's.
     static func terminalComputer(name: String, address: String, port: UInt16, user: String,
                                  signIn: TerminalSignIn, opens: TerminalOpens) -> MacEntry {
-        var e = MacEntry(name: name.trimmingCharacters(in: .whitespaces), port: port)
+        var e = MacEntry(name: name.trimmingCharacters(in: .whitespaces))
         e.kind = .terminal
+        e.screenSharing = false
+        e.terminal = true
+        e.sshPort = port
         let a = address.trimmingCharacters(in: .whitespaces)
         e.set(AddressKind.of(a), a)
         e.sshUser = user.trimmingCharacters(in: .whitespaces)
@@ -79,9 +42,6 @@ extension MacEntry {
         e.terminalOpens = opens
         return e
     }
-
-    /// The row's second line: what it opens and how it signs in ("tmux · Tailscale sign-in").
-    var terminalSecondLine: String { "\(opens.rowLabel) · \(signIn.rowLabel)" }
 
     /// The one address used (Tailscale first, as for a Mac's terminal).
     var terminalAddress: String? { address(.tailscale) ?? address(.home) }
@@ -109,77 +69,7 @@ enum TerminalComputerForm {
     }
 }
 
-// MARK: - Reach: a plain TCP connect to the SSH port, every time the list appears
-
-/// Each terminal-only computer's state in the list. No SSH sign-in happens until the row is tapped.
-@MainActor @Observable
-final class TerminalReach {
-    enum State: Equatable {
-        case checking, ready, notReachable
-        var label: String {
-            switch self {
-            case .checking: "Checking…"
-            case .ready: "Ready"
-            case .notReachable: "Not reachable"
-            }
-        }
-        var reachable: Bool { self == .ready }
-        var color: Color { self == .ready ? .green : .gray }
-    }
-
-    static let shared = TerminalReach()
-    private(set) var states: [String: State] = [:]
-    private var generation = 0
-    /// Tests swap the connect.
-    @ObservationIgnored var check: (String, UInt16, TimeInterval, @escaping @Sendable (Bool) -> Void) -> Void = TCPCheck.check
-
-    func state(_ id: String) -> State { states[id] ?? .checking }
-
-    func probeAll(_ entries: [MacEntry]) {
-        generation += 1
-        let g = generation
-        for e in entries {
-            guard let host = e.terminalAddress else { states[e.id] = .notReachable; continue }
-            // Keep the last answer while rechecking (as the Mac rows do), so a tap right after a session works.
-            if states[e.id] == nil { states[e.id] = .checking }
-            let id = e.id
-            check(host, e.port, 2) { [weak self] ok in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, self.generation == g else { return }
-                        self.states[id] = ok ? .ready : .notReachable
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// One TCP connect, answered once: true when the port took the connection within `timeout`.
-enum TCPCheck {
-    static func check(host: String, port: UInt16, timeout: TimeInterval, done: @escaping @Sendable (Bool) -> Void) {
-        guard let p = NWEndpoint.Port(rawValue: port) else { done(false); return }
-        let c = NWConnection(host: NWEndpoint.Host(host), port: p, using: .tcp)
-        let once = Once(done)
-        c.stateUpdateHandler = { st in
-            switch st {
-            case .ready: once.fire(true); c.cancel()
-            case .failed, .waiting: once.fire(false); c.cancel()
-            default: break
-            }
-        }
-        let q = DispatchQueue(label: "tcp-check")
-        c.start(queue: q)
-        q.asyncAfter(deadline: .now() + timeout) { once.fire(false); c.cancel() }
-    }
-
-    final class Once: @unchecked Sendable {
-        private let lock = NSLock()
-        private var f: (@Sendable (Bool) -> Void)?
-        init(_ f: @escaping @Sendable (Bool) -> Void) { self.f = f }
-        func fire(_ v: Bool) { lock.withLock { () -> (@Sendable (Bool) -> Void)? in defer { f = nil }; return f }?(v) }
-    }
-}
+// The list check (`ComputerReach`, `TCPCheck`) is in Computers.swift, outside the Terminal switch.
 
 // MARK: - Why a sign-in failed, in plain words (no Glass Act Host to help)
 
@@ -244,71 +134,49 @@ enum TerminalComputerProblem: Equatable {
 }
 
 /// One SSH connection to check a computer just added: connect, sign in, close. Says what happened.
+/// Terminal review: the check stops when the app locks. The pending connect is cancelled at once, and a
+/// sign-in that still finishes after the lock is closed and not reported as signed in.
 enum TerminalComputerCheck {
-    @MainActor static func run(_ e: MacEntry) async -> (ok: Bool, text: String) {
+    /// Connect and sign in with this attempt, then close (tests swap it).
+    typealias Connector = @Sendable (_ host: String, _ port: Int, _ user: String, _ signIn: SSHSignIn, _ hostKeyID: String,
+                                     _ attempt: SSHConnectAttempt) async throws -> Void
+
+    static let lockedText = "Not checked: the app locked."
+
+    static let connectAndClose: Connector = { host, port, user, signIn, hostKeyID, attempt in
+        let c = try await SSHConnection.connect(host: host, port: port, user: user, signIn: signIn,
+                                                hostKeys: TerminalKeys.hostKeys, hostKeyID: hostKeyID,
+                                                timeout: .seconds(5), attempt: attempt, signInTimeout: .seconds(15))
+        c.closeTransport()
+    }
+
+    @MainActor static func run(_ e: MacEntry, connector: Connector = connectAndClose) async -> (ok: Bool, text: String) {
+        guard AppAccess.isOpen else { return (false, lockedText) }
         guard let host = e.terminalAddress, let user = e.sshUser else { return (false, "No address or user name.") }
         let tailscale = e.signIn == .tailscale
+        let attempt = SSHConnectAttempt()
+        let watch = NotificationCenter.default.addObserver(forName: AppAccess.changed, object: nil, queue: nil) { n in
+            if (n.object as? AppAccess.State) == .locked { attempt.cancel() }
+        }
+        defer { NotificationCenter.default.removeObserver(watch) }
+        let stopped = { attempt.isCancelled || AppAccess.state == .locked }
         do {
-            let key = try TerminalKeys.phoneKey()
-            let c = try await SSHConnection.connect(host: host, port: Int(e.port), user: user,
-                                                    signIn: tailscale ? .tailscale : .key(key),
-                                                    hostKeys: TerminalKeys.hostKeys,
-                                                    hostKeyID: sshHostKeyID(mac: e.id, port: Int(e.port)),
-                                                    timeout: .seconds(5), signInTimeout: .seconds(15))
-            c.closeTransport()
+            let signIn: SSHSignIn = tailscale ? .tailscale : .key(try TerminalKeys.phoneKey())
+            try await connector(host, Int(e.sshPortValue), user, signIn,
+                                sshHostKeyID(mac: e.id, port: Int(e.sshPortValue)), attempt)
+            if stopped() { return (false, lockedText) }
             return (true, "Signed in to \(e.name) as \(user).")
         } catch let changed as HostKeyChanged {
-            return (false, changed.description)
+            return stopped() ? (false, lockedText) : (false, changed.description)
         } catch {
-            let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(e.port), tailscale: tailscale)
+            if stopped() { return (false, lockedText) }
+            let p = TerminalComputerProblem.diagnose(error, user: user, host: host, port: Int(e.sshPortValue), tailscale: tailscale)
             return (false, p.text)
         }
     }
 }
 
-// MARK: - The list row
-
-struct TerminalComputerRow: View {
-    let entry: MacEntry
-    let reach: TerminalReach.State
-    let enabled: Bool
-    let connect: () -> Void
-    let settings: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: connect) {
-                HStack(spacing: 12) {
-                    Image(systemName: "terminal")
-                        .font(.title2)
-                        .foregroundStyle(reach.reachable ? Color.accentColor : .secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.name).font(.headline)
-                        Text(entry.terminalSecondLine).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(reach.color)
-                        Text(reach.label)
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .accessibilityElement(children: .combine)
-                }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!reach.reachable || !enabled)
-            .accessibilityIdentifier("terminalComputer.\(entry.name)")
-            Button("Settings for \(entry.name)", systemImage: "info.circle", action: settings)
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("macSettings.\(entry.name)")
-        }
-    }
-}
+// The list row (`ComputerRow`) is in Computers.swift.
 
 // MARK: - Add Terminal Computer (a form sheet, HIG Sheets)
 
@@ -416,8 +284,7 @@ struct AddTerminalComputerSheet: View {
         store.add(e)
         added = e
         Task {
-            let r = AppAccess.isOpen ? await TerminalComputerCheck.run(e) : (false, "Not checked while the app is locked.")
-            checkResult = r
+            checkResult = await TerminalComputerCheck.run(e)
         }
     }
 }
@@ -453,8 +320,8 @@ struct TerminalComputerSettingsScreen: View {
                     TextField("my-server", text: bind(e.terminalAddress ?? "") { v in store.update(id) { $0.setTerminalAddress(v) } })
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     LabeledContent("Port") {
-                        TextField("22", text: bind(String(e.port)) { v in
-                            if let p = UInt16(v), p > 0 { store.update(id) { $0.port = p } }
+                        TextField("22", text: bind(String(e.sshPortValue)) { v in
+                            if let p = UInt16(v), p > 0 { store.update(id) { $0.sshPort = p } }
                         })
                         .keyboardType(.numberPad).multilineTextAlignment(.trailing)
                     }
@@ -491,11 +358,11 @@ struct TerminalComputerSettingsScreen: View {
                     PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
                 }
                 Section {
-                    let stored = TerminalKeys.hostKeys.hostKey(for: sshHostKeyID(mac: id, port: Int(e.port))) != nil && !keyForgotten
+                    let stored = TerminalKeys.hostKeys.hostKey(for: sshHostKeyID(mac: id, port: Int(e.sshPortValue))) != nil && !keyForgotten
                     LabeledContent("Computer’s Key", value: stored ? "Kept from the first sign-in" : "Not yet seen")
                     if stored {
                         Button("Forget Computer’s Key", role: .destructive) {
-                            UserDefaults.standard.removeObject(forKey: "terminalHostKey.\(sshHostKeyID(mac: id, port: Int(e.port)))")
+                            UserDefaults.standard.removeObject(forKey: "terminalHostKey.\(sshHostKeyID(mac: id, port: Int(e.sshPortValue)))")
                             keyForgotten = true
                         }
                     }

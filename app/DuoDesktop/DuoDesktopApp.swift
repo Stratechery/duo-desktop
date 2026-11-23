@@ -151,7 +151,7 @@ struct RootView: View {
         }
         #endif
         #if DUO_TERMINAL
-        if let name = SimulatorSwitches.openComputer, let e = list.store.terminals.first(where: { $0.name == name }) {
+        if let name = SimulatorSwitches.openComputer, let e = list.store.withoutScreenSharing.first(where: { $0.name == name }) {
             TerminalComputerNav.shared.openID = e.id
         }
         #endif

@@ -21,7 +21,7 @@ struct MacListScreen: View {
     var body: some View {
         NavigationStack {
             List {
-                if list.macs.isEmpty && terminals.isEmpty {
+                if list.store.computers.isEmpty {
                     // Plan §5.1: a new install (or the public build) starts here.
                     Section {
                         ContentUnavailableView {
@@ -33,44 +33,33 @@ struct MacListScreen: View {
                         }
                     }
                 } else {
-                    // Terminal-only computers (project notes, terminal-only computers, §1): a section of their own; the
-                    // headers show only when both kinds exist.
-                    if !list.macs.isEmpty {
+                    // One list, no sections (project notes, one computer with any connection; the owner 2026-11-22: "I don't think we
+                    // need to separate Macs and terminals. They are just computers."), in the order added. A
+                    // computer with Screen Sharing keeps its Glass Act row and opens as before; one without it
+                    // has the plain-check row and opens its Terminal (milestone 1; the rest is milestones 2-3).
                     Section {
-                        ForEach(list.macs) { mac in
-                            MacRow(mac: mac, reach: list.reach[mac.id] ?? .checking, chosen: list.chosen[mac.id],
-                                   enabled: model.phase == .idle,
-                                   connect: { model.connect(to: mac, via: list.chosen[mac.id]) },
-                                   settings: { settingsFor = mac.id })
-                                .swipeActions(edge: .trailing) {
-                                    Button("Remove", role: .destructive) { removing = mac }
+                        ForEach(list.store.computers) { e in
+                            Group {
+                                if e.hasScreenSharing {
+                                    MacRow(mac: e, reach: list.reach[e.id] ?? .checking, chosen: list.chosen[e.id],
+                                           enabled: model.phase == .idle,
+                                           connect: { model.connect(to: e, via: list.chosen[e.id]) },
+                                           settings: { settingsFor = e.id })
+                                } else {
+                                    ComputerRow(entry: e, reach: ComputerReach.shared.state(e.id),
+                                                opens: Self.opensWithoutScreenSharing(e),
+                                                enabled: model.phase == .idle,
+                                                connect: { openWithoutScreenSharing(e) },
+                                                settings: { settingsFor = e.id })
                                 }
-                        }
-                    } header: {
-                        if !terminals.isEmpty { Text("Macs") }
-                    } footer: {
-                        if terminals.isEmpty { Text(ListWords.footer) }
-                    }
-                    }
-                    #if DUO_TERMINAL
-                    if !terminals.isEmpty {
-                        Section {
-                            ForEach(terminals) { e in
-                                TerminalComputerRow(entry: e, reach: TerminalReach.shared.state(e.id),
-                                                    enabled: model.phase == .idle,
-                                                    connect: { TerminalComputerNav.shared.openID = e.id },
-                                                    settings: { settingsFor = e.id })
-                                    .swipeActions(edge: .trailing) {
-                                        Button("Remove", role: .destructive) { removing = e }
-                                    }
                             }
-                        } header: {
-                            if !list.macs.isEmpty { Text("Terminal Only") }
-                        } footer: {
-                            Text(ListWords.footer)
+                            .swipeActions(edge: .trailing) {
+                                Button("Remove", role: .destructive) { removing = e }
+                            }
                         }
+                    } footer: {
+                        Text(ListWords.footer)
                     }
-                    #endif
                 }
 
                 if model.phase != .idle {
@@ -159,7 +148,7 @@ struct MacListScreen: View {
             #endif
             .navigationDestination(item: $settingsFor) { id in
                 #if DUO_TERMINAL
-                if list.store.entry(id)?.isTerminal == true {
+                if list.store.entry(id)?.hasScreenSharing == false {
                     TerminalComputerSettingsScreen(store: list.store, id: id)
                 } else {
                     MacSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
@@ -220,17 +209,18 @@ struct MacListScreen: View {
 
     private func probe() {
         list.probeAll(identity: model.identity)
-        #if DUO_TERMINAL
-        TerminalReach.shared.probeAll(list.store.terminals)
-        #endif
+        ComputerReach.shared.probeAll(list.store.withoutScreenSharing)
     }
 
-    /// The terminal-only computers (none in a build without the Terminal).
-    private var terminals: [MacEntry] {
+    /// Milestone 1 opens a computer without Screen Sharing only in its Terminal, as build 59 did (a JetKVM-only
+    /// computer cannot be added yet; milestone 2 adds it and opens it).
+    static func opensWithoutScreenSharing(_ e: MacEntry) -> Bool {
+        e.waysInThisBuild.contains(.terminal)
+    }
+
+    private func openWithoutScreenSharing(_ e: MacEntry) {
         #if DUO_TERMINAL
-        list.store.terminals
-        #else
-        []
+        if Self.opensWithoutScreenSharing(e) { TerminalComputerNav.shared.openID = e.id }
         #endif
     }
 
@@ -298,6 +288,7 @@ struct MacRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(mac.name).font(.headline)
                         Text(secondLine).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("computerWays.\(mac.name)")
                     }
                     Spacer()
                     if reach != .wrongMac {
@@ -320,9 +311,10 @@ struct MacRow: View {
         }
     }
 
-    private var secondLine: String { Self.secondLine(mac: mac, reach: reach, chosen: chosen) }
+    /// What it has ("Screen Sharing · Terminal · JetKVM"); a wrong Mac says so here, since it shows no dot.
+    private var secondLine: String { reach == .wrongMac ? reach.label : mac.waysLine }
 
-    /// The row's second line (also the outer screen's compact list).
+    /// The outer screen's compact list's second line (which address answered; on hold, unchanged).
     static func secondLine(mac: MacEntry, reach: MacList.Reach, chosen: AddressKind?) -> String {
         if let chosen, reach.answered { return chosen.label }
         switch reach {
