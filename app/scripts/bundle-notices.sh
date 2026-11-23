@@ -22,3 +22,9 @@ if [ -n "${DUO_JETKVM_FLAG:-}" ]; then
 else
   rm -f "$DEST/JetKVMNotice.txt"
 fi
+# The Remote Desktop build only: FreeRDP's and OpenSSL's licences (Apache-2.0 both).
+if [ -n "${DUO_RDP_FLAG:-}" ]; then
+  cp "$SRCROOT/Notices/RemoteDesktopNotice.txt" "$DEST/RemoteDesktopNotice.txt"
+else
+  rm -f "$DEST/RemoteDesktopNotice.txt"
+fi

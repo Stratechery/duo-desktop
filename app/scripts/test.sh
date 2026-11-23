@@ -1,10 +1,11 @@
 #!/bin/sh
 # The test run for every build of Duo Desktop.
-#   scripts/test.sh                  the switch check below, then the whole unit suite (both switches, iPhone Duo)
+#   scripts/test.sh                  the switch check below, then the whole unit suite (every switch, iPhone Duo)
 #   scripts/test.sh --switches-only  the switch check only
 #
 # Switch check: the app must compile in every version, not only the full one TestFlight ships. It builds the app
-# (compile only, simulator, unsigned) with NO switches, with only DUO_TERMINAL and with only DUO_JETKVM, and stops
+# (compile only, simulator, unsigned) with NO switches, with only DUO_TERMINAL, with only DUO_JETKVM and with only
+# DUO_RDP (Remote Desktop: FreeRDP, built first by scripts/build-freerdp.sh), and stops
 # with a failure if any of them does not compile. (Build 53 to 57: the plain version did not compile because
 # Screens.swift used a Terminal-only type outside `#if DUO_TERMINAL`; nothing caught it, because every build had
 # both switches on.)
@@ -17,6 +18,7 @@ out="$app/build/test-run"
 mkdir -p "$out"
 
 "$app/scripts/fetch-glassact.sh" >/dev/null
+"$app/scripts/build-freerdp.sh" >/dev/null
 
 saved="$out/project.pbxproj.saved"
 had_project=no
@@ -46,18 +48,19 @@ compile() { # name, then the environment for xcodegen
         failed="$failed $name"
     fi
 }
-compile plain DUO_TERMINAL= DUO_JETKVM=
-compile terminal-only DUO_TERMINAL=YES DUO_JETKVM=
-compile jetkvm-only DUO_TERMINAL= DUO_JETKVM=YES
+compile plain DUO_TERMINAL= DUO_JETKVM= DUO_RDP=
+compile terminal-only DUO_TERMINAL=YES DUO_JETKVM= DUO_RDP=
+compile jetkvm-only DUO_TERMINAL= DUO_JETKVM=YES DUO_RDP=
+compile rdp-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP=YES
 if [ -n "$failed" ]; then
     echo "FAILED: not every version compiles:$failed"
     exit 1
 fi
-echo "switch check passed: plain, Terminal only and JetKVM only all compile"
+echo "switch check passed: plain, Terminal only, JetKVM only and Remote Desktop only all compile"
 [ "${1:-}" = --switches-only ] && exit 0
 
-# The whole unit suite on the full version (both switches), as TestFlight ships it.
-DUO_TERMINAL=YES DUO_JETKVM=YES xcodegen generate --quiet
+# The whole unit suite on the full version (every switch), as TestFlight ships it.
+DUO_TERMINAL=YES DUO_JETKVM=YES DUO_RDP=YES xcodegen generate --quiet
 sim=$(xcrun simctl list devices available | sed -n 's/^ *iPhone Duo (\([0-9A-F-]*\)).*/\1/p' | head -1)
 [ -n "$sim" ] || { echo "no iPhone Duo simulator"; exit 1; }
 if xcodebuild test -project DuoDesktop.xcodeproj -scheme DuoDesktop -destination "id=$sim" \

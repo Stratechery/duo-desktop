@@ -6,6 +6,9 @@ include:
   # The JetKVM view, only with DUO_JETKVM=YES in xcodegen's environment (see project-jetkvm.yml).
   - path: project-jetkvm.yml
     enable: ${DUO_JETKVM}
+  # The Remote Desktop view, only with DUO_RDP=YES in xcodegen's environment (see project-rdp.yml).
+  - path: project-rdp.yml
+    enable: ${DUO_RDP}
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
@@ -18,13 +21,15 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: 59
+    CURRENT_PROJECT_VERSION: 60
     # The two build switches (the owner 2026-11-21: "a choice at build to incorporate either the JetKVM or the terminal or
     # both"). Both empty here: the plain Glass Act version, with no SwiftTerm, SwiftNIO or WebRTC linked.
     # project-terminal.yml (xcodegen with DUO_TERMINAL=YES) sets DUO_TERMINAL_FLAG and adds the terminal packages;
     # project-jetkvm.yml (xcodegen with DUO_JETKVM=YES) sets DUO_JETKVM_FLAG and adds the JetKVM client and WebRTC.
     DUO_TERMINAL_FLAG: ""
     DUO_JETKVM_FLAG: ""
+    # project-rdp.yml (xcodegen with DUO_RDP=YES) sets DUO_RDP_FLAG and links FreeRDP and OpenSSL.
+    DUO_RDP_FLAG: ""
     DUO_INFOPLIST_NAME: Info.plist
     # THE ONE PLACE for the app's name and identifier (the owner 2026-11-20: "Let's just call it Duo Desktop."). The
     # display name, usage texts and all three bundle identifiers below read these. In-app texts in DuoDesktop/*.swift
@@ -59,7 +64,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: DuoDesktop
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG)
         PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # The app's one accent colour, #FAA634 (the owner 2026-11-21: "everywhere in the app that is blue. Can we change to
@@ -95,7 +100,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID).tests
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuoDesktop.app/DuoDesktop
         BUNDLE_LOADER: $(TEST_HOST)
         LIBRARY_SEARCH_PATHS: $(SRCROOT)/../vendor/glassact/.build/rust/$(PLATFORM_NAME)

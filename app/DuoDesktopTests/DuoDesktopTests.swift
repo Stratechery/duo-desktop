@@ -677,7 +677,15 @@ final class AboutTests: XCTestCase {
         #endif
         #if DUO_JETKVM
         expected += 1
-        XCTAssertTrue(notices.last?.text.contains("The WebRTC project authors") == true, "WebRTC licence")
+        XCTAssertTrue(notices.contains { $0.id == "JetKVMNotice" && $0.text.contains("The WebRTC project authors") },
+                      "WebRTC licence")
+        #endif
+        #if DUO_RDP
+        expected += 1
+        XCTAssertTrue(notices.contains { $0.id == "RemoteDesktopNotice" && $0.text.contains("== OpenSSL 3.6.5 ==") },
+                      "FreeRDP and OpenSSL licences")
+        #else
+        XCTAssertFalse(notices.contains { $0.text.contains("FreeRDP") }, "no FreeRDP notice without DUO_RDP")
         #endif
         XCTAssertEqual(notices.count, expected)
         // The plain version names neither (the owner 2026-11-21: two versions from one repository).

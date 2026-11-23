@@ -1,0 +1,27 @@
+# The Remote Desktop view (project notes, Remote Desktop milestone 0; the owner 2026-11-22: "The clearly correct answer is to use
+# windows' own Remote Desktop." / "Yes on library."). Included by project.yml only when xcodegen runs with
+# DUO_RDP=YES in its environment:
+#   scripts/build-freerdp.sh && DUO_RDP=YES xcodegen generate  → FreeRDP 3 + OpenSSL 3 linked (static)
+#   xcodegen generate                                           → no Remote Desktop code, no FreeRDP, no OpenSSL
+# The xcframework is built by scripts/build-freerdp.sh from pinned tags into vendor/ (not in this repository).
+targets:
+  DuoDesktop:
+    dependencies:
+      - framework: ../vendor/freerdp-build/FreeRDP.xcframework
+        embed: false
+      # What the static FreeRDP and OpenSSL libraries call in the system.
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: Security.framework
+      - sdk: CFNetwork.framework
+    settings:
+      base:
+        DUO_RDP_FLAG: DUO_RDP
+        # The library is built for arm64 only (iPhone, and the simulator on Apple silicon); no Intel simulator.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  DuoDesktopTests:
+    settings:
+      base:
+        DUO_RDP_FLAG: DUO_RDP
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64

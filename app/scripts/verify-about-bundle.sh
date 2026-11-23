@@ -30,6 +30,16 @@ check GLASSACT_COMMIT "$(cat "$HERE/GLASSACT_COMMIT")"
 same Acknowledgements.txt "$GA/Apps/Shared/Acknowledgements.txt"
 same GlassActLICENSE.txt "$GA/LICENSE"
 same RustAV1ThirdPartyNotices.md "$GA/rust/av1/THIRD_PARTY_NOTICES.md"
+# The Remote Desktop build (DUO_RDP) only: FreeRDP's and OpenSSL's licences, as the pinned sources have them.
+if [ -f "$APP/RemoteDesktopNotice.txt" ]; then
+  check RemoteDesktopNotice.txt "== FreeRDP 3.33.1 =="
+  check RemoteDesktopNotice.txt "== OpenSSL 3.6.5 =="
+  check RemoteDesktopNotice.txt "Alexander Peslyak"
+  for l in "$HERE/../vendor/freerdp-build/FreeRDP-LICENSE.txt" "$HERE/../vendor/freerdp-build/OpenSSL-LICENSE.txt"; do
+    if [ -f "$l" ] && python3 -c 'import sys; sys.exit(open(sys.argv[1]).read() not in open(sys.argv[2]).read())' "$l" "$APP/RemoteDesktopNotice.txt"
+    then echo "ok       RemoteDesktopNotice.txt carries $(basename "$l") whole"; else echo "ABSENT   $(basename "$l")"; fail=1; fi
+  done
+fi
 # The copied source files still carry their MIT header.
 for f in SessionModel.swift CanvasView.swift; do
   if head -2 "$HERE/DuoDesktop/$f" | grep -q "MIT licensed"; then echo "ok       source header: $f"
