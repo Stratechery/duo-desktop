@@ -198,6 +198,7 @@ final class JetKVMRetryTests: XCTestCase {
         let link = JetKVMLink.for(mac: e.id)
         link.readPassword = { _ in "made-up-secret" }
         link.retryDelay = .milliseconds(50)
+        link.settleAfterClose = .milliseconds(20)   // a retry waits for the old session to be let go
         var seen: [JetKVMLink.Status] = []
         link.startSession = { _ in
             seen.append(link.status)
@@ -267,6 +268,8 @@ final class JetKVMRetryTests: XCTestCase {
         let link = JetKVMLink.for(mac: e.id)
         link.readPassword = { _ in "made-up" }
         link.startSession = { _ in try await Task.sleep(nanoseconds: 60_000_000_000) }
+        link.releaseGrace = .zero          // the disconnect at once (the grace: JetKVMRotationTests)
+        defer { link.releaseGrace = .milliseconds(800) }
         link.panelAppeared(entry: e)       // upright picture
         let first = link.session
         XCTAssertNotNil(first)

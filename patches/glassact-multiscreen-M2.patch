@@ -65,10 +65,10 @@ index 0000000..b44b701
 +    }
 +}
 diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
-index 57f6539..c8021f6 100644
+index 3afae85..bd86599 100644
 --- a/Sources/GlassActCore/HostEngine.swift
 +++ b/Sources/GlassActCore/HostEngine.swift
-@@ -621,6 +621,9 @@ public final class HostEngine: @unchecked Sendable {
+@@ -634,6 +634,9 @@ public final class HostEngine: @unchecked Sendable {
      /// Single-window mode (§4.10): the viewer picked a window (0 = revert to full
      /// display). The app rebuilds its SCK capture filter around that window.
      public var onWindowSelect: ((_ windowID: UInt32) -> Void)?
@@ -78,7 +78,7 @@ index 57f6539..c8021f6 100644
      /// Single-window mode: the viewer issued a window-chrome action (see
      /// WindowAction). The app drives the host window via Accessibility
      /// (fullscreen / resize) or ends the single-window session.
-@@ -674,6 +677,19 @@ public final class HostEngine: @unchecked Sendable {
+@@ -702,6 +705,19 @@ public final class HostEngine: @unchecked Sendable {
          sendControl(.windowControl(action: WindowAction.endSession, width: 0, height: 0))
      }
  
@@ -98,7 +98,7 @@ index 57f6539..c8021f6 100644
      public func sendWindowList(_ windows: [WireWindow]) {
          guard state == .running else { return }
          sendControl(.windowList(windows: windows))
-@@ -950,6 +966,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -984,6 +1000,8 @@ public final class HostEngine: @unchecked Sendable {
                                     preferSmoothness: pref == 2)
              case let .windowSelect(windowID):
                  onWindowSelect?(windowID)
@@ -107,16 +107,16 @@ index 57f6539..c8021f6 100644
              case let .windowControl(action, width, height):
                  onWindowControl?(action, width, height)
              case let .viewerLog(name, offset, total, data):
-@@ -973,7 +991,7 @@ public final class HostEngine: @unchecked Sendable {
-                 linkEstimate.noteReceived(bytes: bytes, viewerTUS: tUS, nowUS: nowUS, queued: queued)
+@@ -1011,7 +1029,7 @@ public final class HostEngine: @unchecked Sendable {
+                                           limitedSinceUS: limitedSinceUS)
              case let .syncRequest(region, generation):
                  noteSyncRequest(region: region, generation: generation)
--            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice:
-+            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected:
+-            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay:
++            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected:
                  break // host-originated / not addressed to the host
              }
          }
-@@ -1015,7 +1033,7 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1053,7 +1071,7 @@ public final class HostEngine: @unchecked Sendable {
              return k != 3 && k != 6 // mouse-up, key-up
          case let .windowControl(action, _, _):
              return action != WindowAction.endSession
@@ -126,7 +126,7 @@ index 57f6539..c8021f6 100644
          default:
              return false
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
-index b0b8388..880bcb4 100644
+index b59dca2..ae8e809 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
 +++ b/Sources/GlassActCore/ViewerEngine.swift
 @@ -110,6 +110,10 @@ public final class ViewerEngine: @unchecked Sendable {
@@ -153,7 +153,7 @@ index b0b8388..880bcb4 100644
      public func sendWindowSelect(windowID: UInt32) {
          guard state == .running else { return }
          sendControl(.windowSelect(windowID: windowID))
-@@ -468,6 +478,10 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -471,6 +481,10 @@ public final class ViewerEngine: @unchecked Sendable {
                  onClipboard?(format, data)
              case let .windowList(windows):
                  onWindowList?(windows)
@@ -164,8 +164,8 @@ index b0b8388..880bcb4 100644
              case let .windowControl(action, _, _):
                  // Host → viewer endSession: the session is over, not interrupted —
                  // someone at the Mac disconnected this viewer, or the shared window
-@@ -484,7 +498,7 @@ public final class ViewerEngine: @unchecked Sendable {
-                 onHostNotice?(code)
+@@ -489,7 +503,7 @@ public final class ViewerEngine: @unchecked Sendable {
+                 onHostDisplay?(Int(width), Int(height))
              case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
                   .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
 -                 .viewerInfo, .syncRequest, .received, .viewerBye:
@@ -174,10 +174,10 @@ index b0b8388..880bcb4 100644
              }
          }
 diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
-index 77e3b05..9ace4f8 100644
+index bdfa94e..d2e96e1 100644
 --- a/Sources/GlassActSession/ViewerController.swift
 +++ b/Sources/GlassActSession/ViewerController.swift
-@@ -231,6 +231,12 @@ public final class ViewerController: @unchecked Sendable {
+@@ -252,6 +252,12 @@ public final class ViewerController: @unchecked Sendable {
  
      /// Fired when the host's pickable-window snapshot arrives.
      public var onWindowList: (([WireWindow]) -> Void)?
@@ -190,7 +190,7 @@ index 77e3b05..9ace4f8 100644
      /// Main thread: the host ended the session on purpose (shared window
      /// closed) — show why, don't redial.
      public var onHostEndedSession: ((String) -> Void)?
-@@ -345,6 +351,15 @@ public final class ViewerController: @unchecked Sendable {
+@@ -366,6 +372,15 @@ public final class ViewerController: @unchecked Sendable {
      /// Pick a window (the host swaps its capture filter and re-HELLOs in
      /// place — see onGeometryChanged).
      public func selectWindow(_ id: UInt32) { session.selectWindow(id) }
@@ -206,7 +206,7 @@ index 77e3b05..9ace4f8 100644
      /// A window-chrome action (fullscreen / resize / endSession).
      public func windowControl(action: UInt8, width: Int = 0, height: Int = 0) {
          session.windowControl(action: action, width: width, height: height)
-@@ -429,6 +444,8 @@ public final class ViewerController: @unchecked Sendable {
+@@ -450,6 +465,8 @@ public final class ViewerController: @unchecked Sendable {
              self?.agentDriver?.noteHostClipboard(format: format, data: data)
              self?.applyInboundClipboard(format, data)
          }
@@ -324,7 +324,7 @@ index 430dace..bc7a6b8 100644
      public func selectWindow(_ id: UInt32) {
          queue.async { [weak self] in self?.engine.sendWindowSelect(windowID: id) }
 diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
-index 6520511..3493000 100644
+index 4baa419..af4046c 100644
 --- a/Sources/GlassActWire/Control.swift
 +++ b/Sources/GlassActWire/Control.swift
 @@ -3,6 +3,98 @@
@@ -446,20 +446,20 @@ index 6520511..3493000 100644
      /// Single-window mode — viewer → host: a window-chrome action on the
      /// shared window:
      ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
-@@ -373,6 +478,9 @@ public enum ControlMessage: Equatable, Sendable {
-         case .received: 0x1C
+@@ -379,6 +484,9 @@ public enum ControlMessage: Equatable, Sendable {
          case .hostNotice: 0x1D
          case .viewerBye: 0x1E
+         case .hostDisplay: 0x1F
 +        case .displayList: 0x60
 +        case .displaySelect: 0x61
 +        case .displaySelected: 0x62
          }
      }
  
-@@ -554,6 +662,45 @@ public enum ControlMessage: Equatable, Sendable {
-             body.writeU8(code)
-         case let .viewerBye(reason):
-             body.writeU8(reason)
+@@ -563,6 +671,45 @@ public enum ControlMessage: Equatable, Sendable {
+         case let .hostDisplay(width, height):
+             body.writeU16(width)
+             body.writeU16(height)
 +        case let .displayList(displays):
 +            precondition(displays.count <= 255)
 +            body.writeU8(UInt8(displays.count))
@@ -502,10 +502,10 @@ index 6520511..3493000 100644
          }
          return body.bytes
      }
-@@ -735,6 +882,44 @@ public enum ControlMessage: Equatable, Sendable {
-         case 0x1E:
-             guard let reason = r.readU8() else { return nil }
-             return .viewerBye(reason: reason)
+@@ -747,6 +894,44 @@ public enum ControlMessage: Equatable, Sendable {
+         case 0x1F:
+             guard let w = r.readU16(), let h = r.readU16() else { return nil }
+             return .hostDisplay(width: w, height: h)
 +        case 0x60:
 +            // Every screen is ≥ 26 bytes: bound the reservation by the body.
 +            guard let count = r.readU8(), Int(count) <= r.remaining / 26 else { return nil }
@@ -547,7 +547,7 @@ index 6520511..3493000 100644
          default:
              return nil
          }
-@@ -743,7 +928,7 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -755,7 +940,7 @@ public enum ControlMessage: Equatable, Sendable {
      /// Known TLV types. Everything beyond is skipped by the deframer
      /// using its declared length.
      public static func isKnownType(_ t: UInt8) -> Bool {
@@ -557,13 +557,13 @@ index 6520511..3493000 100644
  }
  
 diff --git a/Sources/GlassActWire/Video.swift b/Sources/GlassActWire/Video.swift
-index 1143f23..08660cc 100644
+index 593c1a5..827a79c 100644
 --- a/Sources/GlassActWire/Video.swift
 +++ b/Sources/GlassActWire/Video.swift
-@@ -54,6 +54,10 @@ public enum WireCaps {
-     /// TEXT_INPUT, AGENT_STATE, UI_TREE_REQUEST and agent-flagged INPUT, and
-     /// answers with AGENT_SCOPE / UI_TREE.
-     public static let agentControl: UInt32 = 1 << 11
+@@ -64,6 +64,10 @@ public enum WireCaps {
+     /// (HOST_DISPLAY), beside its picture's when they differ (Scale Down, a halved capture). Only
+     /// the viewer's bit matters: a host sends HOST_DISPLAY to a viewer whose HELLO_OK carries it.
+     public static let hostDisplaySize: UInt32 = 1 << 12
 +    /// Duo Screens build (multi-screen): the host lists its screens
 +    /// (DISPLAY_LIST) and shares the one the viewer picks (DISPLAY_SELECT).
 +    /// A high bit, far from upstream's, so a future upstream bit cannot clash.
@@ -1012,7 +1012,7 @@ index 0000000..dad385a
 +}
 diff --git a/Tests/SessionTests/RealHostTwoScreensProofTests.swift b/Tests/SessionTests/RealHostTwoScreensProofTests.swift
 new file mode 100644
-index 0000000..e703eab
+index 0000000..f67caac
 --- /dev/null
 +++ b/Tests/SessionTests/RealHostTwoScreensProofTests.swift
 @@ -0,0 +1,188 @@

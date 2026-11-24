@@ -1,8 +1,8 @@
 diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
-index b003cbc..c877b58 100644
+index 3faaec7..c8e8592 100644
 --- a/Apps/Host/HostController.swift
 +++ b/Apps/Host/HostController.swift
-@@ -1635,6 +1635,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -1665,6 +1665,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          }
      }
  
@@ -12,7 +12,7 @@ index b003cbc..c877b58 100644
      /// Main thread. DISPLAY_LIST: every display capture can see, with its place, size and a small
      /// picture, the shown one marked.
      private func sendDisplayList() {
-@@ -1674,6 +1677,47 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -1704,6 +1707,47 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          }
      }
  
@@ -60,7 +60,7 @@ index b003cbc..c877b58 100644
      /// A small still of a whole display (at most 320 × 200), as the window list's pictures.
      private static func displayThumbnail(_ display: SCDisplay) async -> (format: UInt8, width: Int, height: Int, bytes: [UInt8])? {
          let fw = max(CGFloat(display.width), 1), fh = max(CGFloat(display.height), 1)
-@@ -3009,6 +3053,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3040,6 +3084,9 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
                  self.handleDisplaySelect(displayID, pointer: place ? CGPoint(x: Int(x), y: Int(y)) : nil)
              }
          }
@@ -142,10 +142,10 @@ index 2183174..5ab5461 100644
      private static func clampU(_ v: CGFloat) -> UInt16 { UInt16(max(0, min(65_535, v.rounded()))) }
  }
 diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
-index 2618b98..9a9d78c 100644
+index 83b4485..f25b770 100644
 --- a/Sources/GlassActCore/HostEngine.swift
 +++ b/Sources/GlassActCore/HostEngine.swift
-@@ -624,6 +624,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -637,6 +637,8 @@ public final class HostEngine: @unchecked Sendable {
      /// Duo Screens build (multi-screen): DISPLAY_SELECT — share this screen
      /// (0 = send the list), optionally placing the pointer (global points).
      public var onDisplaySelect: ((_ displayID: UInt32, _ placePointer: Bool, _ x: Int32, _ y: Int32) -> Void)?
@@ -154,7 +154,7 @@ index 2618b98..9a9d78c 100644
      /// Single-window mode: the viewer issued a window-chrome action (see
      /// WindowAction). The app drives the host window via Accessibility
      /// (fullscreen / resize) or ends the single-window session.
-@@ -706,6 +708,12 @@ public final class HostEngine: @unchecked Sendable {
+@@ -734,6 +736,12 @@ public final class HostEngine: @unchecked Sendable {
          sendControl(.displayList(displays: displays))
      }
  
@@ -167,7 +167,7 @@ index 2618b98..9a9d78c 100644
      /// Duo Screens build (multi-screen): answer one DISPLAY_SELECT (DISPLAY_SELECTED).
      public func sendDisplaySelected(_ result: WireDisplaySelection) {
          guard state == .running else { return }
-@@ -991,6 +999,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1025,6 +1033,8 @@ public final class HostEngine: @unchecked Sendable {
                  onWindowSelect?(windowID)
              case let .displaySelect(displayID, place, x, y):
                  onDisplaySelect?(displayID, place, x, y)
@@ -176,16 +176,16 @@ index 2618b98..9a9d78c 100644
              case let .windowControl(action, width, height):
                  onWindowControl?(action, width, height)
              case let .viewerLog(name, offset, total, data):
-@@ -1015,7 +1025,7 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1053,7 +1063,7 @@ public final class HostEngine: @unchecked Sendable {
              case let .syncRequest(region, generation):
                  noteSyncRequest(region: region, generation: generation)
-             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected,
 -                 .screenLock, .textFocus:
 +                 .screenLock, .textFocus, .displaySnapshot:
                  break // host-originated / not addressed to the host
              }
          }
-@@ -1057,7 +1067,7 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1095,7 +1105,7 @@ public final class HostEngine: @unchecked Sendable {
              return k != 3 && k != 6 // mouse-up, key-up
          case let .windowControl(action, _, _):
              return action != WindowAction.endSession
@@ -195,10 +195,10 @@ index 2618b98..9a9d78c 100644
          default:
              return false
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
-index 41398d8..cc4ee99 100644
+index a6ff569..808acdd 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
 +++ b/Sources/GlassActCore/ViewerEngine.swift
-@@ -276,6 +276,13 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -279,6 +279,13 @@ public final class ViewerEngine: @unchecked Sendable {
      /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS.
      public var onScreenLock: ((UInt8) -> Void)?
      public var onTextFocus: ((WireTextFocus) -> Void)?
@@ -212,7 +212,7 @@ index 41398d8..cc4ee99 100644
      /// Connect milestones (see SessionMilestones). Engine-queue.
      public private(set) var milestones = SessionMilestones()
      /// `nowUS` of the datagram being applied (tile milestones).
-@@ -503,9 +510,11 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -508,9 +515,11 @@ public final class ViewerEngine: @unchecked Sendable {
                  onScreenLock?(state)
              case let .textFocus(focus):
                  onTextFocus?(focus)
@@ -226,10 +226,10 @@ index 41398d8..cc4ee99 100644
              }
          }
 diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
-index 71472f2..44ea0c2 100644
+index a61e82d..867ac8d 100644
 --- a/Sources/GlassActSession/ViewerController.swift
 +++ b/Sources/GlassActSession/ViewerController.swift
-@@ -246,6 +246,8 @@ public final class ViewerController: @unchecked Sendable {
+@@ -267,6 +267,8 @@ public final class ViewerController: @unchecked Sendable {
      /// (main thread): the screen now shared, its place, the picture size, the
      /// pointer it placed, or a refusal. Choices are serialized until each answer.
      public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
@@ -238,7 +238,7 @@ index 71472f2..44ea0c2 100644
      /// Main thread: the host ended the session on purpose (shared window
      /// closed) — show why, don't redial.
      public var onHostEndedSession: ((String) -> Void)?
-@@ -362,6 +364,9 @@ public final class ViewerController: @unchecked Sendable {
+@@ -383,6 +385,9 @@ public final class ViewerController: @unchecked Sendable {
      public func selectWindow(_ id: UInt32) { session.selectWindow(id) }
      /// Duo Screens build (multi-screen). True when the host lists screens.
      public func hostSupportsDisplayList() -> Bool { session.hostSupportsDisplayList() }
@@ -248,7 +248,7 @@ index 71472f2..44ea0c2 100644
      /// Duo Screens build (multi-screen): a screen choice is waiting for its answer.
      public func displaySelectPending() -> Bool { session.displaySelectPending() }
      /// Duo Screens build (multi-screen): 0 = ask for the list; else share that screen,
-@@ -455,6 +460,7 @@ public final class ViewerController: @unchecked Sendable {
+@@ -476,6 +481,7 @@ public final class ViewerController: @unchecked Sendable {
          }
          session.onDisplayList = { [weak self] displays in self?.onDisplayList?(displays) }
          session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
@@ -292,7 +292,7 @@ index bc7a6b8..5fe6828 100644
      /// list); with a point, the host places the pointer there (global points).
      /// A real screen choice is serialized: while one waits for its
 diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
-index efae586..872cc22 100644
+index 1af4b48..26a0195 100644
 --- a/Sources/GlassActWire/Control.swift
 +++ b/Sources/GlassActWire/Control.swift
 @@ -196,6 +196,23 @@ public struct WireTextFocus: Equatable, Sendable {
@@ -333,7 +333,7 @@ index efae586..872cc22 100644
      /// Single-window mode — viewer → host: a window-chrome action on the
      /// shared window:
      ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
-@@ -516,6 +540,8 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -522,6 +546,8 @@ public enum ControlMessage: Equatable, Sendable {
          case .displaySelected: 0x62
          case .screenLock: 0x63
          case .textFocus: 0x64
@@ -342,7 +342,7 @@ index efae586..872cc22 100644
          }
      }
  
-@@ -731,6 +757,15 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -740,6 +766,15 @@ public enum ControlMessage: Equatable, Sendable {
              body.writeU16(f.fieldW); body.writeU16(f.fieldH)
              body.writeU32(UInt32(bitPattern: f.caretX)); body.writeU32(UInt32(bitPattern: f.caretY))
              body.writeU16(f.caretW); body.writeU16(f.caretH)
@@ -358,7 +358,7 @@ index efae586..872cc22 100644
          case let .displaySelected(r):
              body.writeU32(r.requestedID)
              body.writeU8(r.status.rawValue)
-@@ -974,6 +1009,15 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -986,6 +1021,15 @@ public enum ControlMessage: Equatable, Sendable {
              return .textFocus(WireTextFocus(
                  hasText: flag == 1, fieldX: Int32(bitPattern: fx), fieldY: Int32(bitPattern: fy), fieldW: fw, fieldH: fh,
                  caretX: Int32(bitPattern: cx), caretY: Int32(bitPattern: cy), caretW: cw, caretH: ch))
@@ -374,7 +374,7 @@ index efae586..872cc22 100644
          default:
              return nil
          }
-@@ -982,7 +1026,7 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -994,7 +1038,7 @@ public enum ControlMessage: Equatable, Sendable {
      /// Known TLV types. Everything beyond is skipped by the deframer
      /// using its declared length.
      public static func isKnownType(_ t: UInt8) -> Bool {

@@ -48,7 +48,7 @@ Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a
 > - **You use it at your own risk.** It controls real computers: it clicks, types and can type passwords. It can take over a computer's session: signing in with Remote Desktop disconnects whoever is using that PC.
 > - The licence says it in its own words: *"THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."* Read the whole [LICENSE](LICENSE).
 
-The code here is **build 0.1 (86)**. Read [Known issues](#known-issues) before you start.
+The code here is **build 0.1 (89)**. Read [Known issues](#known-issues) before you start.
 
 *Pictures on this page are the real app in the iPhone Duo Simulator. The computers in them are test stand-ins under made-up names; no real computer is shown. Some pictures are from older builds; where the app has changed, the text says what is different.*
 
@@ -94,7 +94,7 @@ Below the computers: **Security** (the app lock), **iCloud** (list sync, in buil
 
 A computer has **Screen Sharing or Remote Desktop, not both**: a Mac uses Screen Sharing, a PC uses Remote Desktop. Terminal and JetKVM can be added to either.
 
-**List sync through iCloud** (builds with the sync switch). The list can sync between your iPhones that use the same Apple Account. It is on by default and can be turned off in the list. Only the list syncs: names, addresses, which ways in each computer has, and their settings. **Passwords, keys and trusted certificates never leave the iPhone.** If the same computer was changed on two iPhones, the newest change wins. Removing a computer asks whether to remove it from **All Devices** or **This iPhone Only**.
+**List sync through iCloud** (builds with the sync switch). The list can sync between your iPhones that use the same Apple Account. It is on by default and can be turned off in the list. Only the list syncs: names, addresses, which ways in each computer has, and their settings. **Passwords, keys and trusted certificates never leave the iPhone.** If the same computer was changed on two iPhones, the newest change wins. Removing a computer asks whether to remove it from **All Devices** or **This iPhone Only**. Under the iCloud switch the app shows when this iPhone last sent and last checked for changes, how many computers are waiting to be sent, and why iCloud refused a computer; a refused computer goes again each time you open Duo Desktop.
 
 ---
 
@@ -209,6 +209,7 @@ If a sign-in fails, the screen says what is wrong (for example a wrong user name
 - If the video does not arrive within 12 seconds, it tries again by itself, up to 3 attempts (**Trying again (2 of 3)…**), then shows the reason and **Try Again**. A wrong password or an unreachable address is shown at once. What happened is in that computer's **JetKVM Log**.
 - If the computer's display is asleep, the app presses Left Shift to wake it and says **Waking the display…**.
 - Keys go to the computer as a real USB keyboard would send them, capitals and symbols included.
+- Turning the phone keeps the session: it does not reconnect.
 
 **Limits.** The connection is sometimes unreliable (see [Known issues](#known-issues)). The JetKVM's own login is plain `http://`: reach it only over your home network or Tailscale.
 
@@ -325,7 +326,7 @@ A Mac with several screens shows them all. The second line under the name in the
 **Free, no support, no guarantees: you install and use this at your own risk.**
 
 - **The iPhone app** is built by you from this code with Xcode (see [Building](#building)).
-- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still serves today's app: the Host has not changed since. You can also build it yourself.
+- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still works with today's app: the messages between them are the same. The app itself is built against Glass Act v26.11.4. You can also build the Host yourself; that build is v26.11.4 with the same patches.
 - **Windows PC:** nothing to install for Remote Desktop; turn Remote Desktop on in Windows. For Terminal, turn on Windows' OpenSSH Server.
 - **Linux:** an SSH server for Terminal.
 - **JetKVM:** set up the box as its maker describes.

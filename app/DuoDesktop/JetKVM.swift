@@ -594,6 +594,10 @@ final class JetKVMLink {
         logName = Self.logName(host: host)
         let s = JetKVMSession(host: host, password: readPassword(entry.id))
         session = s
+        notedDroppedKeys = false
+        // Our own session closed moments ago: this start waits until the JetKVM has had time to let it go.
+        let wait: Duration = lastClose.map { settleAfterClose - (ContinuousClock.now - $0) } ?? .zero
+        let afterOwnClose = lastClose.map { ContinuousClock.now - $0 < settleAfterClose + .seconds(5) } ?? false
         input.output = s
         status = attempt > 1 ? .retrying(attempt: attempt, of: Self.attempts) : .connecting
         note("attempt \(attempt) of \(Self.attempts) to \(logName)")
@@ -606,6 +610,16 @@ final class JetKVMLink {
         }
         s.trace = { [weak self] line in
             // Each key and pointer message is not worth a line; everything about the connection is.
+            // Keys typed while the input channel is not open went nowhere without a word in the log: said once per
+            // session.
+            if line.hasPrefix("hid send dropped") {
+                DispatchQueue.main.async { [weak s] in
+                    guard let self, let s, self.session === s, !self.notedDroppedKeys else { return }
+                    self.notedDroppedKeys = true
+                    self.note("keys and pointer not sent: the JetKVM's input channel is not open yet")
+                }
+                return
+            }
             if line.hasPrefix("hid") || line.hasPrefix("rpc →") { return }
             DispatchQueue.main.async { self?.note(line, host: host) }
         }
@@ -613,6 +627,10 @@ final class JetKVMLink {
             for await st in s.states {
                 guard let self, self.session === s else { return }
                 switch st {
+                case .takenOver where afterOwnClose && self.status != .live && self.attempt < Self.attempts:
+                    // Our own old session, still being let go by the JetKVM: try again (the start settles first).
+                    self.note("taken over while reconnecting: the JetKVM still had our old session; trying again")
+                    self.failed(.webRTC("old session still open"), entry: entry)
                 case .takenOver:
                     self.status = .takenOver; self.drop()
                     #if targetEnvironment(simulator)
@@ -651,8 +669,14 @@ final class JetKVMLink {
         // Review fixes 2 (review finding 3): the start is kept so a lock (`drop`) cancels it, and it checks, right
         // before signing in and starting the session, that the app is still open and this is still the session.
         startTask = Task { [weak self] in
+            if wait > .zero {
+                self?.settledStarts += 1
+                self?.note("waiting for the JetKVM to let go of the old session")
+                try? await Task.sleep(for: wait)
+            }
             guard let self, !Task.isCancelled, AppAccess.isOpen, self.session === s else { return }
             self.starts += 1
+            self.startRan = true
             do { try await start(s) } catch {
                 guard self.session === s else { return }
                 self.failed(error as? JetKVMError ?? .unreachable(error.localizedDescription), entry: entry)
@@ -713,22 +737,56 @@ final class JetKVMLink {
         parts.releaseAll()
         input.output = nil
         startTask?.cancel(); startTask = nil
-        session?.disconnect()
+        // Only a session whose start ran (signed in, signalled) has anything for the JetKVM to let go of.
+        if let s = session { s.disconnect(); if startRan { lastClose = .now } }
+        startRan = false
         session = nil
         watch?.cancel(); task?.cancel()
     }
 
-    /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the new
-    /// one before the old one goes; the old one's disconnect must not end the new one's connection.
+    /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the
+    /// new one before the old one goes; the old one's disconnect must not end the new one's connection.
+    ///
+    /// SwiftUI does not promise that order. When the old view went first the count hit 0, the link disconnected and
+    /// the new view started a fresh connection. Now (1) the JetKVM-only screen holds the link itself, above the
+    /// upright/sideways switch, and (2) the last view going only schedules the disconnect `releaseGrace` later; a view
+    /// appearing in the meantime cancels it. A turn never reconnects.
     private(set) var panelsShown = 0
+    /// A test sets it to 0 to see the disconnect at once.
+    var releaseGrace: Duration = .milliseconds(800)
+    private var releaseTask: Task<Void, Never>?
     func panelAppeared(entry: MacEntry?) {
         panelsShown += 1
+        releaseTask?.cancel(); releaseTask = nil
         connect(entry: entry)
     }
     func panelDisappeared() {
         panelsShown = max(0, panelsShown - 1)
-        if panelsShown == 0 { disconnect() }
+        guard panelsShown == 0 else { return }
+        releaseTask?.cancel()
+        if releaseGrace == .zero { disconnect(); return }
+        releaseTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.releaseGrace ?? .zero)
+            guard let self, !Task.isCancelled, self.panelsShown == 0 else { return }
+            self.releaseTask = nil
+            self.disconnect()
+        }
     }
+
+    // MARK: A real reconnect closes the old session first
+
+    /// The JetKVM takes one viewer at a time and lets go of the old one on its own clock: a new session signalled
+    /// right after ours closed can meet the old one still there (taken over, or no picture). So a start within
+    /// `settleAfterClose` of our own close waits out the rest first, and a "taken over" arriving while such a
+    /// reconnect is still connecting is our own old session, not another viewer: it is retried, not shown.
+    var settleAfterClose: Duration = .milliseconds(1500)
+    private var lastClose: ContinuousClock.Instant?
+    /// Starts that waited for the old session to be let go (for the log and the tests).
+    private(set) var settledStarts = 0
+    /// Whether "keys not sent" was already logged for this session (once per session, not per key).
+    private var notedDroppedKeys = false
+    /// Whether the current session's start ran (not cancelled before it reached the JetKVM).
+    private var startRan = false
 
     /// Left the view or went to the background: release the JetKVM (and forget a connect waiting on the unlock).
     func disconnect() {

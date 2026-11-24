@@ -1,5 +1,5 @@
 diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
-index 13a7c9d..b003cbc 100644
+index 4c3a9cc..3faaec7 100644
 --- a/Apps/Host/HostController.swift
 +++ b/Apps/Host/HostController.swift
 @@ -98,6 +98,8 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
@@ -11,7 +11,7 @@ index 13a7c9d..b003cbc 100644
      /// encodeQueue-confined mirror of the transport the engine talks to (for
      /// in-session engine rebuilds, which run on encodeQueue).
      private var sessionTransport: QUICTransport?
-@@ -676,6 +678,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -684,6 +686,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
      /// capture would see nothing.
      func startListening() {
          watchDisplayReconfiguration()
@@ -24,7 +24,7 @@ index 13a7c9d..b003cbc 100644
          guard !isListening, identity != nil else { return }
          // Preflight, not request: asking is the setup window's job (one
          // place, with context), not a bare system alert at launch.
-@@ -1164,6 +1172,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -1185,6 +1193,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
              let button: CGMouseButton = b == 1 ? .right : (b == 2 ? .center : .left)
              let bit = 1 << b
              if kind == 2 { mouseButtonsDown |= bit } else { mouseButtonsDown &= ~bit }
@@ -32,16 +32,16 @@ index 13a7c9d..b003cbc 100644
              let type: CGEventType
              switch (kind, button) {
              case (2, .left): type = .leftMouseDown
-@@ -1185,7 +1194,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
-                 ev.post(tap: .cghidEventTap)
-             }
-         case 5, 6: // key down / up
+@@ -1210,7 +1219,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             // one, as a keyboard's repeats are (and Screen Sharing's), so apps
+             // and VMs don't read it as a fresh press.
+             let repeated = kind == 5 && keysDown.contains(canvasX)
 -            if kind == 5 { keysDown.insert(canvasX) } else { keysDown.remove(canvasX) }
 +            if kind == 5 { keysDown.insert(canvasX) } else { keysDown.remove(canvasX); typingWatch.poke() }
-             if let ev = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(canvasX),
+             if let ev = CGEvent(keyboardEventSource: keySource, virtualKey: CGKeyCode(canvasX),
                                  keyDown: kind == 5) {
-                 // Keep the flags a key carries itself (numeric pad and
-@@ -2855,6 +2864,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+                 if repeated { ev.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
+@@ -2886,6 +2895,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          engine.onInput = { [weak self] kind, cx, cy, a, b in
              self?.injectInput(kind: kind, canvasX: cx, canvasY: cy, a: a, b: b)
          }
@@ -251,10 +251,10 @@ index 0000000..2183174
 +    private static func clampU(_ v: CGFloat) -> UInt16 { UInt16(max(0, min(65_535, v.rounded()))) }
 +}
 diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
-index c8021f6..2618b98 100644
+index bd86599..83b4485 100644
 --- a/Sources/GlassActCore/HostEngine.swift
 +++ b/Sources/GlassActCore/HostEngine.swift
-@@ -642,6 +642,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -655,6 +655,8 @@ public final class HostEngine: @unchecked Sendable {
      /// What the viewer is told about the host (`HostNotice`), kept so a
      /// viewer that connects while one is in force hears it too.
      private var hostNotice = HostNotice.none
@@ -263,7 +263,7 @@ index c8021f6..2618b98 100644
      /// Agents: UI_TREE_REQUEST — the app answers with `sendUITree`.
      public var onUITreeRequest: ((_ requestID: UInt32, _ windowID: UInt32, _ maxNodes: Int) -> Void)?
      /// Agents: answer a UI_TREE_REQUEST. A tree too big for one control
-@@ -673,6 +675,26 @@ public final class HostEngine: @unchecked Sendable {
+@@ -701,6 +703,26 @@ public final class HostEngine: @unchecked Sendable {
          sendControl(.hostNotice(code: code))
      }
  
@@ -290,42 +290,42 @@ index c8021f6..2618b98 100644
      public func sendSharedWindowClosed() {
          sendControl(.windowControl(action: WindowAction.endSession, width: 0, height: 0))
      }
-@@ -920,6 +942,7 @@ public final class HostEngine: @unchecked Sendable {
-                     }
-                     lastPingUS = nowUS
+@@ -951,6 +973,7 @@ public final class HostEngine: @unchecked Sendable {
                      if hostNotice != HostNotice.none { sendControl(.hostNotice(code: hostNotice)) }
+                     hostDisplayNegotiated = caps & WireCaps.hostDisplaySize != 0
+                     if hostDisplayNegotiated, let d = hostDisplaySize { sendControl(.hostDisplay(width: d.width, height: d.height)) }
 +                    if let screenLock { sendControl(.screenLock(state: screenLock)) }
                  }
              case let .ack(frameSeq, dgramCnt, bitmap):
                  lastControlNowUS = nowUS
-@@ -991,7 +1014,8 @@ public final class HostEngine: @unchecked Sendable {
-                 linkEstimate.noteReceived(bytes: bytes, viewerTUS: tUS, nowUS: nowUS, queued: queued)
+@@ -1029,7 +1052,8 @@ public final class HostEngine: @unchecked Sendable {
+                                           limitedSinceUS: limitedSinceUS)
              case let .syncRequest(region, generation):
                  noteSyncRequest(region: region, generation: generation)
--            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected:
-+            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+-            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected:
++            case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected,
 +                 .screenLock, .textFocus:
                  break // host-originated / not addressed to the host
              }
          }
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
-index 880bcb4..41398d8 100644
+index ae8e809..a6ff569 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
 +++ b/Sources/GlassActCore/ViewerEngine.swift
-@@ -273,6 +273,9 @@ public final class ViewerEngine: @unchecked Sendable {
-     public var onVideoCodecChanged: ((UInt8?) -> Void)?
-     /// The host's `HostNotice` changed (`HostNotice.none`: nothing to show).
-     public var onHostNotice: ((UInt8) -> Void)?
+@@ -276,6 +276,9 @@ public final class ViewerEngine: @unchecked Sendable {
+     /// HOST_DISPLAY: the pixel size of the display the host shares (`WireCaps.hostDisplaySize`,
+     /// which this viewer always asks for). Engine queue.
+     public var onHostDisplay: ((_ width: Int, _ height: Int) -> Void)?
 +    /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS.
 +    public var onScreenLock: ((UInt8) -> Void)?
 +    public var onTextFocus: ((WireTextFocus) -> Void)?
      /// Connect milestones (see SessionMilestones). Engine-queue.
      public private(set) var milestones = SessionMilestones()
      /// `nowUS` of the datagram being applied (tile milestones).
-@@ -496,6 +499,10 @@ public final class ViewerEngine: @unchecked Sendable {
-                 onUITree?(requestID, status, json)
-             case let .hostNotice(code):
+@@ -501,6 +504,10 @@ public final class ViewerEngine: @unchecked Sendable {
                  onHostNotice?(code)
+             case let .hostDisplay(width, height):
+                 onHostDisplay?(Int(width), Int(height))
 +            case let .screenLock(state):
 +                onScreenLock?(state)
 +            case let .textFocus(focus):
@@ -334,10 +334,10 @@ index 880bcb4..41398d8 100644
                   .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
                   .viewerInfo, .syncRequest, .received, .viewerBye, .displaySelect:
 diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
-index 9ace4f8..71472f2 100644
+index d2e96e1..a61e82d 100644
 --- a/Sources/GlassActSession/ViewerController.swift
 +++ b/Sources/GlassActSession/ViewerController.swift
-@@ -168,12 +168,21 @@ public final class ViewerController: @unchecked Sendable {
+@@ -171,6 +171,12 @@ public final class ViewerController: @unchecked Sendable {
          engine.onHostNotice = { [weak self] code in
              DispatchQueue.main.async { self?.onHostNotice?(code) }
          }
@@ -350,9 +350,10 @@ index 9ace4f8..71472f2 100644
      }
  
      /// Auto-reconnect hook (main thread): fired when the transport dies.
-     public var onConnectionFailed: (() -> Void)?
-     /// The host's HOST_NOTICE changed (main thread).
-     public var onHostNotice: ((UInt8) -> Void)?
+@@ -180,6 +186,9 @@ public final class ViewerController: @unchecked Sendable {
+     /// Main thread: the pixel size of the display the host shares (HOST_DISPLAY), or nil (a host
+     /// without it, or none heard yet).
+     public private(set) var hostDisplaySize: (width: Int, height: Int)?
 +    /// Duo Desktop build: SCREEN_LOCK (`ScreenLock`) and TEXT_FOCUS (main thread).
 +    public var onScreenLock: ((UInt8) -> Void)?
 +    public var onTextFocus: ((WireTextFocus) -> Void)?
@@ -360,7 +361,7 @@ index 9ace4f8..71472f2 100644
      // MARK: - Clipboard sync (main thread)
  
 diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
-index 3493000..efae586 100644
+index af4046c..1af4b48 100644
 --- a/Sources/GlassActWire/Control.swift
 +++ b/Sources/GlassActWire/Control.swift
 @@ -176,6 +176,33 @@ public enum GeometryMode {
@@ -410,7 +411,7 @@ index 3493000..efae586 100644
      /// Single-window mode — viewer → host: a window-chrome action on the
      /// shared window:
      ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
-@@ -481,6 +514,8 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -487,6 +520,8 @@ public enum ControlMessage: Equatable, Sendable {
          case .displayList: 0x60
          case .displaySelect: 0x61
          case .displaySelected: 0x62
@@ -419,7 +420,7 @@ index 3493000..efae586 100644
          }
      }
  
-@@ -688,6 +723,14 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -697,6 +732,14 @@ public enum ControlMessage: Equatable, Sendable {
              body.writeU8(placePointer ? 1 : 0)
              body.writeU32(UInt32(bitPattern: pointerX))
              body.writeU32(UInt32(bitPattern: pointerY))
@@ -434,7 +435,7 @@ index 3493000..efae586 100644
          case let .displaySelected(r):
              body.writeU32(r.requestedID)
              body.writeU8(r.status.rawValue)
-@@ -920,6 +963,17 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -932,6 +975,17 @@ public enum ControlMessage: Equatable, Sendable {
                  requestedID: req, status: status, displayID: id, x: Int32(bitPattern: x), y: Int32(bitPattern: y),
                  width: w, height: h, pictureWidth: pw, pictureHeight: ph, pointerPlaced: placed == 1,
                  pointerX: Int32(bitPattern: px), pointerY: Int32(bitPattern: py)))
@@ -452,7 +453,7 @@ index 3493000..efae586 100644
          default:
              return nil
          }
-@@ -928,7 +982,7 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -940,7 +994,7 @@ public enum ControlMessage: Equatable, Sendable {
      /// Known TLV types. Everything beyond is skipped by the deframer
      /// using its declared length.
      public static func isKnownType(_ t: UInt8) -> Bool {
@@ -463,7 +464,7 @@ index 3493000..efae586 100644
  
 diff --git a/Tests/SessionTests/RealHostTextFocusProofTests.swift b/Tests/SessionTests/RealHostTextFocusProofTests.swift
 new file mode 100644
-index 0000000..dd37f40
+index 0000000..ac1fdf9
 --- /dev/null
 +++ b/Tests/SessionTests/RealHostTextFocusProofTests.swift
 @@ -0,0 +1,121 @@

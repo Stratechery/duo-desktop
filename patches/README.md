@@ -1,6 +1,6 @@
 # Patches to Glass Act
 
-Glass Act (https://github.com/brianmario/glassact, MIT) is pinned at the commit in `app/GLASSACT_COMMIT`.
+Glass Act (https://github.com/brianmario/glassact, MIT) is pinned at the commit in `app/GLASSACT_COMMIT` (release v26.11.4).
 Nothing of Glass Act is copied into this repository; these patches change it at build time.
 
 - `app/GLASSACT_PATCHES`: the patches the iPhone app's viewer library is built with. `app/scripts/fetch-glassact.sh`

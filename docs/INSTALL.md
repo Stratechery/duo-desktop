@@ -95,13 +95,13 @@ host/prepare-host.sh
 ```
 
 This downloads Glass Act into `vendor/glassact-host`, moves it to the pinned commit
-(`486f11518da42d3ff7fac840a7bb9881d1425ca9`, in `app/GLASSACT_COMMIT`) and applies the ten patches listed in
+(`4f52de7ce910c96ab259b0ebeaf48c75a2f1c7f6`, release v26.11.4, in `app/GLASSACT_COMMIT`) and applies the ten patches listed in
 `patches/HOST_PATCHES`, in order.
 
 You should see one `applied …patch` line for each of the ten, then:
 
 ```
-ready: …/vendor/glassact-host (Glass Act 486f11518da42d3ff7fac840a7bb9881d1425ca9 + 10 patches)
+ready: …/vendor/glassact-host (Glass Act 4f52de7ce910c96ab259b0ebeaf48c75a2f1c7f6 + 10 patches)
 ```
 
 If it stops:
@@ -349,7 +349,7 @@ This downloads Glass Act into `vendor/glassact` and applies the first nine patch
 should see:
 
 ```
-glassact pinned at 486f11518da42d3ff7fac840a7bb9881d1425ca9 + 9 patches, exact outside Apps/
+glassact pinned at 4f52de7ce910c96ab259b0ebeaf48c75a2f1c7f6 + 9 patches, exact outside Apps/
 ```
 
 The app's build runs the same check each time and refuses a Glass Act copy with any other change. Keep

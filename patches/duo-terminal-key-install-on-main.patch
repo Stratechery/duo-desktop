@@ -1,8 +1,8 @@
 diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
-index fc643bd..3a9c892 100644
+index 878f25d..d3fac4c 100644
 --- a/Apps/Host/HostController.swift
 +++ b/Apps/Host/HostController.swift
-@@ -405,6 +405,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -410,6 +410,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          }
      }
  
@@ -15,7 +15,7 @@ index fc643bd..3a9c892 100644
      /// The key of the viewer connected right now, if any (main thread).
      var connectedViewerFingerprint: String? {
          viewerSessionLive ? transport?.peerCertificate?.fingerprint : nil
-@@ -3085,22 +3091,51 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3116,22 +3122,51 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
              }
              DispatchQueue.main.async { self.handleWindowSelect(windowID) }
          }
@@ -72,7 +72,7 @@ index fc643bd..3a9c892 100644
          }
          engine.onWindowControl = { [weak self] action, width, height in
              guard let self else { return }
-@@ -3243,7 +3278,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3274,7 +3309,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          }
          // Route control through self.engine (not a captured engine) so an
          // in-session geometry rebuild (§4.10) swaps the engine transparently.
@@ -81,7 +81,7 @@ index fc643bd..3a9c892 100644
              guard let self else { return }
              // Stamp ARRIVAL, on the transport queue: read after the hop, a
              // message that lands during a slow encode tick (a cold start,
-@@ -3252,7 +3287,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3283,7 +3318,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
              // auto-scale read as a congested path.
              let arrivedUS = MonotonicClock.nowUS
              self.encodeQueue.async {
@@ -95,7 +95,7 @@ index fc643bd..3a9c892 100644
                  let wasRunning = engine.state == .running
                  engine.handleControl(data, nowUS: arrivedUS)
                  if !wasRunning && engine.state == .running {
-@@ -3260,9 +3300,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3291,9 +3331,12 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
                  }
              }
          }
@@ -239,10 +239,10 @@ index 0000000..37b1448
 +    }
 +}
 diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
-index 6e15469..3dd6854 100644
+index 35809d2..30cfe6d 100644
 --- a/Sources/GlassActCore/HostEngine.swift
 +++ b/Sources/GlassActCore/HostEngine.swift
-@@ -631,6 +631,19 @@ public final class HostEngine: @unchecked Sendable {
+@@ -644,6 +644,19 @@ public final class HostEngine: @unchecked Sendable {
      public var unlockAvailable = false
      /// Duo Desktop build (auto-unlock): UNLOCK_TYPE — the password bytes. Never log them.
      public var onUnlockType: (([UInt8]) -> Void)?
@@ -262,7 +262,7 @@ index 6e15469..3dd6854 100644
      /// Single-window mode: the viewer issued a window-chrome action (see
      /// WindowAction). The app drives the host window via Accessibility
      /// (fullscreen / resize) or ends the single-window session.
-@@ -1015,6 +1028,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1049,6 +1062,8 @@ public final class HostEngine: @unchecked Sendable {
                  onDisplaySnapshotRequest?(maxSide)
              case let .unlockType(password): // Duo Desktop build (auto-unlock)
                  onUnlockType?(password)
@@ -271,17 +271,17 @@ index 6e15469..3dd6854 100644
              case let .windowControl(action, width, height):
                  onWindowControl?(action, width, height)
              case let .viewerLog(name, offset, total, data):
-@@ -1039,7 +1054,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1077,7 +1092,8 @@ public final class HostEngine: @unchecked Sendable {
              case let .syncRequest(region, generation):
                  noteSyncRequest(region: region, generation: generation)
-             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected,
 -                 .screenLock, .textFocus, .displaySnapshot, .unlockState:
 +                 .screenLock, .textFocus, .displaySnapshot, .unlockState,
 +                 .terminalKeyResult: // Duo Desktop build (terminal key)
                  break // host-originated / not addressed to the host
              }
          }
-@@ -1083,6 +1099,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1121,6 +1137,8 @@ public final class HostEngine: @unchecked Sendable {
              return action != WindowAction.endSession
          case .clipboard, .textInput, .windowSelect, .uiTreeRequest, .agentState, .resize, .displaySelect, .displaySnapshotRequest, .unlockType:
              return true
@@ -552,7 +552,7 @@ index 0000000..0e28560
 +    }
 +}
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
-index c83c6de..9f5c68d 100644
+index e75565c..1ee512b 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
 +++ b/Sources/GlassActCore/ViewerEngine.swift
 @@ -114,6 +114,14 @@ public final class ViewerEngine: @unchecked Sendable {
@@ -570,7 +570,7 @@ index c83c6de..9f5c68d 100644
      /// The host ended the session on purpose (someone at the Mac disconnected
      /// this viewer, or in single-window mode the shared window closed). The
      /// app shows why and does NOT redial.
-@@ -499,6 +507,8 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -502,6 +510,8 @@ public final class ViewerEngine: @unchecked Sendable {
                  onDisplayList?(displays)
              case let .displaySelected(result):
                  onDisplaySelected?(result)
@@ -579,7 +579,7 @@ index c83c6de..9f5c68d 100644
              case let .windowControl(action, _, _):
                  // Host → viewer endSession: the session is over, not interrupted —
                  // someone at the Mac disconnected this viewer, or the shared window
-@@ -523,7 +533,8 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -528,7 +538,8 @@ public final class ViewerEngine: @unchecked Sendable {
                  onUnlockState?(state)
              case .helloOK, .ack, .pong, .scrollAck, .pauseHint, .keyframeAck, .deltaNack,
                   .resize, .input, .quality, .windowSelect, .viewerLog, .textInput, .agentState, .uiTreeRequest,
@@ -590,10 +590,10 @@ index c83c6de..9f5c68d 100644
              }
          }
 diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
-index b062101..c015f44 100644
+index aa20b28..39f04e8 100644
 --- a/Sources/GlassActSession/ViewerController.swift
 +++ b/Sources/GlassActSession/ViewerController.swift
-@@ -250,6 +250,14 @@ public final class ViewerController: @unchecked Sendable {
+@@ -271,6 +271,14 @@ public final class ViewerController: @unchecked Sendable {
      public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
      /// Duo Desktop build (auto-unlock): UNLOCK_STATE (`UnlockState`), main queue. An older host never sends it.
      public var onUnlockState: ((UInt8) -> Void)?
@@ -608,7 +608,7 @@ index b062101..c015f44 100644
      /// Main thread: the host ended the session on purpose (shared window
      /// closed) — show why, don't redial.
      public var onHostEndedSession: ((String) -> Void)?
-@@ -467,6 +475,7 @@ public final class ViewerController: @unchecked Sendable {
+@@ -488,6 +496,7 @@ public final class ViewerController: @unchecked Sendable {
          session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
          session.onDisplaySnapshot = { [weak self] snapshot in self?.onDisplaySnapshot?(snapshot) }
          session.onUnlockState = { [weak self] state in self?.onUnlockState?(state) }
@@ -796,7 +796,7 @@ index 37de999..2d0f6f6 100644
          }
      }
 diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
-index 058cdb7..dcc3e24 100644
+index 06e7462..f43f7f4 100644
 --- a/Sources/GlassActWire/Control.swift
 +++ b/Sources/GlassActWire/Control.swift
 @@ -435,6 +435,11 @@ public enum ControlMessage: Equatable, Sendable {
@@ -811,7 +811,7 @@ index 058cdb7..dcc3e24 100644
      /// Single-window mode — viewer → host: a window-chrome action on the
      /// shared window:
      ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
-@@ -565,6 +570,8 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -571,6 +576,8 @@ public enum ControlMessage: Equatable, Sendable {
          case .displaySnapshot: 0x66
          case .unlockType: 0x67
          case .unlockState: 0x68
@@ -820,7 +820,7 @@ index 058cdb7..dcc3e24 100644
          }
      }
  
-@@ -807,6 +814,19 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -816,6 +823,19 @@ public enum ControlMessage: Equatable, Sendable {
              body.writeU8(r.pointerPlaced ? 1 : 0)
              body.writeU32(UInt32(bitPattern: r.pointerX))
              body.writeU32(UInt32(bitPattern: r.pointerY))
@@ -840,7 +840,7 @@ index 058cdb7..dcc3e24 100644
          }
          return body.bytes
      }
-@@ -1053,6 +1073,22 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -1065,6 +1085,22 @@ public enum ControlMessage: Equatable, Sendable {
          case 0x68:
              guard let state = r.readU8() else { return nil }
              return .unlockState(state: state)
@@ -863,7 +863,7 @@ index 058cdb7..dcc3e24 100644
          default:
              return nil
          }
-@@ -1062,6 +1098,7 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -1074,6 +1110,7 @@ public enum ControlMessage: Equatable, Sendable {
      /// using its declared length.
      public static func isKnownType(_ t: UInt8) -> Bool {
          (0x01...0x1E).contains(t) || (0x60...0x68).contains(t) // Duo Screens build (multi-screen; 0x63-0x64 lock + text focus; 0x67-0x68 unlock)

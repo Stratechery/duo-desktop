@@ -5,9 +5,9 @@ Duo Desktop's own code is under the MIT licence in [LICENSE](LICENSE). It builds
 ## Glass Act
 
 - Upstream: https://github.com/brianmario/glassact
-- Pinned commit: `486f11518da42d3ff7fac840a7bb9881d1425ca9` (`app/GLASSACT_COMMIT`)
+- Pinned commit: `4f52de7ce910c96ab259b0ebeaf48c75a2f1c7f6`, release v26.11.4 (`app/GLASSACT_COMMIT`)
 - Licence: MIT, `Copyright (c) 2026 Brian Lopez`
-  (https://github.com/brianmario/glassact/blob/486f11518da42d3ff7fac840a7bb9881d1425ca9/LICENSE)
+  (https://github.com/brianmario/glassact/blob/4f52de7ce910c96ab259b0ebeaf48c75a2f1c7f6/LICENSE)
 
 What comes from Glass Act:
 

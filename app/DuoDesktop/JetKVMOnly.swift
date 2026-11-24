@@ -164,7 +164,10 @@ struct JetKVMOnlyScreen: View {
             .modifier(JetKVMTopBar(entry: entry, views: views, normalPhone: normalPhone, hidden: wideNow,
                                    back: goBack))
         }
-        .onDisappear { link.parts.releaseAll() }
+        // The screen holds the link, above the upright/sideways switch: the picture views below come and go with a
+        // turn, this does not, so a turn never closes the connection.
+        .onAppear { link.panelAppeared(entry: current) }
+        .onDisappear { link.parts.releaseAll(); link.panelDisappeared() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             link.parts.releaseAll()
         }

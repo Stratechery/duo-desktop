@@ -1,8 +1,8 @@
 diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
-index c877b58..fc643bd 100644
+index c8e8592..878f25d 100644
 --- a/Apps/Host/HostController.swift
 +++ b/Apps/Host/HostController.swift
-@@ -1337,6 +1337,48 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -1367,6 +1367,48 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          return "key \(code) flags \(String(raw.rawValue, radix: 16))"
      }
  
@@ -51,7 +51,7 @@ index c877b58..fc643bd 100644
      /// Accessibility (TCC) is required for CGEventPost. Checked SILENTLY
      /// (AXIsProcessTrusted, never the prompting variant) so no system dialog
      /// pops on the first stray event — instead, once per session, log it and
-@@ -3056,6 +3098,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3087,6 +3129,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          engine.onDisplaySnapshotRequest = { [weak self] maxSide in // Duo Desktop build (overview snapshots)
              DispatchQueue.main.async { self?.sendDisplaySnapshots(maxSide: Int(maxSide)) }
          }
@@ -80,10 +80,10 @@ index 5ab5461..8fb44d0 100644
      /// after, when the app has moved its focus.
      func poke() {
 diff --git a/Sources/GlassActCore/HostEngine.swift b/Sources/GlassActCore/HostEngine.swift
-index 9a9d78c..6e15469 100644
+index f25b770..35809d2 100644
 --- a/Sources/GlassActCore/HostEngine.swift
 +++ b/Sources/GlassActCore/HostEngine.swift
-@@ -626,6 +626,11 @@ public final class HostEngine: @unchecked Sendable {
+@@ -639,6 +639,11 @@ public final class HostEngine: @unchecked Sendable {
      public var onDisplaySelect: ((_ displayID: UInt32, _ placePointer: Bool, _ x: Int32, _ y: Int32) -> Void)?
      /// Duo Desktop build (overview snapshots): DISPLAY_SNAPSHOT_REQUEST.
      public var onDisplaySnapshotRequest: ((_ maxSide: UInt16) -> Void)?
@@ -95,7 +95,7 @@ index 9a9d78c..6e15469 100644
      /// Single-window mode: the viewer issued a window-chrome action (see
      /// WindowAction). The app drives the host window via Accessibility
      /// (fullscreen / resize) or ends the single-window session.
-@@ -714,6 +719,12 @@ public final class HostEngine: @unchecked Sendable {
+@@ -742,6 +747,12 @@ public final class HostEngine: @unchecked Sendable {
          sendControl(.displaySnapshot(snapshot))
      }
  
@@ -108,15 +108,15 @@ index 9a9d78c..6e15469 100644
      /// Duo Screens build (multi-screen): answer one DISPLAY_SELECT (DISPLAY_SELECTED).
      public func sendDisplaySelected(_ result: WireDisplaySelection) {
          guard state == .running else { return }
-@@ -951,6 +962,7 @@ public final class HostEngine: @unchecked Sendable {
-                     lastPingUS = nowUS
-                     if hostNotice != HostNotice.none { sendControl(.hostNotice(code: hostNotice)) }
+@@ -982,6 +993,7 @@ public final class HostEngine: @unchecked Sendable {
+                     hostDisplayNegotiated = caps & WireCaps.hostDisplaySize != 0
+                     if hostDisplayNegotiated, let d = hostDisplaySize { sendControl(.hostDisplay(width: d.width, height: d.height)) }
                      if let screenLock { sendControl(.screenLock(state: screenLock)) }
 +                    if unlockAvailable { sendControl(.unlockState(state: UnlockState.available)) } // Duo Desktop build (auto-unlock)
                  }
              case let .ack(frameSeq, dgramCnt, bitmap):
                  lastControlNowUS = nowUS
-@@ -1001,6 +1013,8 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1035,6 +1047,8 @@ public final class HostEngine: @unchecked Sendable {
                  onDisplaySelect?(displayID, place, x, y)
              case let .displaySnapshotRequest(maxSide):
                  onDisplaySnapshotRequest?(maxSide)
@@ -125,16 +125,16 @@ index 9a9d78c..6e15469 100644
              case let .windowControl(action, width, height):
                  onWindowControl?(action, width, height)
              case let .viewerLog(name, offset, total, data):
-@@ -1025,7 +1039,7 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1063,7 +1077,7 @@ public final class HostEngine: @unchecked Sendable {
              case let .syncRequest(region, generation):
                  noteSyncRequest(region: region, generation: generation)
-             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .displayList, .displaySelected,
+             case .hello, .scroll, .cursorPos, .cursorImage, .windowList, .uiTree, .agentScope, .hostNotice, .hostDisplay, .displayList, .displaySelected,
 -                 .screenLock, .textFocus, .displaySnapshot:
 +                 .screenLock, .textFocus, .displaySnapshot, .unlockState:
                  break // host-originated / not addressed to the host
              }
          }
-@@ -1067,7 +1081,7 @@ public final class HostEngine: @unchecked Sendable {
+@@ -1105,7 +1119,7 @@ public final class HostEngine: @unchecked Sendable {
              return k != 3 && k != 6 // mouse-up, key-up
          case let .windowControl(action, _, _):
              return action != WindowAction.endSession
@@ -144,10 +144,10 @@ index 9a9d78c..6e15469 100644
          default:
              return false
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
-index cc4ee99..c83c6de 100644
+index 808acdd..e75565c 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
 +++ b/Sources/GlassActCore/ViewerEngine.swift
-@@ -283,6 +283,13 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -286,6 +286,13 @@ public final class ViewerEngine: @unchecked Sendable {
          guard state == .running else { return }
          sendControl(.displaySnapshotRequest(maxSide: maxSide))
      }
@@ -161,7 +161,7 @@ index cc4ee99..c83c6de 100644
      /// Connect milestones (see SessionMilestones). Engine-queue.
      public private(set) var milestones = SessionMilestones()
      /// `nowUS` of the datagram being applied (tile milestones).
-@@ -512,9 +519,11 @@ public final class ViewerEngine: @unchecked Sendable {
+@@ -517,9 +524,11 @@ public final class ViewerEngine: @unchecked Sendable {
                  onTextFocus?(focus)
              case let .displaySnapshot(snapshot):
                  onDisplaySnapshot?(snapshot)
@@ -175,10 +175,10 @@ index cc4ee99..c83c6de 100644
              }
          }
 diff --git a/Sources/GlassActSession/ViewerController.swift b/Sources/GlassActSession/ViewerController.swift
-index 44ea0c2..b062101 100644
+index 867ac8d..aa20b28 100644
 --- a/Sources/GlassActSession/ViewerController.swift
 +++ b/Sources/GlassActSession/ViewerController.swift
-@@ -248,6 +248,8 @@ public final class ViewerController: @unchecked Sendable {
+@@ -269,6 +269,8 @@ public final class ViewerController: @unchecked Sendable {
      public var onDisplaySelected: ((WireDisplaySelection) -> Void)?
      /// Duo Desktop build (overview snapshots): one screen's still, main queue.
      public var onDisplaySnapshot: ((WireDisplaySnapshot) -> Void)?
@@ -187,7 +187,7 @@ index 44ea0c2..b062101 100644
      /// Main thread: the host ended the session on purpose (shared window
      /// closed) — show why, don't redial.
      public var onHostEndedSession: ((String) -> Void)?
-@@ -367,6 +369,9 @@ public final class ViewerController: @unchecked Sendable {
+@@ -388,6 +390,9 @@ public final class ViewerController: @unchecked Sendable {
      /// Duo Desktop build (overview snapshots): ask for a still of every screen (long
      /// side at most `maxSide` px). An older host ignores it.
      public func requestDisplaySnapshots(maxSide: UInt16 = 480) { session.requestDisplaySnapshots(maxSide: maxSide) }
@@ -197,7 +197,7 @@ index 44ea0c2..b062101 100644
      /// Duo Screens build (multi-screen): a screen choice is waiting for its answer.
      public func displaySelectPending() -> Bool { session.displaySelectPending() }
      /// Duo Screens build (multi-screen): 0 = ask for the list; else share that screen,
-@@ -461,6 +466,7 @@ public final class ViewerController: @unchecked Sendable {
+@@ -482,6 +487,7 @@ public final class ViewerController: @unchecked Sendable {
          session.onDisplayList = { [weak self] displays in self?.onDisplayList?(displays) }
          session.onDisplaySelected = { [weak self] result in self?.onDisplaySelected?(result) }
          session.onDisplaySnapshot = { [weak self] snapshot in self?.onDisplaySnapshot?(snapshot) }
@@ -241,7 +241,7 @@ index 5fe6828..3cdd773 100644
      public func requestDisplaySnapshots(maxSide: UInt16) {
          queue.async { [weak self] in self?.engine.sendDisplaySnapshotRequest(maxSide: maxSide) }
 diff --git a/Sources/GlassActWire/Control.swift b/Sources/GlassActWire/Control.swift
-index 872cc22..058cdb7 100644
+index 26a0195..06e7462 100644
 --- a/Sources/GlassActWire/Control.swift
 +++ b/Sources/GlassActWire/Control.swift
 @@ -220,6 +220,21 @@ public enum ScreenLock {
@@ -279,7 +279,7 @@ index 872cc22..058cdb7 100644
      /// Single-window mode — viewer → host: a window-chrome action on the
      /// shared window:
      ///   1 fullscreen  — toggle the host window full-screen (via Accessibility);
-@@ -542,6 +563,8 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -548,6 +569,8 @@ public enum ControlMessage: Equatable, Sendable {
          case .textFocus: 0x64
          case .displaySnapshotRequest: 0x65
          case .displaySnapshot: 0x66
@@ -288,7 +288,7 @@ index 872cc22..058cdb7 100644
          }
      }
  
-@@ -759,6 +782,11 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -768,6 +791,11 @@ public enum ControlMessage: Equatable, Sendable {
              body.writeU16(f.caretW); body.writeU16(f.caretH)
          case let .displaySnapshotRequest(maxSide):
              body.writeU16(maxSide)
@@ -300,7 +300,7 @@ index 872cc22..058cdb7 100644
          case let .displaySnapshot(s):
              body.writeU32(s.displayID)
              body.writeU8(s.format)
-@@ -1018,6 +1046,13 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -1030,6 +1058,13 @@ public enum ControlMessage: Equatable, Sendable {
              else { return nil }
              return unsafe .displaySnapshot(WireDisplaySnapshot(displayID: id, format: fmt, width: w, height: h,
                                                                 bytes: [UInt8](bytes)))
@@ -314,7 +314,7 @@ index 872cc22..058cdb7 100644
          default:
              return nil
          }
-@@ -1026,7 +1061,7 @@ public enum ControlMessage: Equatable, Sendable {
+@@ -1038,7 +1073,7 @@ public enum ControlMessage: Equatable, Sendable {
      /// Known TLV types. Everything beyond is skipped by the deframer
      /// using its declared length.
      public static func isKnownType(_ t: UInt8) -> Bool {

@@ -1,5 +1,6 @@
 # Patches applied, in this order, on top of GLASSACT_COMMIT in vendor/glassact (the copy the app builds
 # against since build 25). scripts/check-glassact.sh proves the copy is exactly the pin plus these, nothing else.
+# The pin is Glass Act v26.11.4; the patches were redone on it (patches/README.md).
 testhost-input-log-and-release.patch
 testhost-picture-size.patch
 host-main-display-only.patch

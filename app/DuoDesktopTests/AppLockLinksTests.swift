@@ -73,6 +73,7 @@ final class AppLockLinksTests: XCTestCase {
         let link = JetKVMLink.for(mac: entry.id)
         link.readPassword = { _ in "made-up" }
         link.startSession = { _ in try await Task.sleep(nanoseconds: 60_000_000_000) } // never live, never fails
+        link.settleAfterClose = .zero // the wait for the old session (JetKVMRotationTests) is not this claim
         link.connect(entry: entry) // the view is shown
         await pause(0.05)
         XCTAssertEqual(link.passwordReads, 1); XCTAssertEqual(link.starts, 1)
