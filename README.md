@@ -10,7 +10,11 @@ It is precise because the controls are not on the picture. Open the phone. The t
 
 **Ordinary iPhones.** Duo Desktop was built for the iPhone Duo. Some adaptation was done for ordinary iPhones: the same layout with a much smaller trackpad and fewer shortcut keys, a Mac's screen in Follow Pointer only, and the views in a drop-down. It was tried on an iPhone 16 Pro and an iPhone Air, but not extensively.
 
-**Glass Act Host is what makes a Mac feel like it is in your hand.** Screen Sharing here does not use the Mac's built-in Screen Sharing. It uses [Glass Act](https://github.com/brianmario/glassact), an open-source project built from scratch for exactly this, and it is astonishingly good:
+**Glass Act Host is what makes a Mac feel like it is in your hand.** Screen Sharing here does not use the Mac's built-in Screen Sharing. It uses a Host built for Duo Desktop on Glass Act, an open-source project built from scratch for exactly this.
+
+**Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one.
+
+It is astonishingly good:
 
 - **Text is pixel-perfect.** Glass Act is not a video stream. It sends the changed parts of the screen as exact pixels, so small text is as sharp on the phone as on the Mac.
 - **Motion is smooth.** Scroll, drag a window or play a video and it switches to the Mac's hardware video encoder, then snaps back to exact pixels the moment things stop.
@@ -19,8 +23,6 @@ It is precise because the controls are not on the picture. Open the phone. The t
 - **A bad connection does not leave junk on screen.** When data is lost it sends what the screen shows now, not what it showed a moment ago.
 
 Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a different experience from any other way of reaching it.
-
-**Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one.
 
 **More than one monitor.** A Mac with several monitors shows all of them. See every screen at once and tap the one you want, pick one by name, or just push the pointer past the edge of a screen and the picture follows it onto the next one. See [More than one screen](#more-than-one-screen-a-mac).
 
