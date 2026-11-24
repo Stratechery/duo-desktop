@@ -707,7 +707,7 @@ struct TerminalKeyState: Codable, Equatable {
             c.stop()
             done(o)
         }
-        c.onConnectionFailed = { MainActor.assumeIsolated { finish(.noLink("Glass Act Host on \(entry.name) did not answer.")) } }
+        c.onConnectionFailed = { MainActor.assumeIsolated { finish(.noLink("Glass Act Host for Duo Desktop on \(entry.name) did not answer.")) } }
         c.onHostKeyChanged = { _, _ in MainActor.assumeIsolated { finish(.noLink("\(entry.name) showed a different key than the one saved.")) } }
         c.onIncompatibleHost = { _ in MainActor.assumeIsolated { finish(.noLink("\(entry.name) runs a different Glass Act version.")) } }
         c.onHostEndedSession = { r in MainActor.assumeIsolated { finish(.noLink("\(entry.name) ended the link: \(r).")) } }
@@ -722,7 +722,7 @@ struct TerminalKeyState: Codable, Equatable {
             MainActor.assumeIsolated {
                 guard !state.finished, !state.sent else { return }
                 if Date().timeIntervalSince(started) > connectSeconds {
-                    finish(.noLink("Could not open a link to Glass Act Host on \(entry.name) within \(Int(connectSeconds)) seconds."))
+                    finish(.noLink("Could not open a link to Glass Act Host for Duo Desktop on \(entry.name) within \(Int(connectSeconds)) seconds."))
                     return
                 }
                 c.configuredGrid { grid in

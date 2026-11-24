@@ -18,6 +18,13 @@ protocol MacPasswordKeeping: AnyObject {
     func delete(macID: String)
     /// Read with the app lock's evaluated context; nil when there is none, it was dropped, or the read fails.
     func read(macID: String, context: LAContext) -> Data?
+    /// Whether this Mac has an item at all (asks nothing, reads no secret). A missing item (a restored or moved
+    /// iPhone: the item is this-device-only, the Mac list is not) is told apart from a failed read.
+    func has(macID: String) -> Bool
+}
+
+extension MacPasswordKeeping {
+    func has(macID: String) -> Bool { true }
 }
 
 /// The real Keychain.
@@ -80,6 +87,17 @@ final class MacPasswordKeychain: MacPasswordKeeping {
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
         return out as? Data
     }
+
+    func has(macID: String) -> Bool {
+        // Attributes only, no data and no prompt: the item's protection does not apply to finding it.
+        var q = Self.baseQuery(macID: macID)
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        q[kSecUseAuthenticationContext as String] = context
+        let status = SecItemCopyMatching(q as CFDictionary, nil)
+        return status != errSecItemNotFound
+    }
 }
 
 /// The rules, pure (tests). Per Mac: whether to send the password, and what an answer means.
@@ -109,6 +127,49 @@ enum AutoUnlockRules {
     }
 
     static let failedNotice = "Could not unlock. The saved password may be wrong."
+
+    /// Why the password was NOT sent to a locked Mac whose Unlock Automatically is on. Each one is said in a notice;
+    /// before, the app said nothing.
+    enum NotSent: Equatable {
+        /// The Host never said it can type (an older Host, or one without the unlock part).
+        case hostCannotUnlock
+        /// The last try did not unlock; a wrong password is never typed twice in a row.
+        case lastTryFailed
+        /// The app lock (Require Touch ID / Face ID) is off, so the saved password cannot be read.
+        case appLockOff
+        /// The setting is on but this iPhone has no saved password for this Mac (a restored or new iPhone).
+        case noSavedPassword
+        /// The saved password is there but could not be read.
+        case unreadable
+    }
+
+    static func notice(_ reason: NotSent) -> String {
+        switch reason {
+        case .hostCannotUnlock: "This Mac’s Host cannot unlock it. Update Glass Act Host on the Mac."
+        case .lastTryFailed: "Not unlocking: the last try did not work. Save the password again in this Mac’s settings."
+        case .appLockOff: "Not unlocking: \(UnlockMethod.current.settingOffText)"
+        case .noSavedPassword: "No saved password for this Mac on this iPhone. Turn on Unlock Automatically again."
+        case .unreadable: "Could not read this Mac’s saved password. Lock Duo Desktop, open it again, then reconnect."
+        }
+    }
+
+    /// What to do about one Mac now. `quiet`: nothing to do or say (not locked, setting off, a try in flight);
+    /// `wait`: not yet (the app lock is up and will try when passed; the Host has not said it can type yet).
+    enum Decision: Equatable { case send, wait, quiet, notSent(NotSent) }
+
+    static func decide(locked: Bool?, settingOn: Bool, inFlight: Bool, lastTryFailed: Bool, appLockOn: Bool,
+                       appUnlocked: Bool, hostCanUnlock: Bool) -> Decision {
+        guard locked == true, settingOn, !inFlight else { return .quiet }
+        if lastTryFailed { return .notSent(.lastTryFailed) }
+        if !appLockOn { return .notSent(.appLockOff) }
+        if !appUnlocked { return .wait }
+        if !hostCanUnlock { return .wait }
+        return .send
+    }
+
+    /// How long a locked Mac's Host has to say it can type (it says so with the lock, on connect) before the app says
+    /// it cannot.
+    static let hostAnswerWait: TimeInterval = 3
 
     /// What stands in the way (Touch ID clarity): the phone has no passcode/Touch ID, or Require Touch ID is off.
     enum Blocker: Equatable { case noPasscode, appLockOff }

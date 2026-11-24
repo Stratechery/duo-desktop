@@ -49,8 +49,8 @@ import UIKit
     static let homePlaceholder = "My-Mac.local"
     static let tailscalePlaceholder = "my-mac.your-tailnet.ts.net"
     static let addressesFooter = "Home Network: choose this Mac from the Macs nearby. Tailscale: the Mac’s name in Tailscale, for when you are away. Duo Desktop tries both and uses the one that answers."
-    static let nearbyFooter = "Macs show here while Glass Act Host is running on them with “Visible to Nearby Viewers” on. Choose this Mac to fill in its address."
-    static let nothingNearby = "No Mac on this network is broadcasting Glass Act Host. Check that this iPhone is on the same Wi‑Fi as the Mac, and that Glass Act Host is running with “Visible to Nearby Viewers” on. Or enter the address below."
+    static let nearbyFooter = "Macs show here while Glass Act Host for Duo Desktop is running on them with “Visible to Nearby Viewers” on. Choose this Mac to fill in its address."
+    static let nothingNearby = "No Mac on this network is broadcasting Glass Act Host for Duo Desktop. Check that this iPhone is on the same Wi‑Fi as the Mac, and that Glass Act Host for Duo Desktop is running with “Visible to Nearby Viewers” on. Or enter the address below."
     static let typeFooter = "The Mac’s local hostname, shown on the Mac in System Settings › General › Sharing › Local hostname."
 
     static func otherMacText(found: String, entry: String) -> String {
@@ -231,7 +231,7 @@ struct HomeAddressPicker: View {
         case .noAnswer:
             store.update(id) { $0.home = a.host; $0.lastAddress = nil }
             saved()
-            note = "Saved. No Glass Act Host answered at \(a.host) just now."
+            note = "Saved. No Glass Act Host for Duo Desktop answered at \(a.host) just now."
         case .locked:
             note = AddressCheck.lockedText
         case .idle, .checking:

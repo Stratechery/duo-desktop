@@ -246,7 +246,7 @@ struct AddComputerSheet: View {
                 Button(existingID == nil ? "Cancel" : "OK", role: .cancel) {}
             } message: { other in
                 Text(existingID == nil ? "This is “\(other.name)”, already in your list. Add this address to it?"
-                     : "This Glass Act Host is “\(other.name)”, already in your list.")
+                     : "This Glass Act Host for Duo Desktop is “\(other.name)”, already in your list.")
             }
         }
         .onAppear {
@@ -288,7 +288,7 @@ struct AddComputerSheet: View {
 
     static func footer(_ way: AddWay) -> String {
         switch way {
-        case .screenSharing: "Screen Sharing: a Mac running Glass Act Host."
+        case .screenSharing: "Screen Sharing: a Mac running Glass Act Host for Duo Desktop."
         case .remoteDesktop: "Remote Desktop: a Windows PC with Remote Desktop turned on."
         case .terminal: "Terminal: any computer you reach over SSH."
         case .jetkvm: "JetKVM: any computer with a JetKVM plugged in, even with nothing installed on it."
@@ -341,7 +341,7 @@ struct AddComputerSheet: View {
             // No glass host" installed. But I could have added jetkvm". The sheet says so and offers the other ways in,
             // keeping what was typed.
             Section {
-                Label("No Glass Act Host answered at \(check.checked?.host ?? "this address").",
+                Label("No Glass Act Host for Duo Desktop answered at \(check.checked?.host ?? "this address").",
                       systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .accessibilityIdentifier("addNoHost")
@@ -354,11 +354,11 @@ struct AddComputerSheet: View {
                     }
                 }
             } header: {
-                Text("No Glass Act Host")
+                Text("No Glass Act Host for Duo Desktop")
             } footer: {
                 Text(existingID == nil && choices.count > 1
-                     ? "The computer can still be added another way; what you typed is kept. Screen Sharing can be added later, once Glass Act Host is on it."
-                     : "Check that Glass Act Host is running on the Mac. The first try on a home network can fail before Local Network is allowed.")
+                     ? "The computer can still be added another way; what you typed is kept. Screen Sharing can be added later, once Glass Act Host for Duo Desktop is on it."
+                     : "Check that Glass Act Host for Duo Desktop is running on the Mac. The first try on a home network can fail before Local Network is allowed.")
             }
         }
     }
@@ -370,7 +370,7 @@ struct AddComputerSheet: View {
         case .checking:
             HStack(spacing: 8) { ProgressView(); Text("Checking…") }.foregroundStyle(.secondary)
         case .found:
-            Label("Found Glass Act Host", systemImage: "checkmark").foregroundStyle(.green)
+            Label("Found Glass Act Host for Duo Desktop", systemImage: "checkmark").foregroundStyle(.green)
                 .accessibilityIdentifier("addFound")
         case .locked:
             Text(AddressCheck.lockedText).foregroundStyle(.secondary)
@@ -429,7 +429,7 @@ struct AddComputerSheet: View {
                 e.key = key
             }
             added = id
-            result = AddCheckResult(ok: true, text: "Found Glass Act Host. Screen Sharing is added.")
+            result = AddCheckResult(ok: true, text: "Found Glass Act Host for Duo Desktop. Screen Sharing is added.")
         } else {
             let n = name.trimmingCharacters(in: .whitespaces)
             var e = MacEntry(name: n.isEmpty ? (picked?.name ?? Self.suggestedName(a.host)) : n, port: a.port)
@@ -439,7 +439,7 @@ struct AddComputerSheet: View {
             // Sharing, and for a Terminal added later SSH port 22, this iPhone's key, tmux).
             store.addNew(e, startWith: .screenSharing)
             added = e.id
-            result = AddCheckResult(ok: true, text: "Found Glass Act Host. \(e.name) is added.")
+            result = AddCheckResult(ok: true, text: "Found Glass Act Host for Duo Desktop. \(e.name) is added.")
         }
     }
 
@@ -472,7 +472,7 @@ struct AddComputerSheet: View {
             } header: {
                 Text("Sign In")
             } footer: {
-                Text("Add asks the Mac’s Glass Act Host to add this iPhone’s key to that account, then signs in with it. If the Host can’t, you can sign in once with the account’s password instead.")
+                Text("Add asks the Mac’s Glass Act Host for Duo Desktop to add this iPhone’s key to that account, then signs in with it. If the Host can’t, you can sign in once with the account’s password instead.")
             }
         } else {
             Section {
@@ -538,11 +538,11 @@ struct AddComputerSheet: View {
             result = nil
             keyHelp = .none
             installNote = nil
-            steps = ["Asking Glass Act Host to add this iPhone’s key…"]
+            steps = ["Asking Glass Act Host for Duo Desktop to add this iPhone’s key…"]
             let typed = t(user)
             // The sheet gets the key added itself: over the running session, or a short link opened for this.
             TerminalKeyByHost.askOpening(entry: e, store: store, identity: identity,
-                                         asking: { steps.append("Glass Act Host is asking on the Mac: approve it there.") }) { o in
+                                         asking: { steps.append("Glass Act Host for Duo Desktop is asking on the Mac: approve it there.") }) { o in
                 steps.append(contentsOf: Self.hostSteps(o, typed: typed))
                 steps.append("Signing in as \(typed)…")
                 Task { await runTerminalCheck(e.id) }
@@ -594,19 +594,19 @@ struct AddComputerSheet: View {
         case let .answered(.answered(r)):
             switch r.status {
             case .installed, .alreadyThere:
-                var out = ["Glass Act Host added this iPhone’s key for “\(r.userName)”."]
+                var out = ["Glass Act Host for Duo Desktop added this iPhone’s key for “\(r.userName)”."]
                 if !r.userName.isEmpty, r.userName != typed {
                     out.append("The Host runs as “\(r.userName)”, so the key went to that account, not “\(typed)”.")
                 }
                 if !r.remoteLoginOn { out.append("Remote Login looks off on the Mac: its SSH port is not listening.") }
                 return out
             case .refused, .askingOnMac:
-                return ["Glass Act Host did not add the key: \(r.reason)."]
+                return ["Glass Act Host for Duo Desktop did not add the key: \(r.reason)."]
             }
         case .answered(.olderHost):
-            return ["This Mac’s Glass Act Host is older and can’t add the key."]
+            return ["This Mac’s Glass Act Host for Duo Desktop is older and can’t add the key."]
         case .answered(.noSession):
-            return ["No link to Glass Act Host to ask."]
+            return ["No link to Glass Act Host for Duo Desktop to ask."]
         case let .noLink(why):
             return [why]
         }

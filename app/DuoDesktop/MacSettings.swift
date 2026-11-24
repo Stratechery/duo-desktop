@@ -144,7 +144,7 @@ struct ComputerSettingsScreen: View {
                     if entry.setUpWays.count > 1 { removeRow(.screenSharing) }
                     #endif
                 } else {
-                    addRow(.screenSharing, footer: "For a Mac running Glass Act Host.")
+                    addRow(.screenSharing, footer: "For a Mac running Glass Act Host for Duo Desktop.")
                     #if DUO_RDP
                     // The same slot: one or the other.
                     addRow(.remoteDesktop, footer: "For a Windows PC with Remote Desktop turned on. A computer has Screen Sharing or Remote Desktop, not both.")

@@ -184,20 +184,37 @@ final class SessionModel {
     }
 
     /// One try, never two in a row after a failure. Called on a lock report, on the Host saying it can type, and
-    /// when the app lock is passed.
+    /// when the app lock is passed. When the setting is on and the Mac is locked but nothing is sent, the notice says
+    /// why; the password and its length are never shown or logged.
     func tryAutoUnlock() {
         guard let mac else { return }
         let context = autoUnlockContext()
-        guard AutoUnlockRules.shouldTry(locked: macLocked, hostCanUnlock: hostCanUnlock,
-                                        settingOn: store.entry(mac.id)?.autoUnlock == true,
-                                        lastTryFailed: AutoUnlockFailures.failed(mac.id, in: unlockDefaults),
-                                        inFlight: unlockInFlight, appUnlocked: context != nil),
-              let context, let send = sendUnlock ?? controller.map({ c in { c.sendUnlockPassword($0) } })
-        else { return }
-        guard var data = passwords.read(macID: mac.id, context: context), !data.isEmpty else {
-            note("unlock: the saved password could not be read; nothing sent")
+        let decision = AutoUnlockRules.decide(locked: macLocked, settingOn: store.entry(mac.id)?.autoUnlock == true,
+                                              inFlight: unlockInFlight,
+                                              lastTryFailed: AutoUnlockFailures.failed(mac.id, in: unlockDefaults),
+                                              appLockOn: appLockOn(), appUnlocked: context != nil,
+                                              hostCanUnlock: hostCanUnlock)
+        switch decision {
+        case .quiet: return
+        case let .notSent(reason): explainNotSent(reason); return
+        case .wait:
+            if context != nil, !hostCanUnlock { startHostAnswerWait(macID: mac.id) }
+            return
+        case .send: break
+        }
+        guard let context, let send = sendUnlock ?? controller.map({ c in { c.sendUnlockPassword($0) } }) else { return }
+        guard passwords.has(macID: mac.id) else {
+            // The switch is on but this iPhone has no item for this Mac: turn the switch off so its settings ask for
+            // the password once, and say so.
+            store.update(mac.id) { $0.autoUnlock = nil }
+            explainNotSent(.noSavedPassword)
             return
         }
+        guard var data = passwords.read(macID: mac.id, context: context), !data.isEmpty else {
+            explainNotSent(.unreadable)
+            return
+        }
+        hostAnswerWait?.cancel(); hostAnswerWait = nil
         unlockInFlight = true
         unlockNotice = nil
         note("unlock: asking the Host to type the saved password")
@@ -209,6 +226,34 @@ final class SessionModel {
         let timeout = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.unlockWaitEnded(macID: macID) } }
         unlockTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + AutoUnlockRules.unlockWait, execute: timeout)
+    }
+
+    /// Whether Require Touch ID / Face ID is on (the app lock); wired to `AppLock.required`.
+    @ObservationIgnored var appLockOn: () -> Bool = { true }
+    /// The reason last said on this connection (said once per connection).
+    @ObservationIgnored private(set) var notSentReason: AutoUnlockRules.NotSent?
+    @ObservationIgnored private var hostAnswerWait: DispatchWorkItem?
+
+    private func explainNotSent(_ reason: AutoUnlockRules.NotSent) {
+        guard notSentReason != reason else { return }
+        notSentReason = reason
+        unlockNotice = AutoUnlockRules.notice(reason)
+        note("unlock: not sent (\(reason))")
+    }
+
+    private func startHostAnswerWait(macID: String) {
+        guard hostAnswerWait == nil else { return }
+        let w = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.hostAnswerWaitEnded(macID: macID) } }
+        hostAnswerWait = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + AutoUnlockRules.hostAnswerWait, execute: w)
+    }
+
+    /// The Host had its time to say it can type (tests call it directly): still locked, still silent → it cannot.
+    func hostAnswerWaitEnded(macID: String) {
+        hostAnswerWait = nil
+        guard mac?.id == macID, macLocked == true, !hostCanUnlock,
+              store.entry(macID)?.autoUnlock == true else { return }
+        explainNotSent(.hostCannotUnlock)
     }
 
     /// The wait for "unlocked" is over (tests call it directly).
@@ -235,6 +280,8 @@ final class SessionModel {
         finishUnlock()
         hostCanUnlock = false
         unlockNotice = nil
+        notSentReason = nil
+        hostAnswerWait?.cancel(); hostAnswerWait = nil
     }
 
     func noteTextFocus(_ focus: WireTextFocus) {
@@ -735,7 +782,7 @@ final class SessionModel {
             let name = mac?.name ?? "the Mac"
             endSession()
             notice = .init(title: "Couldn’t reach “\(name)”",
-                           text: "Check that Glass Act Host is running on that Mac and that this iPhone is on the tailnet.",
+                           text: "Check that Glass Act Host for Duo Desktop is running on that Mac and that this iPhone is on the tailnet.",
                            computerID: mac?.id)
             return
         }
@@ -800,7 +847,7 @@ final class SessionModel {
             let name = mac?.name ?? "the Mac"
             endSession()
             notice = .init(title: "Not accepting new viewers",
-                           text: "On “\(name)”, choose who can connect in Glass Act Host › Options › New Viewers.",
+                           text: "On “\(name)”, choose who can connect in Glass Act Host for Duo Desktop › Options › New Viewers.",
                            computerID: mac?.id)
         case .askOnHost?:
             let askCode = code ?? (outcome.hostFingerprint ?? (pin.isEmpty ? nil : pin)).map {

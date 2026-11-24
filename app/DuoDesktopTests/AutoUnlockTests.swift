@@ -17,9 +17,11 @@ final class AutoUnlockTests: XCTestCase {
     final class FakeKeychain: MacPasswordKeeping {
         var items: [String: Data] = [:]
         var reads = 0
+        var readFails = false
         func save(_ password: Data, macID: String) -> Bool { items[macID] = password; return true }
         func delete(macID: String) { items[macID] = nil }
-        func read(macID: String, context: LAContext) -> Data? { reads += 1; return items[macID] }
+        func read(macID: String, context: LAContext) -> Data? { reads += 1; return readFails ? nil : items[macID] }
+        func has(macID: String) -> Bool { items[macID] != nil }
     }
 
     override func setUp() {
@@ -93,7 +95,8 @@ final class AutoUnlockTests: XCTestCase {
 
     // MARK: The session
 
-    private func session(_ k: FakeKeychain, appUnlocked: Bool = true) -> (SessionModel, MacEntry, () -> [[UInt8]]) {
+    private func session(_ k: FakeKeychain, appUnlocked: Bool = true,
+                         appLockOn: Bool = true) -> (SessionModel, MacEntry, () -> [[UInt8]]) {
         let (s, mac) = store(k)
         XCTAssertTrue(AutoUnlockSetting.turnOn(word, macID: mac.id, store: s, keychain: k, defaults: defaults))
         let model = SessionModel(store: s)
@@ -103,6 +106,7 @@ final class AutoUnlockTests: XCTestCase {
         var sent: [[UInt8]] = []
         model.sendUnlock = { sent.append($0) }
         model.autoUnlockContext = { appUnlocked ? LAContext() : nil }
+        model.appLockOn = { appLockOn }
         model.connect(to: s.entry(mac.id)!)
         return (model, mac, { sent })
     }
@@ -190,5 +194,119 @@ final class AutoUnlockTests: XCTestCase {
         model.noteScreenLock(false)
         XCTAssertFalse(model.outerOpensOnPassword)
         model.disconnect()
+    }
+
+    // MARK: Not sent, and why
+
+    /// Claim: the Host's "locked" and "available" in either order send the password exactly once, with no notice.
+    func testLockedAndAvailableEitherOrderSendOnce() {
+        for lockFirst in [true, false] {
+            let k = FakeKeychain()
+            let (model, _, sent) = session(k)
+            if lockFirst { model.noteScreenLock(true); model.noteUnlockState(UnlockState.available) }
+            else { model.noteUnlockState(UnlockState.available); model.noteScreenLock(true) }
+            XCTAssertEqual(sent().count, 1, "lock first: \(lockFirst)")
+            XCTAssertNil(model.unlockNotice)
+            model.disconnect()
+        }
+    }
+
+    /// Claim: after a failed try, the next connection to the locked Mac sends nothing and SAYS so (it was silent).
+    func testLastTryFailedIsSaid() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        AutoUnlockFailures.set(mac.id, failed: true, in: defaults)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertEqual(k.reads, 0, "not even read")
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.lastTryFailed))
+        model.dismissUnlockNotice()
+        model.noteScreenLock(false); model.noteScreenLock(true)
+        XCTAssertNil(model.unlockNotice, "said once per connection")
+        model.disconnect()
+    }
+
+    /// Claim: Require Touch ID / Face ID off → nothing sent, and said.
+    func testAppLockOffIsSaid() {
+        let k = FakeKeychain()
+        let (model, _, sent) = session(k, appUnlocked: false, appLockOn: false)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.appLockOff))
+        model.disconnect()
+    }
+
+    /// Claim: the app lock is on but not yet passed → quiet (it tries once passed); no notice.
+    func testBehindAppLockIsQuiet() {
+        let k = FakeKeychain()
+        let (model, _, sent) = session(k, appUnlocked: false)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertNil(model.unlockNotice)
+        model.disconnect()
+    }
+
+    /// Claim: the switch is on but this iPhone has no saved password for the Mac (a restored or new iPhone): the
+    /// switch goes off so its settings ask for the password once, and the notice says so.
+    func testNoSavedPasswordIsSaidAndAsksAgain() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        k.items = [:]
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertEqual(k.reads, 0)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.noSavedPassword))
+        XCTAssertNil(model.store.entry(mac.id)?.autoUnlock, "the switch is off: turning it on asks for the password")
+        model.disconnect()
+    }
+
+    /// Claim: a saved password that cannot be read → nothing sent, said.
+    func testUnreadableIsSaid() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        k.readFails = true
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.unreadable))
+        XCTAssertEqual(model.store.entry(mac.id)?.autoUnlock, true, "kept: the item is there")
+        model.disconnect()
+    }
+
+    /// Claim: a Host that never says it can type → after its wait, the notice says the Host cannot unlock.
+    func testHostCannotUnlockIsSaid() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        model.noteScreenLock(true)
+        XCTAssertNil(model.unlockNotice, "not before the Host had its time")
+        model.hostAnswerWaitEnded(macID: mac.id)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.hostCannotUnlock))
+        model.disconnect()
+    }
+
+    /// Claim: setting off → nothing sent and nothing said.
+    func testSettingOffIsQuiet() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        AutoUnlockSetting.turnOff(macID: mac.id, store: model.store, keychain: k, defaults: defaults)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        model.hostAnswerWaitEnded(macID: mac.id)
+        XCTAssertTrue(sent().isEmpty)
+        XCTAssertNil(model.unlockNotice)
+        model.disconnect()
+    }
+
+    /// Claim: no notice text carries the password or its length.
+    func testNoticesCarryNoPassword() {
+        for r in [AutoUnlockRules.NotSent.hostCannotUnlock, .lastTryFailed, .appLockOff, .noSavedPassword, .unreadable] {
+            let t = AutoUnlockRules.notice(r)
+            XCTAssertFalse(t.contains(word)); XCTAssertFalse(t.contains(String(word.count)))
+        }
     }
 }

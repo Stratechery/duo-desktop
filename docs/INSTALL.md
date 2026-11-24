@@ -75,6 +75,9 @@ The plain version contains no Terminal or JetKVM code at all. The files `app/pro
 
 You build the Host once, on your build Mac, then copy it to each Mac you want to use.
 
+The app's words call this Host **Glass Act Host for Duo Desktop**. The Host you build here, like the download on
+the Releases page, still shows the shorter name Glass Act Host on the Mac. It is still not Glass Act's own Host.
+
 ### Step 1. Get this repository
 
 ```sh

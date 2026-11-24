@@ -93,7 +93,7 @@ targets:
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: $(DUO_APP_NAME) connects to your Macs running Glass Act Host.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: $(DUO_APP_NAME) connects to your Macs running Glass Act Host for Duo Desktop.
         # The lock uses deviceOwnerAuthentication; required on a Face ID phone, harmless with Touch ID.
         INFOPLIST_KEY_NSFaceIDUsageDescription: $(DUO_APP_NAME) asks for Face ID before you use your Macs.
         TARGETED_DEVICE_FAMILY: "1"

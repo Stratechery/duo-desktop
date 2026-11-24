@@ -77,6 +77,7 @@ struct RootView: View {
             Task { await CloudComputerSync.shared.start() }
             // One Touch ID: the saved Mac passwords are read with the app lock's own context.
             model.autoUnlockContext = { [lock] in lock.autoUnlockContext }
+            model.appLockOn = { [lock] in lock.required }
             // The PCs' saved passwords are read with the same context (Remote Desktop milestone 3).
             RDPSignIn.appLockContext = { [lock] in MainActor.assumeIsolated { lock.autoUnlockContext } }
             // Review fixes: the Terminal and JetKVM links follow the same lock.

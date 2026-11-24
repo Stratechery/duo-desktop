@@ -12,7 +12,7 @@ It is precise because the controls are not on the picture. Open the phone. The t
 
 **Glass Act Host is what makes a Mac feel like it is in your hand.** Screen Sharing here does not use the Mac's built-in Screen Sharing. It uses a Host built for Duo Desktop on Glass Act, an open-source project built from scratch for exactly this.
 
-**Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one.
+**Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one. The app's words now call ours **Glass Act Host for Duo Desktop**; that is the Host on the Releases page, though the current download still shows the shorter name Glass Act Host on a Mac, and it is still not Glass Act's own.
 
 [Glass Act](https://github.com/brianmario/glassact) itself is astonishingly good:
 
@@ -52,7 +52,7 @@ Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a
 > - **You use it at your own risk.** It controls real computers: it clicks, types and can type passwords. It can take over a computer's session: signing in with Remote Desktop disconnects whoever is using that PC.
 > - The licence says it in its own words: *"THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."* Read the whole [LICENSE](LICENSE).
 
-The code here is **build 0.1 (89)**. Read [Known issues](#known-issues) before you start.
+The code here is **build 0.1 (90)**. Read [Known issues](#known-issues) before you start.
 
 *Pictures on this page are the real app in the iPhone Duo Simulator. The computers in them are test stand-ins under made-up names; no real computer is shown. Some pictures are from older builds; where the app has changed, the text says what is different.*
 
@@ -135,7 +135,7 @@ A computer has **Screen Sharing or Remote Desktop, not both**: a Mac uses Screen
 
 **What the Mac needs.** Glass Act Host from this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) (not Glass Act's own), running, with its two permissions (Screen Recording, Accessibility); see [Installing](#installing). The first time, you sign in once with the Mac's user name and password, or approve the phone at the Mac.
 
-**Unlock Automatically.** In a Mac's ⓘ page. When the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. It needs the app lock (see [Security](#security)): one Face ID or Touch ID then unlocks every Mac. When the lock is off, a **Turn On** button sits right under the switch.
+**Unlock Automatically.** In a Mac's ⓘ page. When the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. It needs the app lock (see [Security](#security)): one Face ID or Touch ID then unlocks every Mac. When the lock is off, a **Turn On** button sits right under the switch. When the switch is on and the app does not send the password, a notice says why: the last try did not work, the app lock is off, this iPhone has no saved password for that Mac, the password could not be read, or the Mac's Host cannot unlock.
 
 | |
 |---|
@@ -330,7 +330,7 @@ A Mac with several screens shows them all. The second line under the name in the
 **Free, no support, no guarantees: you install and use this at your own risk.**
 
 - **The iPhone app** is built by you from this code with Xcode (see [Building](#building)).
-- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. Use this one: Glass Act's own Host has the same name but lacks the changes the app depends on, and you will have problems with it. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still works with today's app: the messages between them are the same. The app itself is built against Glass Act v26.11.4. You can also build the Host yourself; that build is v26.11.4 with the same patches.
+- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. Use this one: Glass Act's own Host has the same name but lacks the changes the app depends on, and you will have problems with it. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still works with today's app: the messages between them are the same. The app itself is built against Glass Act v26.11.4. You can also build the Host yourself; that build is v26.11.4 with the same patches. The app's words now call it **Glass Act Host for Duo Desktop**; the current download, and a Host you build here, still show the shorter name Glass Act Host on a Mac, and it is still not Glass Act's own.
 - **Windows PC:** nothing to install for Remote Desktop; turn Remote Desktop on in Windows. For Terminal, turn on Windows' OpenSSH Server.
 - **Linux:** an SSH server for Terminal.
 - **JetKVM:** set up the box as its maker describes.

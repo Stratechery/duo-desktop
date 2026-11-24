@@ -144,9 +144,9 @@ final class TerminalComputersTests: XCTestCase {
         XCTAssertTrue(ListWords.footer.contains("Tap ⓘ for its settings."))
         #if DUO_JETKVM
         XCTAssertEqual(ListWords.emptyDescription,
-                       "Add a Mac running Glass Act Host, a computer you reach over SSH, or a computer with a JetKVM.")
+                       "Add a Mac running Glass Act Host for Duo Desktop, a computer you reach over SSH, or a computer with a JetKVM.")
         #else
-        XCTAssertEqual(ListWords.emptyDescription, "Add a Mac running Glass Act Host, or a computer you reach over SSH.")
+        XCTAssertEqual(ListWords.emptyDescription, "Add a Mac running Glass Act Host for Duo Desktop, or a computer you reach over SSH.")
         #endif
     }
 

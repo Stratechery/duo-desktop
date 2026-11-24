@@ -46,13 +46,13 @@ final class ComputersM2FixesTests: XCTestCase {
             WireTerminalKeyResult(requestID: 1, status: s, remoteLoginOn: login, tmuxPresent: true, userName: user, reason: reason)
         }
         XCTAssertEqual(AddComputerSheet.hostSteps(.answered(.answered(r(.installed))), typed: "robin"),
-                       ["Glass Act Host added this iPhone’s key for “robin”."])
+                       ["Glass Act Host for Duo Desktop added this iPhone’s key for “robin”."])
         let other = AddComputerSheet.hostSteps(.answered(.answered(r(.alreadyThere, user: "robinmac", login: false))), typed: "robin")
         XCTAssertTrue(other.contains { $0.contains("went to that account") })
         XCTAssertTrue(other.contains { $0.contains("Remote Login looks off") })
-        XCTAssertEqual(AddComputerSheet.hostSteps(.answered(.olderHost), typed: "x"), ["This Mac’s Glass Act Host is older and can’t add the key."])
-        XCTAssertEqual(AddComputerSheet.hostSteps(.noLink("Glass Act Host on Robin did not answer."), typed: "x"),
-                       ["Glass Act Host on Robin did not answer."])
+        XCTAssertEqual(AddComputerSheet.hostSteps(.answered(.olderHost), typed: "x"), ["This Mac’s Glass Act Host for Duo Desktop is older and can’t add the key."])
+        XCTAssertEqual(AddComputerSheet.hostSteps(.noLink("Glass Act Host for Duo Desktop on Robin did not answer."), typed: "x"),
+                       ["Glass Act Host for Duo Desktop on Robin did not answer."])
         for steps in [other, AddComputerSheet.hostSteps(.answered(.answered(r(.refused, reason: "no"))), typed: "x")] {
             XCTAssertFalse(steps.joined().contains("Tailscale"))
         }

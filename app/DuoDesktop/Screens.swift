@@ -246,7 +246,7 @@ enum ListWords {
     static let title = "Computers"
     /// What can be added in this build (Screen Sharing always; Terminal and JetKVM with their switches).
     static var emptyDescription: String {
-        var ways = ["a Mac running Glass Act Host"]
+        var ways = ["a Mac running Glass Act Host for Duo Desktop"]
         if WayIn.inThisBuild.contains(.terminal) { ways.append("a computer you reach over SSH") }
         if RDPScreen.inThisBuild { ways.append("a Windows PC with Remote Desktop") }
         if WayIn.inThisBuild.contains(.jetkvm) { ways.append("a computer with a JetKVM") }
