@@ -291,8 +291,8 @@ A Mac with several screens shows them all. The second line under the name in the
 
 | |
 |---|
-| <img src="docs/images/19-ctrl-alt-del.png" width="400" alt="The Windows key band with the Ctrl Alt Del choice open"> |
-| **Ctrl Alt Del, held.** Pick Ctrl Alt Delete or Ctrl Alt End. |
+| <img src="docs/images/19-ctrl-alt-del.png" width="400" alt="A Windows PC on the open Duo: the Windows key band with the orange Ctrl Alt Del key, the trackpad and the keyboard"> |
+| **The Windows key band.** Ctrl, Alt and ⊞ in the bottom row; the orange key is Ctrl Alt Del. Touch and hold it to pick Ctrl Alt Delete or Ctrl Alt End. |
 
 **Typing.** Tap **Keyboard** for a keyboard; what you type goes to the computer. On the open Duo it is the iPhone's own keyboard; held sideways, it is Duo Desktop's own.
 
