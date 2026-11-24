@@ -1,57 +1,137 @@
 diff --git a/Apps/Host/HostController.swift b/Apps/Host/HostController.swift
-index c8e8592..878f25d 100644
+index c8e8592..95de5a3 100644
 --- a/Apps/Host/HostController.swift
 +++ b/Apps/Host/HostController.swift
-@@ -1367,6 +1367,48 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -1367,6 +1367,128 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          return "key \(code) flags \(String(raw.rawValue, radix: 16))"
      }
  
-+    /// Duo Desktop build (auto-unlock). Main thread. The phone sent the Mac password (UNLOCK_TYPE): re-check the
-+    /// lock RIGHT before typing, so it can never land in an ordinary window; locked → type it with Unicode key
-+    /// events (no newline or tab meaning) and press Return. The bytes are never logged or stored; the local copy is
-+    /// zeroed after typing. Answers UNLOCK_STATE; the lock check runs again soon so the phone hears "unlocked".
++    /// Duo Desktop build (auto-unlock). Main thread. The phone sent the Mac password (UNLOCK_TYPE). Locked → it waits
++    /// (`UnlockTypingGate`) until the lock screen can take it: the display awake
++    /// (an asleep one is woken), the lock screen's password field there, settled; then, still locked, it is typed once
++    /// with Unicode key events (no newline or tab meaning) and Return. Before, it was typed the moment the request came,
++    /// which on a Mac that had just locked was before the password field existed. The bytes are never logged or stored
++    /// beyond the wait; the copy is zeroed after typing or giving up. Answers UNLOCK_STATE (unchanged bytes): typed
++    /// only after typing; not locked; failed when it could not type or the lock screen never got ready in 10 s.
 +    private func typeUnlockPassword(_ password: [UInt8]) {
 +        var bytes = password
 +        defer { for i in bytes.indices { bytes[i] = 0 } }
-+        let reply: UInt8
-+        if !TypingWatch.screenLocked() {
++        if pendingUnlockBytes != nil {
++            onStatus("unlock request: one is already waiting for the lock screen; ignored")
++        } else if !TypingWatch.screenLocked() {
 +            onStatus("unlock request: screen not locked, nothing typed")
-+            reply = UnlockState.notLocked
++            replyUnlock(UnlockState.notLocked)
 +        } else if !ensureAccessibility() {
 +            onStatus("unlock request: no Accessibility, nothing typed")
-+            reply = UnlockState.failed
-+        } else if var units = String(bytes: bytes, encoding: .utf8).map({ Array($0.utf16) }), !units.isEmpty {
-+            var i = 0
-+            while i < units.count {
-+                var end = min(i + 20, units.count)
-+                if end < units.count, UTF16.isTrailSurrogate(units[end]) { end -= 1 }
-+                let chunk = Array(units[i..<end])
-+                for down in [true, false] {
-+                    guard let ev = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else { continue }
-+                    ev.flags = []
-+                    ev.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-+                    ev.post(tap: .cghidEventTap)
-+                }
-+                i = end
-+            }
-+            for down in [true, false] {
-+                CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: down)?.post(tap: .cghidEventTap)
-+            }
-+            onStatus("unlock request: typed \(units.count) characters and Return")
-+            for j in units.indices { units[j] = 0 }
-+            reply = UnlockState.typed
++            replyUnlock(UnlockState.failed)
 +        } else {
-+            onStatus("unlock request: not readable text, nothing typed")
-+            reply = UnlockState.failed
++            pendingUnlockBytes = bytes
++            let now = ProcessInfo.processInfo.systemUptime
++            unlockGate = UnlockTypingGate(now: now)
++            unlockGateStart = now
++            let t = DispatchSource.makeTimerSource(queue: .main)
++            t.schedule(deadline: .now(), repeating: UnlockTypingGate.interval)
++            t.setEventHandler { [weak self] in self?.unlockGateTick() }
++            unlockGateTimer = t
++            onStatus("unlock request: waiting for the lock screen to be ready")
++            t.resume()
 +        }
++    }
++
++    /// Duo Desktop build (auto-unlock): the request waiting for the lock screen (one at a time).
++    private var pendingUnlockBytes: [UInt8]?
++    private var unlockGate: UnlockTypingGate?
++    private var unlockGateTimer: DispatchSourceTimer?
++    private var unlockGateStart: TimeInterval = 0
++    private var unlockFieldSignal: String?
++
++    private func replyUnlock(_ reply: UInt8) {
 +        encodeQueue.async { self.engine?.sendUnlockState(reply) }
-+        if reply == UnlockState.typed { typingWatch.checkLockSoon() }
++    }
++
++    /// Main thread, every 0.1 s while a request waits.
++    private func unlockGateTick() {
++        guard var gate = unlockGate else { return }
++        let signal = TypingWatch.lockScreenFieldSignal()
++        if let signal { unlockFieldSignal = signal }
++        let screen = UnlockLockScreen(locked: TypingWatch.screenLocked(),
++                                      displayAwake: CGDisplayIsAsleep(CGMainDisplayID()) == 0,
++                                      fieldReady: signal != nil)
++        let step = gate.step(now: ProcessInfo.processInfo.systemUptime, screen)
++        unlockGate = gate
++        let waited = String(format: "%.1f", ProcessInfo.processInfo.systemUptime - unlockGateStart)
++        switch step {
++        case .wait, .finished:
++            return
++        case .wakeDisplay:
++            var activity: IOPMAssertionID = 0
++            IOPMAssertionDeclareUserActivity("Duo Desktop unlock" as CFString, kIOPMUserActiveLocal, &activity)
++            onStatus("unlock request: display asleep, waking it")
++        case let .type(fieldSeen):
++            let how = fieldSeen ? "password field, \(unlockFieldSignal ?? "?")" : "display awake and locked, no field signal"
++            onStatus("unlock request: lock screen ready after \(waited) s (\(how))")
++            let count = postUnlockPassword(pendingUnlockBytes ?? [])
++            cancelPendingUnlock()
++            if count > 0 {
++                onStatus("unlock request: typed \(count) characters and Return")
++                replyUnlock(UnlockState.typed)
++                typingWatch.checkLockSoon()
++            } else {
++                onStatus("unlock request: not readable text, nothing typed")
++                replyUnlock(UnlockState.failed)
++            }
++        case .notLocked:
++            cancelPendingUnlock()
++            onStatus("unlock request: screen unlocked while waiting, nothing typed")
++            replyUnlock(UnlockState.notLocked)
++        case .notReady:
++            let lastSignal = unlockFieldSignal ?? "none"
++            cancelPendingUnlock()
++            onStatus("unlock request: lock screen not ready after \(waited) s (display awake: \(screen.displayAwake), "
++                     + "field signal: \(lastSignal)), nothing typed")
++            replyUnlock(UnlockState.failed)
++        }
++    }
++
++    /// Types the password and Return; returns the number of characters typed (0: not text, nothing typed).
++    private func postUnlockPassword(_ password: [UInt8]) -> Int {
++        var bytes = password
++        defer { for i in bytes.indices { bytes[i] = 0 } }
++        guard var units = String(bytes: bytes, encoding: .utf8).map({ Array($0.utf16) }), !units.isEmpty else { return 0 }
++        defer { for j in units.indices { units[j] = 0 } }
++        var i = 0
++        while i < units.count {
++            var end = min(i + 20, units.count)
++            if end < units.count, UTF16.isTrailSurrogate(units[end]) { end -= 1 }
++            let chunk = Array(units[i..<end])
++            for down in [true, false] {
++                guard let ev = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else { continue }
++                ev.flags = []
++                ev.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
++                ev.post(tap: .cghidEventTap)
++            }
++            i = end
++        }
++        for down in [true, false] {
++            CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: down)?.post(tap: .cghidEventTap)
++        }
++        return units.count
++    }
++
++    /// Main thread: drop a waiting request (typed, given up, or the viewer left); the copy is zeroed.
++    private func cancelPendingUnlock() {
++        unlockGateTimer?.cancel()
++        unlockGateTimer = nil
++        unlockGate = nil
++        unlockFieldSignal = nil
++        if var b = pendingUnlockBytes { for i in b.indices { b[i] = 0 }; pendingUnlockBytes = b }
++        pendingUnlockBytes = nil
 +    }
 +
      /// Accessibility (TCC) is required for CGEventPost. Checked SILENTLY
      /// (AXIsProcessTrusted, never the prompting variant) so no system dialog
      /// pops on the first stray event — instead, once per session, log it and
-@@ -3087,6 +3129,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+@@ -3087,6 +3209,10 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
          engine.onDisplaySnapshotRequest = { [weak self] maxSide in // Duo Desktop build (overview snapshots)
              DispatchQueue.main.async { self?.sendDisplaySnapshots(maxSide: Int(maxSide)) }
          }
@@ -62,11 +142,27 @@ index c8e8592..878f25d 100644
          engine.onWindowControl = { [weak self] action, width, height in
              guard let self else { return }
              if action != WindowAction.endSession,
+@@ -3368,6 +3494,7 @@ final class HostController: NSObject, SCContentSharingPickerObserver,
+             let agentLeft = agentAccess.sessionIsAgent
+             agentAccess.endSession()
+             if isListening { phase = .listening }
++            cancelPendingUnlock() // Duo Desktop build (auto-unlock): the viewer left; type nothing for it
+             holdDisplayAwake(false)
+             endSession()
+             server?.resetSession()
 diff --git a/Apps/Host/TypingWatch.swift b/Apps/Host/TypingWatch.swift
-index 5ab5461..8fb44d0 100644
+index 5ab5461..322d4a4 100644
 --- a/Apps/Host/TypingWatch.swift
 +++ b/Apps/Host/TypingWatch.swift
-@@ -66,6 +66,12 @@ final class TypingWatch: @unchecked Sendable {
+@@ -14,6 +14,7 @@
+ // locked for typing purposes.
+ import AppKit
+ import ApplicationServices
++import Carbon.HIToolbox
+ import Foundation
+ import GlassActCore
+ import GlassActWire
+@@ -66,6 +67,28 @@ final class TypingWatch: @unchecked Sendable {
          poke()
      }
  
@@ -74,6 +170,22 @@ index 5ab5461..8fb44d0 100644
 +    /// viewer hears "unlocked" quickly (the 2 s check covers it too).
 +    func checkLockSoon() {
 +        for delay in [1.0, 3.0] { queue.asyncAfter(deadline: .now() + delay) { self.checkLock() } }
++    }
++
++    /// Duo Desktop build (auto-unlock): is the lock screen's password field
++    /// there to take typing? No new permission: secure keyboard entry being on (the lock screen turns it on while its
++    /// password field has the keyboard; another app can leave it on too, so it only counts while locked), or a
++    /// loginwindow window at shielding level or above on screen (owner and level only; no title is read). nil: neither.
++    static func lockScreenFieldSignal() -> String? {
++        if IsSecureEventInputEnabled() { return "secure entry" }
++        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
++        else { return nil }
++        let shield = Int(CGShieldingWindowLevel())
++        let lockWindow = windows.contains {
++            ($0[kCGWindowOwnerName as String] as? String) == "loginwindow"
++                && (($0[kCGWindowLayer as String] as? Int) ?? Int.min) >= shield
++        }
++        return lockWindow ? "lock window" : nil
 +    }
 +
      /// The viewer clicked (button up) or typed (key up): look again shortly
@@ -143,6 +255,96 @@ index f25b770..35809d2 100644
              return true
          default:
              return false
+diff --git a/Sources/GlassActCore/UnlockTypingGate.swift b/Sources/GlassActCore/UnlockTypingGate.swift
+new file mode 100644
+index 0000000..8b2dbc6
+--- /dev/null
++++ b/Sources/GlassActCore/UnlockTypingGate.swift
+@@ -0,0 +1,84 @@
++// Duo Desktop build (auto-unlock): WHEN the Host types the Mac password.
++//
++// The Host used to type the moment the phone's request arrived. When the Mac locks during a session, the phone hears
++// "locked" and asks at once (26 ms later on a test Mac), before the lock screen's password field exists, so
++// the keystrokes went nowhere. The gate waits until the lock screen can take the password: the Mac is still locked,
++// its display is awake (asleep → the Host wakes it), and the lock screen's password field has the keyboard (secure
++// keyboard entry is on, or the lock screen's window is on screen), held for a short settle time. If the field signal
++// never shows, a display that has stayed awake and locked for `fallbackSettle` counts as ready (the lock screen's
++// own animation takes well under a second). Pure and step-driven so it can be tested without a Mac's lock screen.
++// It never sees the password.
++
++/// What the Host can see of the lock screen right now (no new permission needed for any of it).
++public struct UnlockLockScreen: Equatable, Sendable {
++    /// The session reports the screen locked.
++    public var locked: Bool
++    /// The main display is awake.
++    public var displayAwake: Bool
++    /// The lock screen's password field has the keyboard (secure keyboard entry on) or its window is on screen.
++    public var fieldReady: Bool
++
++    public init(locked: Bool, displayAwake: Bool, fieldReady: Bool) {
++        self.locked = locked
++        self.displayAwake = displayAwake
++        self.fieldReady = fieldReady
++    }
++}
++
++public struct UnlockTypingGate: Sendable {
++    public enum Step: Equatable, Sendable {
++        /// Not ready yet: look again shortly.
++        case wait
++        /// The display is asleep: wake it (and look again).
++        case wakeDisplay
++        /// Ready: type the password and Return now. Given once.
++        case type(fieldSeen: Bool)
++        /// The screen is no longer locked: type nothing.
++        case notLocked
++        /// The lock screen never became ready in time: type nothing.
++        case notReady
++        /// The gate already gave its answer.
++        case finished
++    }
++
++    /// How often the Host looks.
++    public static let interval: Double = 0.1
++    /// The ready state must hold this long before typing.
++    public static let settle: Double = 0.4
++    /// Awake and locked this long with no field signal also counts as ready.
++    public static let fallbackSettle: Double = 2.5
++    /// Give up (type nothing) after this long.
++    public static let deadline: Double = 10
++    /// While the display stays asleep, wake it again this often.
++    public static let wakeEvery: Double = 2
++
++    private let start: Double
++    private var awakeSince: Double?
++    private var fieldSince: Double?
++    private var lastWake: Double?
++    public private(set) var finished = false
++
++    public init(now: Double) { start = now }
++
++    public mutating func step(now: Double, _ s: UnlockLockScreen) -> Step {
++        guard !finished else { return .finished }
++        guard s.locked else { finished = true; return .notLocked }
++        guard s.displayAwake else {
++            awakeSince = nil; fieldSince = nil
++            if now - start >= Self.deadline { finished = true; return .notReady }
++            if let w = lastWake, now - w < Self.wakeEvery { return .wait }
++            lastWake = now
++            return .wakeDisplay
++        }
++        if awakeSince == nil { awakeSince = now }
++        if s.fieldReady {
++            if fieldSince == nil { fieldSince = now }
++        } else {
++            fieldSince = nil
++        }
++        if let f = fieldSince, now - f >= Self.settle { finished = true; return .type(fieldSeen: true) }
++        if let a = awakeSince, now - a >= Self.fallbackSettle { finished = true; return .type(fieldSeen: false) }
++        if now - start >= Self.deadline { finished = true; return .notReady }
++        return .wait
++    }
++}
 diff --git a/Sources/GlassActCore/ViewerEngine.swift b/Sources/GlassActCore/ViewerEngine.swift
 index 808acdd..e75565c 100644
 --- a/Sources/GlassActCore/ViewerEngine.swift
@@ -324,13 +526,16 @@ index 26a0195..06e7462 100644
  }
  
 diff --git a/Sources/glassact-testhost/main.swift b/Sources/glassact-testhost/main.swift
-index 9295331..b8fec53 100644
+index 9295331..5d77476 100644
 --- a/Sources/glassact-testhost/main.swift
 +++ b/Sources/glassact-testhost/main.swift
-@@ -38,6 +38,11 @@ struct Options {
+@@ -38,6 +38,14 @@ struct Options {
      /// Duo Screens build (multi-screen): `--displays` fakes four screens of different shapes, laid out as
      /// on a desk with a gap, offered by DISPLAY_LIST and switched by DISPLAY_SELECT.
      var displays = false
++    /// `--lock-ready-after S`: the fake lock screen's password field appears S seconds
++    /// after start; the host waits for it (`UnlockTypingGate`) before "typing".
++    var lockReadyAfter: Double = 0
 +    /// Duo Desktop build (auto-unlock): `--locked` starts with the screen locked and offers unlock; an
 +    /// UNLOCK_TYPE is answered "typed" and the screen unlocks 0.5 s later. `--locked-stays`: the same, but the
 +    /// screen stays locked (a wrong password). Only the length is ever logged.
@@ -339,16 +544,18 @@ index 9295331..b8fec53 100644
  
      static func parse(_ args: [String]) -> Options {
          var o = Options()
-@@ -55,6 +60,8 @@ struct Options {
+@@ -54,7 +62,10 @@ struct Options {
+             case "--still": o.motion = false
              case "--sign-in-password": o.signInPassword = next()
              case "--ask-after": o.askAfter = next().flatMap(Double.init)
++            case "--lock-ready-after": o.lockReadyAfter = next().flatMap(Double.init) ?? 0
              case "--displays": o.displays = true
 +            case "--locked": o.locked = true
 +            case "--locked-stays": o.locked = true; o.lockedStays = true
              case "--picture-steps":
                  o.pictureSteps = (next() ?? "").split(separator: ",").compactMap { step in
                      let ts = step.split(separator: ":")
-@@ -395,6 +402,8 @@ final class Scene {
+@@ -395,6 +406,8 @@ final class Scene {
  final class TestHost: @unchecked Sendable {
      let queue = DispatchQueue(label: "glassact.testhost", qos: .userInteractive)
      let options: Options
@@ -357,15 +564,35 @@ index 9295331..b8fec53 100644
      let scene: Scene
      var engine: HostEngine?
      var transport: QUICTransport?
-@@ -577,6 +586,31 @@ final class TestHost: @unchecked Sendable {
+@@ -577,6 +590,52 @@ final class TestHost: @unchecked Sendable {
              self.scene.apply(kind: kind, x: sx, y: sy, a: a, b: b, picture: (x, y, pic.w, pic.h))
          }
          engine.onTextInput = { [weak self] text in self?.scene.text(text) }
 +        if options.locked { // Duo Desktop build (auto-unlock)
 +            engine.unlockAvailable = true
 +            engine.setScreenLock(screenLocked ? ScreenLock.locked : ScreenLock.unlocked)
++            let started = ProcessInfo.processInfo.systemUptime
 +            engine.onUnlockType = { [weak self, weak engine] password in
 +                guard let self, let engine else { return }
++                // Wait for the fake lock screen's field, as the Host does.
++                var gate = UnlockTypingGate(now: ProcessInfo.processInfo.systemUptime)
++                let asked = ProcessInfo.processInfo.systemUptime
++                func tick() {
++                    let now = ProcessInfo.processInfo.systemUptime
++                    let step = gate.step(now: now, UnlockLockScreen(locked: self.screenLocked, displayAwake: true,
++                                                                    fieldReady: now - started >= self.options.lockReadyAfter))
++                    switch step {
++                    case .type, .notLocked, .notReady:
++                        Scene.log("unlock: lock screen step \(step) after \(String(format: "%.1f", now - asked)) s")
++                        if case .type = step { answer() } else if step == .notLocked {
++                            engine.sendUnlockState(UnlockState.notLocked)
++                        } else { engine.sendUnlockState(UnlockState.failed) }
++                    default:
++                        self.queue.asyncAfter(deadline: .now() + UnlockTypingGate.interval) { tick() }
++                    }
++                }
++                tick()
++                func answer() {
 +                guard self.screenLocked else {
 +                    Scene.log("unlock: not locked, nothing typed")
 +                    engine.sendUnlockState(UnlockState.notLocked)
@@ -384,11 +611,96 @@ index 9295331..b8fec53 100644
 +                    self.engine?.setScreenLock(ScreenLock.unlocked)
 +                    Scene.log("screen unlocked")
 +                }
++                }
 +            }
 +        }
          engine.onClipboard = { [weak self] format, data in
              guard format == 1, let text = String(bytes: data, encoding: .utf8) else { return }
              self?.scene.clipboard(text)
+diff --git a/Tests/CoreTests/UnlockTypingGateTests.swift b/Tests/CoreTests/UnlockTypingGateTests.swift
+new file mode 100644
+index 0000000..378b0a5
+--- /dev/null
++++ b/Tests/CoreTests/UnlockTypingGateTests.swift
+@@ -0,0 +1,78 @@
++// Duo Desktop build (auto-unlock): the Host types only when the lock screen
++// can take the password, and exactly once.
++import XCTest
++@testable import GlassActCore
++
++final class UnlockTypingGateTests: XCTestCase {
++    private func run(_ screen: (TimeInterval) -> UnlockLockScreen, until: TimeInterval = 15)
++        -> (types: [(TimeInterval, Bool)], wakes: [TimeInterval], end: UnlockTypingGate.Step?) {
++        var gate = UnlockTypingGate(now: 0)
++        var types: [(TimeInterval, Bool)] = [], wakes: [TimeInterval] = [], end: UnlockTypingGate.Step?
++        var t: TimeInterval = 0
++        while t <= until {
++            switch gate.step(now: t, screen(t)) {
++            case let .type(seen): types.append((t, seen))
++            case .wakeDisplay: wakes.append(t)
++            case .notLocked: end = .notLocked
++            case .notReady: end = .notReady
++            case .wait, .finished: break
++            }
++            t += UnlockTypingGate.interval
++            t = (t * 10).rounded() / 10
++        }
++        return (types, wakes, end)
++    }
++
++    /// Claim: a lock during a session (password field appears 0.8 s after the lock): nothing is typed before the field
++    /// is there and settled, then it is typed exactly once.
++    func testTypesOnceOnlyAfterFieldReadyAndSettled() {
++        let r = run { t in UnlockLockScreen(locked: true, displayAwake: true, fieldReady: t >= 0.8) }
++        XCTAssertEqual(r.types.count, 1)
++        XCTAssertEqual(r.types.first!.0, 0.8 + UnlockTypingGate.settle, accuracy: 0.11)
++        XCTAssertTrue(r.types.first!.1, "typed on the field signal")
++        XCTAssertTrue(r.wakes.isEmpty)
++    }
++
++    /// Claim: the field flickering (shown, gone, back) restarts the settle time.
++    func testFieldMustHoldForSettle() {
++        let r = run { t in UnlockLockScreen(locked: true, displayAwake: true, fieldReady: t >= 0.2 && !(0.4...0.5).contains(t)) }
++        XCTAssertEqual(r.types.count, 1)
++        XCTAssertGreaterThanOrEqual(r.types.first!.0, 0.6 + UnlockTypingGate.settle - 0.01)
++    }
++
++    /// Claim: a Mac whose display is asleep is woken first and typed into only once it is awake and ready.
++    func testAsleepDisplayIsWokenFirst() {
++        let r = run { t in UnlockLockScreen(locked: true, displayAwake: t >= 1.0, fieldReady: t >= 1.3) }
++        XCTAssertEqual(r.wakes.first, 0)
++        XCTAssertEqual(r.types.count, 1)
++        XCTAssertGreaterThanOrEqual(r.types.first!.0, 1.3 + UnlockTypingGate.settle - 0.01)
++    }
++
++    /// Claim: with no field signal at all, an awake, locked display counts as ready only after the longer settle.
++    func testFallbackAfterAwakeAndLocked() {
++        let r = run { _ in UnlockLockScreen(locked: true, displayAwake: true, fieldReady: false) }
++        XCTAssertEqual(r.types.count, 1)
++        XCTAssertEqual(r.types.first!.0, UnlockTypingGate.fallbackSettle, accuracy: 0.11)
++        XCTAssertFalse(r.types.first!.1)
++    }
++
++    /// Claim: a display that never wakes is never typed into; the gate gives up at its deadline.
++    func testNeverAwakeGivesUp() {
++        var gate = UnlockTypingGate(now: 0)
++        var steps: [UnlockTypingGate.Step] = []
++        var t: TimeInterval = 0
++        while t <= 12 { steps.append(gate.step(now: t, UnlockLockScreen(locked: true, displayAwake: false, fieldReady: false))); t += 0.1 }
++        XCTAssertFalse(steps.contains { if case .type = $0 { true } else { false } })
++        XCTAssertTrue(steps.contains(.notReady))
++        XCTAssertGreaterThan(steps.filter { $0 == .wakeDisplay }.count, 1, "woken again while it stays asleep")
++        XCTAssertEqual(steps.last, .finished)
++    }
++
++    /// Claim: unlocked meanwhile (by hand) → nothing typed.
++    func testUnlockedMeanwhileTypesNothing() {
++        var gate = UnlockTypingGate(now: 0)
++        XCTAssertEqual(gate.step(now: 0, UnlockLockScreen(locked: true, displayAwake: true, fieldReady: false)), .wait)
++        XCTAssertEqual(gate.step(now: 0.1, UnlockLockScreen(locked: false, displayAwake: true, fieldReady: true)), .notLocked)
++        XCTAssertEqual(gate.step(now: 0.6, UnlockLockScreen(locked: true, displayAwake: true, fieldReady: true)), .finished)
++    }
++}
 diff --git a/Tests/WireTests/UnlockMessageTests.swift b/Tests/WireTests/UnlockMessageTests.swift
 new file mode 100644
 index 0000000..3483ecb

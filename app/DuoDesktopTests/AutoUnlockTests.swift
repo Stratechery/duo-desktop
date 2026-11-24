@@ -139,11 +139,11 @@ final class AutoUnlockTests: XCTestCase {
         model.noteScreenLock(true)
         XCTAssertEqual(sent().count, 1)
         model.unlockWaitEnded(macID: mac.id)
-        XCTAssertEqual(model.unlockNotice, "Could not unlock. The saved password may be wrong.")
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.failedNotice)
         XCTAssertTrue(model.outerOpensOnPassword, "failed: back to the password field with the keyboard up")
         model.noteScreenLock(false)
         model.noteScreenLock(true)
-        XCTAssertEqual(sent().count, 1, "a wrong password is never tried twice in a row")
+        XCTAssertEqual(sent().count, 1, "never tried twice within one connection")
         model.disconnect()
         XCTAssertTrue(AutoUnlockSetting.turnOn(word, macID: mac.id, store: model.store, keychain: k, defaults: defaults))
         XCTAssertFalse(AutoUnlockFailures.failed(mac.id, in: defaults), "saving the password again clears it")
@@ -215,7 +215,8 @@ final class AutoUnlockTests: XCTestCase {
     func testLastTryFailedIsSaid() {
         let k = FakeKeychain()
         let (model, mac, sent) = session(k)
-        AutoUnlockFailures.set(mac.id, failed: true, in: defaults)
+        AutoUnlockFailures.recordMiss(mac.id, in: defaults)
+        AutoUnlockFailures.recordMiss(mac.id, in: defaults)
         model.noteUnlockState(UnlockState.available)
         model.noteScreenLock(true)
         XCTAssertTrue(sent().isEmpty)
@@ -308,5 +309,102 @@ final class AutoUnlockTests: XCTestCase {
             let t = AutoUnlockRules.notice(r)
             XCTAssertFalse(t.contains(word)); XCTAssertFalse(t.contains(String(word.count)))
         }
+    }
+
+    // MARK: One miss is retried once, on the next connection
+
+    private func reconnect(_ model: SessionModel, _ mac: MacEntry) {
+        model.disconnect()
+        model.connect(to: model.store.entry(mac.id)!)
+        model.noteUnlockState(UnlockState.available)
+    }
+
+    /// Claim: a miss is said, never retried within that connection, and tried exactly once on the next connection.
+    func testMissRetriedOnceOnNextConnectionNeverWithin() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 1)
+        model.noteUnlockState(UnlockState.typed)
+        model.unlockWaitEnded(macID: mac.id)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.failedNotice)
+        XCTAssertEqual(AutoUnlockFailures.misses(mac.id, in: defaults), 1)
+        model.dismissUnlockNotice()
+        model.noteScreenLock(false); model.noteScreenLock(true)
+        model.noteUnlockState(UnlockState.available)
+        XCTAssertEqual(sent().count, 1, "not again in the same connection")
+        XCTAssertNil(model.unlockNotice, "and no second notice in that connection")
+        reconnect(model, mac)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 2, "tried once on the next connection")
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 2, "once")
+        model.disconnect()
+    }
+
+    /// Claim: two misses in a row stop it: the stop notice, and later connections send nothing and say why.
+    func testTwoMissesStop() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        model.unlockWaitEnded(macID: mac.id)
+        reconnect(model, mac)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 2)
+        model.unlockWaitEnded(macID: mac.id)
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.stoppedNotice)
+        XCTAssertTrue(AutoUnlockFailures.stopped(mac.id, in: defaults))
+        reconnect(model, mac)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 2, "stopped")
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.notice(.lastTryFailed))
+        model.disconnect()
+        XCTAssertTrue(AutoUnlockSetting.turnOn(word, macID: mac.id, store: model.store, keychain: k, defaults: defaults))
+        XCTAssertEqual(AutoUnlockFailures.misses(mac.id, in: defaults), 0, "saving the password again clears it")
+    }
+
+    /// Claim: a success clears the count, so a later single miss is again retried.
+    func testSuccessClearsCount() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        AutoUnlockFailures.recordMiss(mac.id, in: defaults)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 1, "one miss on record: still tried")
+        model.noteUnlockState(UnlockState.typed)
+        model.noteScreenLock(false)
+        XCTAssertEqual(AutoUnlockFailures.misses(mac.id, in: defaults), 0)
+        model.disconnect()
+    }
+
+    /// Claim: build 90's single "failed" flag counts as one miss: that Mac gets one more try, not none.
+    func testOldFailedFlagGetsOneMoreTry() {
+        let k = FakeKeychain()
+        let (model, mac, sent) = session(k)
+        defaults.set(true, forKey: AutoUnlockFailures.key(mac.id))
+        XCTAssertEqual(AutoUnlockFailures.misses(mac.id, in: defaults), 1)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 1)
+        model.unlockWaitEnded(macID: mac.id)
+        XCTAssertTrue(AutoUnlockFailures.stopped(mac.id, in: defaults), "that try was the second miss")
+        XCTAssertEqual(model.unlockNotice, AutoUnlockRules.stoppedNotice)
+        model.disconnect()
+    }
+
+    /// Claim: a Mac that locks DURING a session (it was unlocked when the phone joined) is still unlocked, once.
+    func testLockDuringSessionSendsOnce() {
+        let k = FakeKeychain()
+        let (model, _, sent) = session(k)
+        model.noteUnlockState(UnlockState.available)
+        model.noteScreenLock(false)
+        XCTAssertTrue(sent().isEmpty)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 1)
+        model.noteScreenLock(true)
+        XCTAssertEqual(sent().count, 1)
+        model.disconnect()
     }
 }

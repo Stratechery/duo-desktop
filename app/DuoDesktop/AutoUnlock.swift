@@ -102,8 +102,13 @@ final class MacPasswordKeychain: MacPasswordKeeping {
 
 /// The rules, pure (tests). Per Mac: whether to send the password, and what an answer means.
 enum AutoUnlockRules {
-    /// How long to wait for the Host's "unlocked" after it typed.
+    /// How long to wait for the Host's "unlocked" after it typed (counted from the Host's "typed"; an older Host says
+    /// "typed" at once).
     static let unlockWait: TimeInterval = 6
+    /// A newer Host waits for the lock screen to be ready before typing (up to its own
+    /// 10 s) and says "typed" only then. If no "typed" comes in this long after sending, the wait for "unlocked" starts
+    /// anyway.
+    static let typedWait: TimeInterval = 12
 
     /// What the setting row says when the feature cannot be used (nil: it can).
     static func unavailableReason(appLockOn: Bool, deviceCanAuthenticate: Bool) -> String? {
@@ -126,14 +131,17 @@ enum AutoUnlockRules {
         hostCanUnlock && settingOn && !lastTryFailed && appUnlocked
     }
 
-    static let failedNotice = "Could not unlock. The saved password may be wrong."
+    /// After the first miss (one more try comes on the next connection).
+    static let failedNotice = "Could not unlock. Duo Desktop will try once more the next time you connect."
+    /// After the second miss in a row (no more tries until the password is saved again).
+    static let stoppedNotice = "Could not unlock twice in a row. Save the password again in this Mac’s settings."
 
     /// Why the password was NOT sent to a locked Mac whose Unlock Automatically is on. Each one is said in a notice;
     /// before, the app said nothing.
     enum NotSent: Equatable {
         /// The Host never said it can type (an older Host, or one without the unlock part).
         case hostCannotUnlock
-        /// The last try did not unlock; a wrong password is never typed twice in a row.
+        /// The last two tries did not unlock; the password is not typed again until it is saved again.
         case lastTryFailed
         /// The app lock (Require Touch ID / Face ID) is off, so the saved password cannot be read.
         case appLockOff
@@ -146,7 +154,7 @@ enum AutoUnlockRules {
     static func notice(_ reason: NotSent) -> String {
         switch reason {
         case .hostCannotUnlock: "This Mac’s Host cannot unlock it. Update Glass Act Host on the Mac."
-        case .lastTryFailed: "Not unlocking: the last try did not work. Save the password again in this Mac’s settings."
+        case .lastTryFailed: "Not unlocking: the last two tries did not work. Save the password again in this Mac’s settings."
         case .appLockOff: "Not unlocking: \(UnlockMethod.current.settingOffText)"
         case .noSavedPassword: "No saved password for this Mac on this iPhone. Turn on Unlock Automatically again."
         case .unreadable: "Could not read this Mac’s saved password. Lock Duo Desktop, open it again, then reconnect."
@@ -157,10 +165,14 @@ enum AutoUnlockRules {
     /// `wait`: not yet (the app lock is up and will try when passed; the Host has not said it can type yet).
     enum Decision: Equatable { case send, wait, quiet, notSent(NotSent) }
 
-    static func decide(locked: Bool?, settingOn: Bool, inFlight: Bool, lastTryFailed: Bool, appLockOn: Bool,
+    /// `lastTryFailed`: two misses in a row (stopped). `missedThisConnection`: a try on this connection already missed;
+    /// it is never tried again within the same connection (its notice is already up).
+    static func decide(locked: Bool?, settingOn: Bool, inFlight: Bool, lastTryFailed: Bool,
+                       missedThisConnection: Bool = false, appLockOn: Bool,
                        appUnlocked: Bool, hostCanUnlock: Bool) -> Decision {
         guard locked == true, settingOn, !inFlight else { return .quiet }
         if lastTryFailed { return .notSent(.lastTryFailed) }
+        if missedThisConnection { return .quiet }
         if !appLockOn { return .notSent(.appLockOff) }
         if !appUnlocked { return .wait }
         if !hostCanUnlock { return .wait }
@@ -202,13 +214,37 @@ enum AutoUnlockRules {
     }
 }
 
-/// One Mac's non-secret flag: the last automatic try failed. Kept until the password is saved again or the setting
-/// is turned off, so a wrong password is never typed twice in a row (macOS locks accounts out).
+/// One Mac's non-secret miss count: automatic tries in a row that did not unlock.
+/// One miss is not proof the password is wrong (it may have been typed before the lock screen could take
+/// it), so the next connection tries once more; after `stopAfter` misses in a row nothing is typed until the password
+/// is saved again (macOS locks accounts out after repeated wrong passwords). A success, saving the password again, or
+/// turning the setting off clears it. Build 90 and earlier kept a single "failed" flag; one that is still set counts
+/// as one miss, so such a Mac gets one more try.
 enum AutoUnlockFailures {
+    static let stopAfter = 2
     static func key(_ macID: String) -> String { "autoUnlockFailed.\(macID)" }
-    static func failed(_ macID: String, in d: UserDefaults = .standard) -> Bool { d.bool(forKey: key(macID)) }
+    static func countKey(_ macID: String) -> String { "autoUnlockMisses.\(macID)" }
+    static func misses(_ macID: String, in d: UserDefaults = .standard) -> Int {
+        let n = d.integer(forKey: countKey(macID))
+        return n > 0 ? n : (d.bool(forKey: key(macID)) ? 1 : 0)
+    }
+    /// Any miss on record (the next try is the last before stopping).
+    static func failed(_ macID: String, in d: UserDefaults = .standard) -> Bool { misses(macID, in: d) > 0 }
+    /// Two misses in a row: no more tries until the password is saved again.
+    static func stopped(_ macID: String, in d: UserDefaults = .standard) -> Bool { misses(macID, in: d) >= stopAfter }
+    /// One more miss; returns the new count.
+    @discardableResult static func recordMiss(_ macID: String, in d: UserDefaults = .standard) -> Int {
+        let n = misses(macID, in: d) + 1
+        d.set(n, forKey: countKey(macID))
+        d.removeObject(forKey: key(macID))
+        return n
+    }
+    /// `failed: false` clears the count (success, password saved again, setting off). `failed: true` records a miss.
     static func set(_ macID: String, failed: Bool, in d: UserDefaults = .standard) {
-        if failed { d.set(true, forKey: key(macID)) } else { d.removeObject(forKey: key(macID)) }
+        if failed { recordMiss(macID, in: d) } else {
+            d.removeObject(forKey: key(macID))
+            d.removeObject(forKey: countKey(macID))
+        }
     }
 }
 

@@ -128,7 +128,11 @@ final class SessionModel {
         if locked {
             tryAutoUnlock()
         } else {
-            if unlockInFlight { note("unlock: the Mac unlocked") }
+            if unlockInFlight, let mac {
+                // A success clears the miss count.
+                note("unlock: the Mac unlocked")
+                AutoUnlockFailures.set(mac.id, failed: false, in: unlockDefaults)
+            }
             finishUnlock()
             unlockNotice = nil
         }
@@ -155,7 +159,8 @@ final class SessionModel {
         guard let mac else { return false }
         return AutoUnlockRules.expected(hostCanUnlock: hostCanUnlock,
                                         settingOn: store.entry(mac.id)?.autoUnlock == true,
-                                        lastTryFailed: AutoUnlockFailures.failed(mac.id, in: unlockDefaults) || unlockNotice != nil,
+                                        lastTryFailed: AutoUnlockFailures.stopped(mac.id, in: unlockDefaults)
+                                            || missedThisConnection || unlockNotice != nil,
                                         appUnlocked: autoUnlockContext() != nil)
     }
 
@@ -174,6 +179,9 @@ final class SessionModel {
             tryAutoUnlock()
         case UnlockState.typed:
             note("unlock: the Host typed the saved password")
+            // The wait for "unlocked" counts from the typing, not from sending: a newer Host first waits for the
+            // lock screen to be ready.
+            if unlockInFlight, let mac { startUnlockTimer(macID: mac.id, after: AutoUnlockRules.unlockWait) }
         case UnlockState.notLocked:
             note("unlock: the Mac was not locked; nothing typed")
             finishUnlock()
@@ -191,7 +199,8 @@ final class SessionModel {
         let context = autoUnlockContext()
         let decision = AutoUnlockRules.decide(locked: macLocked, settingOn: store.entry(mac.id)?.autoUnlock == true,
                                               inFlight: unlockInFlight,
-                                              lastTryFailed: AutoUnlockFailures.failed(mac.id, in: unlockDefaults),
+                                              lastTryFailed: AutoUnlockFailures.stopped(mac.id, in: unlockDefaults),
+                                              missedThisConnection: missedThisConnection,
                                               appLockOn: appLockOn(), appUnlocked: context != nil,
                                               hostCanUnlock: hostCanUnlock)
         switch decision {
@@ -222,11 +231,18 @@ final class SessionModel {
         send(bytes)
         data.resetBytes(in: 0..<data.count)
         for i in bytes.indices { bytes[i] = 0 }
-        let macID = mac.id
+        startUnlockTimer(macID: mac.id, after: AutoUnlockRules.typedWait)
+    }
+
+    private func startUnlockTimer(macID: String, after wait: TimeInterval) {
+        unlockTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.unlockWaitEnded(macID: macID) } }
         unlockTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + AutoUnlockRules.unlockWait, execute: timeout)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: timeout)
     }
+
+    /// A try on this connection did not unlock: no more tries until the next connection.
+    @ObservationIgnored private(set) var missedThisConnection = false
 
     /// Whether Require Touch ID / Face ID is on (the app lock); wired to `AppLock.required`.
     @ObservationIgnored var appLockOn: () -> Bool = { true }
@@ -262,10 +278,17 @@ final class SessionModel {
         unlockInFlight = false
         unlockTimeout = nil
         guard macLocked == true else { return }
-        // Still locked: the password is taken as wrong and never tried again until it is saved again.
-        AutoUnlockFailures.set(macID, failed: true, in: unlockDefaults)
-        unlockNotice = AutoUnlockRules.failedNotice
-        note("unlock: still locked after \(Int(AutoUnlockRules.unlockWait)) s; not trying again")
+        // Still locked: a miss. Never again on this connection; once more on the next one; after two misses in a row,
+        // not until the password is saved again.
+        missedThisConnection = true
+        let misses = AutoUnlockFailures.recordMiss(macID, in: unlockDefaults)
+        if misses >= AutoUnlockFailures.stopAfter {
+            unlockNotice = AutoUnlockRules.stoppedNotice
+            note("unlock: still locked; \(misses) misses in a row, stopped until the password is saved again")
+        } else {
+            unlockNotice = AutoUnlockRules.failedNotice
+            note("unlock: still locked; miss \(misses), one more try on the next connection")
+        }
     }
 
     private func finishUnlock() {
@@ -281,6 +304,7 @@ final class SessionModel {
         hostCanUnlock = false
         unlockNotice = nil
         notSentReason = nil
+        missedThisConnection = false
         hostAnswerWait?.cancel(); hostAnswerWait = nil
     }
 

@@ -52,7 +52,7 @@ Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a
 > - **You use it at your own risk.** It controls real computers: it clicks, types and can type passwords. It can take over a computer's session: signing in with Remote Desktop disconnects whoever is using that PC.
 > - The licence says it in its own words: *"THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."* Read the whole [LICENSE](LICENSE).
 
-The code here is **build 0.1 (90)**. Read [Known issues](#known-issues) before you start.
+The code here is **build 0.1 (91)**. Read [Known issues](#known-issues) before you start.
 
 *Pictures on this page are the real app in the iPhone Duo Simulator. The computers in them are test stand-ins under made-up names; no real computer is shown. Some pictures are from older builds; where the app has changed, the text says what is different.*
 
@@ -135,7 +135,7 @@ A computer has **Screen Sharing or Remote Desktop, not both**: a Mac uses Screen
 
 **What the Mac needs.** Glass Act Host from this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) (not Glass Act's own), running, with its two permissions (Screen Recording, Accessibility); see [Installing](#installing). The first time, you sign in once with the Mac's user name and password, or approve the phone at the Mac.
 
-**Unlock Automatically.** In a Mac's ⓘ page. When the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. It needs the app lock (see [Security](#security)): one Face ID or Touch ID then unlocks every Mac. When the lock is off, a **Turn On** button sits right under the switch. When the switch is on and the app does not send the password, a notice says why: the last try did not work, the app lock is off, this iPhone has no saved password for that Mac, the password could not be read, or the Mac's Host cannot unlock.
+**Unlock Automatically.** In a Mac's ⓘ page. When the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. It needs the app lock (see [Security](#security)): one Face ID or Touch ID then unlocks every Mac. When the lock is off, a **Turn On** button sits right under the switch. When the switch is on and the app does not send the password, a notice says why: the last two tries did not work, the app lock is off, this iPhone has no saved password for that Mac, the password could not be read, or the Mac's Host cannot unlock. If a try does not unlock the Mac, the app tries once more the next time you connect; after two misses in a row it stops and asks you to save the password again. A success, saving the password again or turning the switch off starts the count over.
 
 | |
 |---|
