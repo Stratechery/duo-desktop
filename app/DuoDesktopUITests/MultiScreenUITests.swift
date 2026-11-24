@@ -1,7 +1,7 @@
 import XCTest
 
-/// M4 proof (project notes): the overview and the screen menu,
-/// screenshotted at each step. Needs a Host that lists screens; the screenshots go to TEST_RUNNER_DUO_SHOTS.
+/// M4 proof: the overview and the screen menu, screenshotted at each step. Needs a Host that lists screens; the
+/// screenshots go to TEST_RUNNER_DUO_SHOTS.
 /// - Fake four screens: `glassact-testhost --port 4533 --displays --sign-in-password duotest`, TEST_RUNNER_DUO_FAKE=1.
 /// - a real Mac with two screens: TEST_RUNNER_DUO_REAL=<its name in the simulator's Mac list> (the simulator's key on
 ///   that Host's approved list). No Mac is named in the source.
@@ -141,9 +141,9 @@ final class MultiScreenUITests: XCTestCase {
         sleep(1)
     }
 
-    /// The pinch steps (project notes), fake four screens, upright. First settles whether the
-    /// simulator's synthetic touches reach the picture: a tap must show up in the test host's log (DUO_HOST_LOG).
-    /// Then: pinch out (Whole Screen -> Follow Pointer), pinch in (-> Whole Screen), pinch in (-> All Screens).
+    /// The pinch steps, fake four screens, upright. First settles whether the simulator's synthetic touches reach the
+    /// picture: a tap must show up in the test host's log (DUO_HOST_LOG). Then: pinch out (Whole Screen -> Follow
+    /// Pointer), pinch in (-> Whole Screen), pinch in (-> All Screens).
     func testPinchLadderFakeScreens() throws {
         guard ProcessInfo.processInfo.environment["DUO_FAKE"] != nil else { throw XCTSkip("DUO_FAKE not set") }
         guard let logPath = ProcessInfo.processInfo.environment["DUO_HOST_LOG"] else { throw XCTSkip("DUO_HOST_LOG") }

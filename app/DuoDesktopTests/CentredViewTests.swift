@@ -1,8 +1,8 @@
 import XCTest
 @testable import DuoDesktop
 
-/// Zoomed views part 1 (project notes): the centred view's viewport, its
-/// follow and clamp, the touch mapping in the zoomed picture at both stream sizes, and the per-Mac switch.
+/// Zoomed views part 1: the centred view's viewport, its follow and clamp, the touch mapping in the zoomed picture at
+/// both stream sizes, and the per-Mac switch.
 final class CentredViewTests: XCTestCase {
     /// The owner's upright picture frame (669 x 376 pt at 3x).
     let bounds = CGSize(width: 669, height: 376)

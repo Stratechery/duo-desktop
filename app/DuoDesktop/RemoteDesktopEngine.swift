@@ -1,6 +1,6 @@
-// The Remote Desktop engine (project notes). FreeRDP 3 and OpenSSL 3, static, from
-// scripts/build-freerdp.sh, linked only with the DUO_RDP switch. The session settings and the certificate rule below
-// are in every build, so a build without the switch keeps a PC's saved settings.
+// The Remote Desktop engine. FreeRDP 3 and OpenSSL 3, static, from scripts/build-freerdp.sh, linked only with the
+// DUO_RDP switch. The session settings and the certificate rule below are in every build, so a build without the switch
+// keeps a PC's saved settings.
 import CryptoKit
 import Foundation
 #if DUO_RDP
@@ -13,8 +13,7 @@ enum RemoteDesktopEngine {
 #endif
 
 /// The session a PC is asked for (plan §3). Windows draws a desktop this size on its own virtual screen; the PC's
-/// monitors are not resized. Default 1920 x 1080 with text at 200% (the owner 2026-11-23: "What about 1080 at 200%?", then
-/// "yes 1080p at 200%"); 150% stays a choice.
+/// monitors are not resized. Default 1920 x 1080 with text at 200%; 150% stays a choice.
 struct RDPScreen: Equatable {
     enum Size: String, Codable, CaseIterable, Identifiable, Hashable {
         case hd720, hd1080, qhd1440

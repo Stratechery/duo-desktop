@@ -4,9 +4,8 @@ import Security
 import SwiftUI
 import UIKit
 
-// A computer's settings (pushed from the row's ⓘ; project notes §5.3, and since
-// project notes, one computer with any connection milestone 2 one section per way in), and the Glass Act address check the Add
-// Computer sheet (AddComputer.swift) uses for Screen Sharing.
+// A computer's settings, and the Glass Act address check the Add Computer sheet (AddComputer.swift) uses for Screen
+// Sharing.
 
 /// What a typed address means: host and port (`host` or `host:port`, port 4433 when none).
 struct TypedAddress: Equatable {
@@ -102,11 +101,11 @@ extension TypedAddress {
     }
 }
 
-/// A computer's ⓘ page (project notes, one computer with any connection milestone 2): its name, then a section for each way in
-/// (Screen Sharing, Terminal, JetKVM). One that is set up shows its settings, as before; one that is not shows a
-/// single Add… row, which opens the Add sheet for that way in (HIG Lists: a row that starts an action reads as a
-/// button). Any way in can be removed while another remains (HIG Alerts: confirm, with a one-word destructive
-/// button); removing the last one removes the computer, asked first. Only the ways in this build can show appear.
+/// A computer's ⓘ page: its name, then a section for each way in (Screen Sharing, Terminal, JetKVM). One that is set up
+/// shows its settings, as before; one that is not shows a single Add… row, which opens the Add sheet for that way in
+/// (HIG Lists: a row that starts an action reads as a button). Any way in can be removed while another remains (HIG
+/// Alerts: confirm, with a one-word destructive button); removing the last one removes the computer, asked first. Only
+/// the ways in this build can show appear.
 struct ComputerSettingsScreen: View {
     let store: MacStore
     let id: String
@@ -123,7 +122,7 @@ struct ComputerSettingsScreen: View {
     /// The way in whose Remove was tapped (asked first).
     @State private var removingWay: WayIn?
     /// The way in being added (the Add sheet).
-    @State private var adding: WayIn? = SimulatorSwitches.addWayOnSettings
+    @State private var adding: AddWay? = SimulatorSwitches.addWayOnSettings
     /// Only `--home-picker` (simulator pictures) opens the list without a tap.
     @State private var homePickerBySwitch = SimulatorSwitches.openHomePicker
 
@@ -137,8 +136,19 @@ struct ComputerSettingsScreen: View {
                 opensIn(entry)
                 if entry.hasScreenSharing {
                     screenSharing(entry)
+                } else if entry.hasRemoteDesktop {
+                    #if DUO_RDP
+                    // A Windows PC: its Remote Desktop settings. With no other way in, Remove Computer below removes
+                    // it.
+                    RemoteDesktopSettingsSection(store: store, id: id)
+                    if entry.setUpWays.count > 1 { removeRow(.screenSharing) }
+                    #endif
                 } else {
                     addRow(.screenSharing, footer: "For a Mac running Glass Act Host.")
+                    #if DUO_RDP
+                    // The same slot: one or the other.
+                    addRow(.remoteDesktop, footer: "For a Windows PC with Remote Desktop turned on. A computer has Screen Sharing or Remote Desktop, not both.")
+                    #endif
                 }
                 #if DUO_TERMINAL
                 if entry.hasTerminal {
@@ -203,7 +213,7 @@ struct ComputerSettingsScreen: View {
         } message: {
             Text("The next connection trusts whatever key the Mac shows.")
         }
-        .alert("Remove \(removingWay?.label ?? "")?", isPresented: Binding(get: { removingWay != nil },
+        .alert("Remove \(removingWay.map { draft?.label($0) ?? $0.label } ?? "")?", isPresented: Binding(get: { removingWay != nil },
                                                                           set: { if !$0 { removingWay = nil } }),
                presenting: removingWay) { way in
             Button("Remove", role: .destructive) {
@@ -213,7 +223,7 @@ struct ComputerSettingsScreen: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { way in
-            Text(Self.removeWayMessage(way, name: draft?.name ?? ""))
+            Text(Self.removeWayMessage(way, name: draft?.name ?? "", pc: draft?.hasRemoteDesktop ?? false))
         }
         .modifier(RemoveMacAlert(mac: $removing, asksWhere: { store.sync?.asksOnRemove($0) ?? false }) { e, everywhere in
             store.remove(e.id, everywhere: everywhere)
@@ -221,8 +231,10 @@ struct ComputerSettingsScreen: View {
         })
     }
 
-    static func removeWayMessage(_ way: WayIn, name: String) -> String {
+    static func removeWayMessage(_ way: WayIn, name: String, pc: Bool = false) -> String {
         switch way {
+        case .screenSharing where pc:
+            "“\(name)” stays in the list with its other ways in. The PC’s trusted certificate is forgotten on this iPhone."
         case .screenSharing:
             "“\(name)” stays in the list with its other ways in. Its Glass Act key and saved Mac password are deleted from this iPhone."
         case .terminal:
@@ -236,9 +248,8 @@ struct ComputerSettingsScreen: View {
     /// key, and Remove Screen Sharing.
     @ViewBuilder private func screenSharing(_ entry: MacEntry) -> some View {
         Section {
-            // Touch ID clarity A (the owner 2026-11-22: "Shouldn't I be able to just select a Mac that is
-            // broadcasting instead of typing a name?"): the home address is chosen from the Macs nearby
-            // (HIG Lists: a row with a disclosure indicator opens a list to choose from, as Settings › Wi-Fi).
+            // Touch ID clarity A: the home address is chosen from the Macs nearby (HIG Lists: a row with a disclosure
+            // indicator opens a list to choose from, as Settings › Wi-Fi).
             NavigationLink {
                 HomeAddressPicker(store: store, id: id, identity: identity) {
                     draft?.home = store.entry(id)?.home
@@ -288,19 +299,20 @@ struct ComputerSettingsScreen: View {
         removeRow(.screenSharing)
     }
 
-    /// Opens In (project notes (name-opens-default) 2): which way in a tap on the computer's name opens, from only the ways in it
-    /// has. A picker when there is a choice; with one way in, just that way.
+    /// Opens In: which way in a tap on the computer's name opens, from only the ways in it has. A picker when there is
+    /// a choice; with one way in, just that way.
     @ViewBuilder private func opensIn(_ entry: MacEntry) -> some View {
         let ways = entry.waysInThisBuild
         Section {
             if ways.count > 1 {
                 Picker("Opens In", selection: Binding(get: { entry.defaultWay ?? ways[0] },
                                                       set: { w in store.update(id) { $0.opensIn = w } })) {
-                    ForEach(ways) { w in Text(w.label).tag(w) }
+                    ForEach(ways) { w in Text(entry.label(w)).tag(w) }
                 }
                 .accessibilityIdentifier("settingsOpensIn")
             } else if let only = ways.first {
-                LabeledContent("Opens In", value: only.label)
+                // A PC's Screen Sharing slot reads Remote Desktop (the last result's wording point).
+                LabeledContent("Opens In", value: entry.label(only))
                     .accessibilityIdentifier("settingsOpensIn")
             }
         } footer: {
@@ -309,7 +321,7 @@ struct ComputerSettingsScreen: View {
     }
 
     /// A way in that is not set up: one row, "Add Terminal…" (an ellipsis: it opens a sheet that asks for more).
-    private func addRow(_ way: WayIn, footer: String) -> some View {
+    private func addRow(_ way: AddWay, footer: String) -> some View {
         Section {
             Button("Add \(way.label)…") { adding = way }
                 .accessibilityIdentifier("settingsAdd.\(way.rawValue)")
@@ -323,7 +335,7 @@ struct ComputerSettingsScreen: View {
     /// Remove this way in. The last one removes the computer (the same question as Remove Computer).
     private func removeRow(_ way: WayIn) -> some View {
         Section {
-            Button("Remove \(way.label)", role: .destructive) {
+            Button("Remove \(store.entry(id)?.label(way) ?? way.label)", role: .destructive) {
                 if let e = store.entry(id), e.setUpWays == [way] { removing = e } else { removingWay = way }
             }
             .accessibilityIdentifier("settingsRemove.\(way.rawValue)")
@@ -366,9 +378,9 @@ struct ComputerSettingsScreen: View {
     }
 }
 
-/// "Remove “my-mac”?" (plan §5.3; HIG Alerts: a Cancel button, a one-word destructive action). With list sync
-/// (the owner 2026-11-22: "Maybe ask if it deletes everywhere?") it asks where: Remove from All Devices, or Remove from This
-/// iPhone Only (`asksWhere`: sync is on, or iCloud has this computer).
+/// "Remove “my-mac”?" (plan §5.3; HIG Alerts: a Cancel button, a one-word destructive action). With list sync it asks
+/// where: Remove from All Devices, or Remove from This iPhone Only (`asksWhere`: sync is on, or iCloud has this
+/// computer).
 struct RemoveMacAlert: ViewModifier {
     @Binding var mac: MacEntry?
     var asksWhere: (MacEntry) -> Bool = { _ in false }
@@ -396,11 +408,25 @@ struct RemoveMacAlert: ViewModifier {
     static let thisIPhoneOnly = "Remove from This iPhone Only"
 
     static func message(_ e: MacEntry, asksWhere: Bool) -> String {
+        if e.hasRemoteDesktop { return pcMessage(e, asksWhere: asksWhere) }
         if asksWhere {
             return "All Devices removes it from every iPhone using your iCloud. This iPhone Only keeps it on the others. "
                 + "Either way its passwords are deleted from this iPhone, and the computer is not changed."
         }
         return e.hasScreenSharing ? "Its key and settings are deleted from this iPhone. The Mac is not changed."
             : "Its settings are deleted from this iPhone. The computer is not changed."
+    }
+
+    /// A Windows PC: what this iPhone really forgets is its trust in the PC's certificate (no PC password is saved;
+    /// it is typed each time). The All Devices / This iPhone Only sentence only when those are the buttons.
+    static func pcMessage(_ e: MacEntry, asksWhere: Bool) -> String {
+        var forgets = ["its trust in the PC’s certificate"]
+        if e.jetkvm == true { forgets.append("the JetKVM password") }
+        if e.hasTerminal { forgets.append("the Terminal’s trusted keys") }
+        let list = forgets.count == 1 ? forgets[0]
+            : forgets.dropLast().joined(separator: ", ") + " and " + forgets.last!
+        let here = "This iPhone forgets \(list). The PC is not changed."
+        guard asksWhere else { return here }
+        return "All Devices removes it from every iPhone using your iCloud. This iPhone Only keeps it on the others. " + here
     }
 }

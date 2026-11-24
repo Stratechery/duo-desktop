@@ -23,9 +23,8 @@ struct RootView: View {
             // A normal iPhone (not a Duo, by its model identifier: `PhoneKind`): its own layout, upright and sideways;
             // never the outer screen's views. The Duo goes on exactly as before, below.
             if let computer = openComputer, !(sizeClass == .compact && !PhoneKind.current && !SimulatorSwitches.forceOpenLayout) {
-                // A computer opened in Terminal or JetKVM from the list (project notes (computers-m3) 2): its own screen, no
-                // Glass Act session, whether or not it also has Screen Sharing. Not on the Duo's outer screen, which
-                // is for a Mac's dialogs.
+                // A computer opened in Terminal or JetKVM from the list: its own screen, no Glass Act session, whether
+                // or not it also has Screen Sharing. Not on the Duo's outer screen, which is for a Mac's dialogs.
                 ownScreen(computer)
             } else if PhoneKind.current && !SimulatorSwitches.forceOpenLayout {
                 if model.showsSession, let grid = model.shownGrid {
@@ -34,9 +33,7 @@ struct RootView: View {
                     MacListScreen(model: model, list: list, lock: lock)
                 }
             } else if sizeClass == .compact && !SimulatorSwitches.forceOpenLayout {
-                // The owner 2026-11-21: "If you open it on the outer screen, the app should be centered in the middle of
-                // the back screen where those annoying GUI permissions dialogues always pop up." The session's Mac
-                // when there is one; otherwise the old one line.
+                //  The session's Mac when there is one; otherwise the old one line.
                 if model.showsSession, let grid = model.shownGrid {
                     OuterSessionView(model: model, grid: grid, list: list)
                 } else if outerConnecting && list.macs.count <= 1 {
@@ -63,9 +60,9 @@ struct RootView: View {
             if locked { model.releaseHeldInput?() } else { model.unlocked(); connectColdOnOuterScreen() }
         }
         .task {
-            // Project notes (computers-m3) 2: the list's Screen Sharing icon starts the Glass Act session from the address the
-            // check found; opening Terminal or JetKVM ends any Glass Act session or attempt first.
-            // A Terminal or JetKVM screen's view switch can start it in Follow Pointer (project notes (view-selector-back)).
+            // Project notes (computers-m3) 2: the list's Screen Sharing icon starts the Glass Act session from the
+            // address the check found; opening Terminal or JetKVM ends any Glass Act session or attempt first. A
+            // Terminal or JetKVM screen's view switch can start it in Follow Pointer.
             ComputerNav.shared.startScreenSharing = { [model, list] e, view in
                 model.connect(to: e, via: list.chosen[e.id])
                 if model.mac?.id == e.id { model.openView = view }
@@ -78,9 +75,11 @@ struct RootView: View {
             }
             // The list sync (plan Part A): on by default; it never starts a connection or reads a password.
             Task { await CloudComputerSync.shared.start() }
-            // One Touch ID (the owner): the saved Mac passwords are read with the app lock's own context.
+            // One Touch ID: the saved Mac passwords are read with the app lock's own context.
             model.autoUnlockContext = { [lock] in lock.autoUnlockContext }
-            // Review fixes (Reviewer finding 3): the Terminal and JetKVM links follow the same lock.
+            // The PCs' saved passwords are read with the same context (Remote Desktop milestone 3).
+            RDPSignIn.appLockContext = { [lock] in MainActor.assumeIsolated { lock.autoUnlockContext } }
+            // Review fixes: the Terminal and JetKVM links follow the same lock.
             lock.onAccessChange = { AppAccess.set($0) }
             AppAccess.set(lock.access)
             model.note("window on the \(sizeClass == .compact ? "outer" : "open") screen, session \(ObjectIdentifier(model).hashValue)")
@@ -180,6 +179,17 @@ struct RootView: View {
         }
         let args = CommandLine.arguments
         #if targetEnvironment(simulator)
+        // `--rdp-demo` with `--open-computer NAME` (simulator only, milestone 2 pictures): a made-up PC of that name
+        // is added if missing, so its Remote Desktop screen can be shown. Nothing connects (`SimulatorSwitches.rdpDemo`).
+        if SimulatorSwitches.rdpDemo || SimulatorSwitches.rdpPrompt != nil, let name = SimulatorSwitches.openComputer,
+           !list.store.computers.contains(where: { $0.name == name }) {
+            var pc = MacEntry(name: name)
+            pc.screenSharing = false
+            pc.remoteDesktop = true
+            pc.rdpUser = "someone"
+            pc.set(.tailscale, "pc.example.invalid")
+            list.store.add(pc)
+        }
         // `--sideways` (simulator only, normal-iPhone pictures): turns the app sideways as the phone would (no
         // script can turn the simulator itself).
         if args.contains("--sideways"),

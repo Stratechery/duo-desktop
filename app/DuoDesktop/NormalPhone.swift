@@ -1,10 +1,9 @@
 import SwiftUI
 import UIKit
 
-// Duo Desktop on a normal iPhone (normal iPhone layout build (change)). The owner 2026-11-22: "The entire point of
-// this app is to have precision control from a separate input device, i.e. the trackpad." / "I think we can use the
-// dual desktop layup on a regular phone. It just has a much smaller trackpad and many fewer shortcut keys. The
-// display on the Mac is square." The drawing is the specification: screenshots/normal-phone/R8-V1-light.png.
+// Duo Desktop on a normal iPhone (normal iPhone layout build (change)). / "I think we can use the dual desktop layup on
+// a regular phone. It just has a much smaller trackpad and many fewer shortcut keys. The display on the Mac is square."
+// The drawing is the specification: screenshots/normal-phone/R8-V1-light.png.
 
 /// Which kind of iPhone the app runs on. The iPhone Duo is told apart by its hardware model identifier, never by a
 /// size class or a screen size: on the Duo's outside screen the width is compact exactly as on a normal iPhone in
@@ -101,8 +100,7 @@ struct NormalPhoneLayout: Equatable {
     var column: CGRect {
         CGRect(x: click.maxX + Self.gap, y: band.minY, width: columnWidth, height: band.height)
     }
-    /// The column's three cells, top to bottom: Right click, "…", Scroll (the owner: "Scroll should be on bottom. Right
-    /// click is the least used").
+    /// The column's three cells, top to bottom: Right click, "…", Scroll.
     func cell(_ i: Int) -> CGRect {
         let h = (band.height - 2 * Self.gap) / 3
         return CGRect(x: column.minX, y: band.minY + CGFloat(i) * (h + Self.gap), width: column.width, height: h)
@@ -193,7 +191,8 @@ struct NormalPhoneBand: View {
                                     .accessibilityLabel("Back to Trackpad")
                                     .accessibilityIdentifier("moreBack")
                             } else {
-                                KeyCell(state: state, cell: SpecialKeysLayout.cell(id, functionKeys: state.functionKeys))
+                                KeyCell(state: state, cell: SpecialKeysLayout.cell(id, functionKeys: state.functionKeys,
+                                                                                windows: state.windows))
                             }
                         }
                         .frame(width: size.width, height: size.height)
@@ -210,30 +209,13 @@ private extension View {
     }
 }
 
-/// The normal iPhone's top row: back, the name bubble, the one view button, across the full width (the row sits
-/// under the status bar, not beside the clock as on the open Duo). The bubble takes what the two round buttons, the
-/// bar's side margins and its two fixed spacers leave (the owner 2026-11-22, on build 51's three view buttons: "This should
-/// be a drop down menu, as there isn't enough horizontal space").
-enum NormalPhoneTopRow {
-    static let sideMargin: CGFloat = 16
-    static let spacer: CGFloat = 12
-    /// `selectorWidth`: the view button's width; one round button, as wide as the back button.
-    static func nameMax(rowWidth: CGFloat, selectorWidth: CGFloat = TopRow.height) -> CGFloat {
-        max(80, rowWidth - 2 * sideMargin - TopRow.height - selectorWidth - 2 * spacer - slack)
-    }
-    /// What the bar keeps free beside its glass (build 56, every part on the bar's own glass): at 402 pt an
-    /// over-long two-line name sent the whole row into "•••" with 8 and with 24; with 40 it ends at x 366 (measured,
-    /// `TopRowTests.testTopBarHasNoGlassInsideGlass`).
-    static let slack: CGFloat = 40
-}
-
-/// The normal iPhone's view button (a `TopBarItem`: the bar draws its round glass), showing the current view's
-/// symbol. With two or more
-/// views it opens a menu of them, each with its symbol and name, the current one checked. HIG Pop-up buttons: "A
-/// pop-up button displays a menu of mutually exclusive options", and after a choice "the button can update its
-/// content to indicate the current selection"; built as a SwiftUI `Menu` holding an inline `Picker` (HIG Menus),
-/// which draws the check. With one view there is nothing to choose, so it is plain: the symbol only, not a button
-/// (HIG Pop-up buttons are for a choice among options). The bar's round glass, as wide as back (HIG Buttons: at least 44).
+/// The normal iPhone's view button, the bar's one trailing item (`TopBarViewsItem`: the bar draws its round glass),
+/// showing the current view's symbol. With two or more views it opens a menu of them, each with its symbol and name,
+/// the current one checked. HIG Pop-up buttons: "A pop-up button displays a menu of mutually exclusive options", and
+/// after a choice "the button can update its content to indicate the current selection"; built as a SwiftUI `Menu`
+/// holding an inline `Picker` (HIG Menus), which draws the check. With one view there is nothing to choose, so it is
+/// plain: the symbol only, not a button (HIG Pop-up buttons are for a choice among options). The bar's round glass, as
+/// wide as back (HIG Buttons: at least 44).
 struct ViewMenuButton: View {
     @Binding var view: SessionView
     let choices: [SessionView]
@@ -274,7 +256,6 @@ struct ViewMenuButton: View {
             } label: {
                 symbol(shown)
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("View")
             .accessibilityValue(shown.title)
             .accessibilityIdentifier("viewMenu")
@@ -286,13 +267,9 @@ struct ViewMenuButton: View {
         }
     }
 
+    /// Apple's own label, icon only, at the bar's default size and colour (no hand sizing): the bar draws its one round
+    /// glass around it.
     private func symbol(_ v: SessionView) -> some View {
-        Image(systemName: v.systemImage)
-            .font(.system(size: 17, weight: .medium))
-            .foregroundStyle(Color.primary)
-            // A system bar button's content size (the back button's, measured: 36 x 36); the bar draws the same
-            // round glass around it as around back, and its touch area is the bar's 44 pt glass.
-            .frame(width: TopRow.itemContent, height: TopRow.itemContent)
-            .contentShape(Circle())
+        Label(v.title, systemImage: v.systemImage).labelStyle(.iconOnly)
     }
 }

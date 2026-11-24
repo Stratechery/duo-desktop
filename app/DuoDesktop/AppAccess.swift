@@ -1,10 +1,10 @@
 import Foundation
 
-/// Review fixes (review finding 3, 2026-11-21): what the app lock allows the Terminal and JetKVM links to do right
-/// now. They are not Glass Act sessions, so the lock's overlay alone did not stop them: the JetKVM view under the
-/// overlay connected (reading its saved password) and the terminal kept retrying SSH. Now every connect, retry,
-/// password read and piece of input asks this first, and they resume through the same successful unlock (no second
-/// prompt). Readable from any thread; `RootView` feeds it from `AppLock`. Closed until the app says otherwise.
+/// Review fixes: what the app lock allows the Terminal and JetKVM links to do right now. They are not Glass Act
+/// sessions, so the lock's overlay alone did not stop them: the JetKVM view under the overlay connected (reading its
+/// saved password) and the terminal kept retrying SSH. Now every connect, retry, password read and piece of input asks
+/// this first, and they resume through the same successful unlock (no second prompt). Readable from any thread;
+/// `RootView` feeds it from `AppLock`. Closed until the app says otherwise.
 enum AppAccess {
     enum State: Equatable, Sendable {
         /// Unlocked and in front: links may connect, retry, read their passwords and send input.

@@ -6,7 +6,7 @@ import LocalAuthentication
 import XCTest
 @testable import DuoDesktop
 
-/// project notes, one computer with any connection, milestone 2: Add Computer with Start With, Add… rows and removal on
+/// Project notes, one computer with any connection, milestone 2: Add Computer with Start With, Add… rows and removal on
 /// the ⓘ page, a JetKVM-only computer that opens. One test per claim; made-up names only.
 @MainActor
 final class ComputersM2Tests: XCTestCase {

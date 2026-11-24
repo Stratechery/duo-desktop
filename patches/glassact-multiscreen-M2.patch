@@ -50,8 +50,8 @@ index 0000000..b44b701
 +
 +    /// Geometry modes the host refuses for every viewer: 1 (Client
 +    /// Resolution — changes the Mac's resolution) and 4 (virtual display —
-+    /// mirrors the real screens) become 2 (Scale). The owner 2026-11-21: "I think
-+    /// it's important to not change the resolution on the Mac."
++    /// mirrors the real screens) become 2 (Scale): the Host never
++    /// changes the resolution on the Mac.
 +    public static func allowedGeometryMode(_ mode: Int) -> Int {
 +        (mode == 1 || mode == 4) ? 2 : mode
 +    }

@@ -2,12 +2,10 @@ import Foundation
 import Network
 import SwiftUI
 
-// One list of computers (project notes). Milestone 3 (the owner's design, 2026-11-22) as changed
-// by project notes (name-opens-default) (the owner 2026-11-23: "Clicking the computer name should also go to the default view; setting
-// should go back inside the (i)"): one line per computer, a light, the name (tap: its Opens In way), the same three
-// way-in icons on every row (Screen Sharing, Terminal, JetKVM), then the (i) (its settings). An icon the computer has
-// opens it exactly that way; a gray one adds that way in. In every build: the checks need neither the Terminal nor
-// the JetKVM code.
+// One list of computers. Milestone 3 as changed by project notes (name-opens-default): one line per computer, a light,
+// the name (tap: its Opens In way), the same three way-in icons on every row (Screen Sharing, Terminal, JetKVM), then
+// the (i) (its settings). An icon the computer has opens it exactly that way; a gray one adds that way in. In every
+// build: the checks need neither the Terminal nor the JetKVM code.
 
 // MARK: - Reach: does each way in answer? A plain TCP connect, every time the list appears
 
@@ -43,7 +41,7 @@ final class ComputerReach {
             let https = e.jetkvmAddress?.lowercased().hasPrefix("https://") == true
             return (host, https ? 443 : 80)
         case .screenSharing:
-            // A PC's Remote Desktop: a TCP connect to its port (3389), no sign-in (project notes §2).
+            // A PC's Remote Desktop: a TCP connect to its port (3389), no sign-in.
             guard e.hasRemoteDesktop, let host = e.address(.tailscale) ?? e.address(.home) else { return nil }
             return (host, e.rdpPortValue)
         }
@@ -104,25 +102,30 @@ enum TCPCheck {
 
 extension WayIn {
     /// The list's icon for this way in (HIG SF Symbols). Screen Sharing: a display (the Mac's own screen); Terminal:
-    /// the terminal window, as in the session's view switch; JetKVM: the cable, as in the session's view switch.
+    /// the terminal window, as in the session's view switch; JetKVM: the little box that plugs into HDMI, which is what
+    /// a JetKVM is. The one definition: the session's view switch and drop-down use it too (`SessionView.systemImage`).
     var symbol: String {
         switch self {
         case .screenSharing: "display"
         case .terminal: "apple.terminal"
-        case .jetkvm: "cable.connector"
+        case .jetkvm: "mediastick"
         }
     }
 
-    /// VoiceOver for a list icon (project notes (computers-m3) 1): "Open Guest Mac Mini in Terminal" / "Add Terminal to Guest
-    /// Mac Mini".
+    /// VoiceOver for a list icon: "Open Guest Mac Mini in Terminal" / "Add Terminal to Guest Mac Mini".
     func openLabel(_ name: String) -> String { "Open \(name) in \(label)" }
     func addLabel(_ name: String) -> String { "Add \(label) to \(name)" }
     /// The waiting/failure screens' offer (PLAN: "Open in JetKVM instead").
     var insteadTitle: String { "Open in \(label) Instead" }
 }
 
-/// How one way-in icon looks on a computer's row (project notes (computers-m3) 1, from the HIG; see project notes):
-/// - not set up: gray (the owner 2026-11-22: "Whichever icons are not there are grayed out"); tap adds it;
+extension MacEntry {
+    /// "Open in … Instead" as this computer has the way in: a PC's Screen Sharing slot is Remote Desktop.
+    func insteadTitle(_ way: WayIn) -> String { "Open in \(label(way)) Instead" }
+}
+
+/// How one way-in icon looks on a computer's row:
+/// - not set up: gray; tap adds it;
 /// - set up: the app's colour; tap opens it that way;
 /// - set up but not answering right now: the app's colour still (it is set up, and a tap still tries it), with a
 ///   small exclamation-mark badge on the icon. A shape, not only a colour (HIG Color: "Avoid relying solely on color
@@ -166,10 +169,8 @@ enum WayLook: Equatable {
 
 // MARK: - The light at the start of a row
 
-/// The light at the start of a computer's row (the owner 2026-11-23: "We should add the green light at the beginning of the
-/// row if the computer is reachable", "yellow light if reachable but not logged in" and "red light if not
-/// reachable"). The look is the earlier rows' dot (builds 61-65: an 8 pt filled circle); the checks are the ones the
-/// icons' badges already use, so it adds no network traffic. Per way in:
+/// The light at the start of a computer's row. The look is the earlier rows' dot (builds 61-65: an 8 pt filled circle);
+/// the checks are the ones the icons' badges already use, so it adds no network traffic. Per way in:
 /// - Screen Sharing, Glass Act's sign-in query: this iPhone is let in = green; the Host answers but wants a sign-in
 ///   with the Mac's password, someone at the Mac to allow it, or takes no new viewers = yellow; no answer, or a
 ///   different Mac's key = red.
@@ -257,12 +258,9 @@ struct ComputerLightView: View {
 
 // MARK: - The row
 
-/// One computer in the list, on one line: the light, the name (tap: the computer in its Opens In way), the way-in
-/// icons in fixed columns, then the (i) (its settings). the owner 2026-11-23: "Clicking the computer name should also go to
-/// the default view; setting should go back inside the (i)"; the owner 2026-11-22: "I think we can put the icons there.
-/// There's plenty of space. They can go on the right and these rows can be shorter". The (i) sits after the icons, at
-/// the row's trailing end, as Settings › Wi-Fi puts it after a network's lock and signal icons (HIG Lists and tables;
-/// see project notes).
+/// One computer in the list, on one line: the light, the name (tap: the computer in its Opens In way), the way-in icons
+/// in fixed columns, then the (i) (its settings). The (i) sits after the icons, at the row's trailing end, as Settings
+/// › Wi-Fi puts it after a network's lock and signal icons.
 struct ComputerListRow: View {
     let entry: MacEntry
     /// The icons, in the same columns on every row: the ways in this build has (all three in the full build).
@@ -281,22 +279,53 @@ struct ComputerListRow: View {
     /// under it (one line does not leave the name room once the icons have grown with the text).
     static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
 
+    /// The way-in icons and the (i) sit in columns of one width (`side`: the HIG's 44 pt touch target, growing with the
+    /// text), each centred in its column, with no gap between columns, so their centres are one `side` apart: an even
+    /// rhythm whatever each symbol's own width. `wordGap` is the only other space: one standard 8 pt (the HIG's default
+    /// spacing) on each side of the gray system word.
+    static let columnGap: CGFloat = 0
+    static let wordGap: CGFloat = 8
+    /// The name keeps at least this much room on one line (about seven letters at the body size); with less, the row
+    /// stacks as at the accessibility sizes (the largest standard text sizes on a normal iPhone).
+    @ScaledMetric(relativeTo: .body) private var nameMinimum: CGFloat = 80
+    @State private var rowWidth: CGFloat = 0
+
+    /// The width the one-line row needs besides the name, without the system word (which drops first): the light
+    /// and its gap, the way-in columns and the (i).
+    private var fixedWidth: CGFloat {
+        let column = max(44, side)
+        return 10 + 10 + CGFloat(columns.count + 1) * column + CGFloat(columns.count) * Self.columnGap
+    }
+
+    private var stacked: Bool {
+        Self.stacks(typeSize) || (rowWidth > 0 && rowWidth - fixedWidth < nameMinimum)
+    }
+
     var body: some View {
-        if Self.stacks(typeSize) {
-            VStack(alignment: .leading, spacing: 0) {
-                nameLine
-                HStack(spacing: 2) { icons; Spacer(minLength: 0); infoButton }
-            }
-            // At these sizes the list's own side margin all but goes; keep the name off the card's edge.
-            .padding(.leading, 12)
-            .padding(.vertical, 6)
-        } else {
-            HStack(spacing: 2) {
-                nameLine
-                icons
-                infoButton
+        Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: 0) {
+                    nameLine
+                    // The word, if it fits, just left of the icons, as on one line; otherwise it drops.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Self.columnGap) { word; icons; Spacer(minLength: 0); infoButton }
+                        HStack(spacing: Self.columnGap) { icons; Spacer(minLength: 0); infoButton }
+                    }
+                }
+                // At these sizes the list's own side margin all but goes; keep the name off the card's edge.
+                .padding(.leading, Self.stacks(typeSize) ? 12 : 0)
+                .padding(.vertical, 6)
+            } else {
+                // The first line is used only when its ideal width (the whole name, the word, the icons) fits the row;
+                // otherwise the word goes entirely and the name takes its room, shortened by the system only if it
+                // still does not fit. The icons and (i) stay at the trailing edge either way.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Self.columnGap) { nameLine; word; icons; infoButton }
+                    HStack(spacing: Self.columnGap) { nameLine; icons; infoButton }
+                }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
     }
 
     private var nameLine: some View {
@@ -309,7 +338,7 @@ struct ComputerListRow: View {
                     Text(entry.name)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
-                        .lineLimit(Self.stacks(typeSize) ? 3 : 1)
+                        .lineLimit(stacked ? 3 : 1)
                     Spacer(minLength: 0)
                 }
                 .frame(minHeight: 44)
@@ -318,7 +347,8 @@ struct ComputerListRow: View {
             .buttonStyle(.plain)
             // The divider starts where the name starts.
             .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-            .accessibilityLabel(entry.name)
+            // The system is read with the name ("Tower PC, Windows PC"); the mark itself is hidden.
+            .accessibilityLabel(entry.system.map { "\(entry.name), \($0.spoken)" } ?? entry.name)
             .accessibilityHint(entry.defaultWay.map { "Opens it in \($0.label)." } ?? "")
             .accessibilityIdentifier("computerName.\(entry.name)")
         }
@@ -336,12 +366,61 @@ struct ComputerListRow: View {
             .accessibilityIdentifier("macSettings.\(entry.name)")
     }
 
-    private var icons: some View {
+    private var word: some View {
+        ComputerSystemWord(system: entry.system).padding(.horizontal, Self.wordGap)
+    }
+
+    @ViewBuilder private var icons: some View {
         ForEach(columns) { way in
             let l = look(way)
-            WayIconButton(way: way, name: entry.name, look: l) {
+            WayIconButton(way: way, name: entry.name, look: l, symbol: entry.symbol(way)) {
                 if l.isGray { add(way) } else { open(way) }
             }
+        }
+    }
+}
+
+/// The system as a gray word: "macOS", "Windows" or "Linux" in the secondary colour at `.footnote`, in a column as wide
+/// as the longest word so every word ends at the same edge just left of the icons; empty while the system is not known.
+/// Information, not a button: hidden from VoiceOver, since the name already reads the system ("Tower PC, Windows PC").
+struct ComputerSystemWord: View {
+    let system: ComputerSystem?
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            ForEach(ComputerSystem.allCases, id: \.self) { Text($0.word).hidden() }
+            Text(system?.word ?? "").foregroundStyle(.secondary)
+        }
+        .font(.footnote)
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityHidden(true)
+        .preference(key: SystemWordShown.self, value: system != nil)
+    }
+}
+
+/// Whether a row is showing its system word (true only when the word is laid out, not dropped). Read by the tests.
+struct SystemWordShown: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+extension ComputerSystem {
+    /// The list's gray word.
+    var word: String {
+        switch self {
+        case .mac: "macOS"
+        case .windows: "Windows"
+        case .linux: "Linux"
+        }
+    }
+
+    /// What VoiceOver says after the name.
+    var spoken: String {
+        switch self {
+        case .mac: "Mac"
+        case .windows: "Windows PC"
+        case .linux: "Linux"
         }
     }
 }
@@ -352,13 +431,15 @@ struct WayIconButton: View {
     let way: WayIn
     let name: String
     let look: WayLook
+    /// The icon.
+    var symbol: String? = nil
     let action: () -> Void
     @ScaledMetric(relativeTo: .body) private var glyph: CGFloat = 20
     @ScaledMetric(relativeTo: .body) private var side: CGFloat = 44
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: way.symbol)
+            Image(systemName: symbol ?? way.symbol)
                 .font(.system(size: glyph))
                 // Gray is the system's tertiary label gray, never the app's colour faded (which read as orange).
                 .foregroundStyle(look.isGray ? Color(.tertiaryLabel) : Color.accentColor)
@@ -411,7 +492,7 @@ struct WayIconButton: View {
         guard e.opens(way) else { return }
         switch way {
         case .screenSharing where e.hasRemoteDesktop:
-            // A PC opens on its own screen, with no Glass Act session (project notes §2).
+            // A PC opens on its own screen, with no Glass Act session.
             endScreenSharing()
             self.way = way
             openID = e.id
@@ -425,8 +506,8 @@ struct WayIconButton: View {
         }
     }
 
-    /// Opens `e` in the way in `view` belongs to (the views control on a Terminal or JetKVM screen, order
-    /// view-selector-back): Whole Screen or Follow Pointer start the Screen Sharing session in that view.
+    /// Opens `e` in the way in `view` belongs to: Whole Screen or Follow Pointer start the Screen Sharing session in
+    /// that view.
     func open(_ e: MacEntry, view: SessionView) {
         guard e.opens(view.way) else { return }
         if view.way == .screenSharing, !e.hasRemoteDesktop {
@@ -470,7 +551,7 @@ struct OtherWaysOffer: View {
                 leave()
                 ComputerNav.shared.open(entry, in: w)
             } label: {
-                Label(w.insteadTitle, systemImage: w.symbol)
+                Label(entry.insteadTitle(w), systemImage: entry.symbol(w))
             }
             .buttonStyle(.bordered)
             .tint(onDark ? .white : .accentColor)

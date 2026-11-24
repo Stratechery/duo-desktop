@@ -1,8 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// What each extra key does on the Mac (the owner 2026-11-20: "For the duo extra keys, add an info bubble control
-/// explaining what each key does"). One plain line per key, used three ways: the info bubble's list, each key's
+/// What each extra key does on the Mac. One plain line per key, used three ways: the info bubble's list, each key's
 /// spoken (VoiceOver) hint, and the tests. The list is built from the same rows that draw the keys
 /// (`SpecialKeysLayout.rows`, `MacKeysBar.keys`), so it cannot drift from the screen.
 enum KeyInfo {
@@ -85,7 +84,7 @@ enum KeyInfo {
             return more
                 ? "puts back the shortcuts and the arrows"
                 : "swaps the shortcuts for F1 to F12 and the arrows for home, page up, page down and end"
-        // The modifiers' spoken hint is the pop-up's wording, nothing about combining (order 2026-11-20).
+        // The modifiers' spoken hint is the pop-up's wording, nothing about combining.
         case "control", "option", "command", "shift": return KeyCap.accessibilityName(k, more: false)
         case "left": return "moves left one character"
         case "right": return "moves right one character"
@@ -99,10 +98,9 @@ enum KeyInfo {
         }
     }
 
-    /// The four modifier keys share one rule and one sentence (the owner 2026-11-20: "The control, option, command, shift
-    /// [wording] should be consistent. Also, I should be able to do combos of those keys"): a tap holds it for the
-    /// next key or click, any of them can be held together, a second tap lets it go, and after that key or click
-    /// they all let go. `MacKeyboardEngine.tapModifier` is that rule, the same for all four.
+    /// The four modifier keys share one rule and one sentence: a tap holds it for the next key or click, any of them
+    /// can be held together, a second tap lets it go, and after that key or click they all let go.
+    /// `MacKeyboardEngine.tapModifier` is that rule, the same for all four.
     static let modifierIDs: Set<String> = ["control", "option", "command", "shift"]
 
     private static func entries(_ cells: [MacKeyboardLayout.Cell]) -> [Entry] {
@@ -122,10 +120,9 @@ enum KeyInfo {
                 Section(title: "After More", entries: entries(swapped))]
     }
 
-    /// The pop-up's few words for a key: what the key IS or does on the Mac, nothing about how keys behave or
-    /// combine (the owner 2026-11-20: "The point of this panel is to explain obscure symbols"; "The keys that show a
-    /// word also need an explanation"). A key whose face is a word gets only the explanation after it; a key
-    /// whose face is a symbol gets its name too. VoiceOver keeps the fuller line from `description`.
+    /// The pop-up's few words for a key: what the key IS or does on the Mac, nothing about how keys behave or combine.
+    /// A key whose face is a word gets only the explanation after it; a key whose face is a symbol gets its name too.
+    /// VoiceOver keeps the fuller line from `description`.
     static func short(_ cell: MacKeyboardLayout.Cell) -> String {
         switch cell {
         case .gap: return ""
@@ -192,8 +189,7 @@ enum KeyInfo {
         }
     }
 
-    /// Keys of one kind shown on one line: F1 to F12, and the four plain arrows (the owner 2026-11-20: "The four
-    /// plain arrows can share one line").
+    /// Keys of one kind shown on one line: F1 to F12, and the four plain arrows.
     private static func group(_ cell: MacKeyboardLayout.Cell) -> (face: String, text: String)? {
         guard case let .key(k) = cell else { return nil }
         if k.id.hasPrefix("F"), Int(k.id.dropFirst()) != nil { return ("F1–F12", short(cell)) }
@@ -207,9 +203,8 @@ enum KeyInfo {
         return lines(Array(sections.prefix(1)), clicks: clicks).count
     }
 
-    /// The three buttons' lines, first, as they are the band's first cells (the owner 2026-11-20: the reference
-    /// "lists the keys of the new layout and the two click buttons").
-    /// project notes: the feature in one plain line.
+    /// The three buttons' lines, first, as they are the band's first cells. project notes: the feature in one plain
+    /// line.
     static var autoUnlockLine: Line { Line(face: .symbol("lock.open"),
                                      text: UnlockMethod.current.keyInfoAutoUnlock,
                                      ids: ["auto-unlock"]) }
@@ -248,11 +243,10 @@ enum KeyInfo {
     }
 }
 
-/// The key reference, from one plain row on the Mac list (the owner 2026-11-21: "Those should go in the main menu.
-/// There should just be a link there to look up the shortcuts. It doesn't need to be on every screen."): the click
-/// buttons and every key of the upright band. It sends nothing to any Mac. HIG Lists and tables: a row that opens
-/// more information; HIG Sheets: a reference read for a moment opens as a sheet with a Done button, like About.
-/// It was the info button in every session's top row and a keyboard button in the Mac list's toolbar.
+/// The key reference, from one plain row on the Mac list: the click buttons and every key of the upright band. It sends
+/// nothing to any Mac. HIG Lists and tables: a row that opens more information; HIG Sheets: a reference read for a
+/// moment opens as a sheet with a Done button, like About. It was the info button in every session's top row and a
+/// keyboard button in the Mac list's toolbar.
 struct KeyboardShortcutsRow: View {
     @State private var showing = false
 
@@ -275,13 +269,11 @@ struct KeyboardShortcutsRow: View {
     }
 }
 
-/// The key reference sheet: the shortcut keys and nothing else (the owner 2026-11-21: "I don't understand why about
-/// needs to be in the keyboard shortcut info view. Why can't it be on the main menu?"; About is on the Mac list).
-/// Two columns (the owner 2026-11-21: "Also, the info view should be 2 columns. It's taking up way too much space right
-/// now."): each line is the key as the band draws it (`KeyFace`, small) with its few words beside it; the groups
-/// flow down the left column, then the right, in the band's order. HIG Layout: adapt to the width and to Dynamic
-/// Type, so at the accessibility text sizes it falls back to one column; the sheet scrolls when it is taller than
-/// the screen. The same sheet opens from the Mac list and from a session.
+/// The key reference sheet: the shortcut keys and nothing else. Two columns: each line is the key as the band draws it
+/// (`KeyFace`, small) with its few words beside it; the groups flow down the left column, then the right, in the band's
+/// order. HIG Layout: adapt to the width and to Dynamic Type, so at the accessibility text sizes it falls back to one
+/// column; the sheet scrolls when it is taller than the screen. The same sheet opens from the Mac list and from a
+/// session.
 struct KeyInfoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -303,7 +295,7 @@ struct KeyInfoSheet: View {
         return [Group(title: "Buttons", lines: KeyInfo.clickLines),
                 Group(title: "Keys", lines: Array(keys.prefix(more))),
                 Group(title: "After More (⋯)", lines: Array(keys.dropFirst(more))),
-                // project notes: the info sheet's one plain line about the feature.
+                // Project notes: the info sheet's one plain line about the feature.
                 Group(title: "Locked Mac", lines: [KeyInfo.autoUnlockLine])]
             .filter { !$0.lines.isEmpty }
     }

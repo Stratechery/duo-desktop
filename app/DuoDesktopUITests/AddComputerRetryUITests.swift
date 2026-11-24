@@ -1,11 +1,10 @@
 import XCTest
 
-/// Project notes item 2 (the owner: "I originally put in the wrong JetKVM address, and it kind of got stuck on
-/// that screen. I had to exit out to go back in and be able to edit it."). Adds a computer by JetKVM at an address
-/// where nothing answers (192.0.2.10, a documentation address), waits for the check to fail, then reports the
-/// sheet's state, corrects the address in the same sheet and tries again. Passes only when the fields stay
-/// editable, the button reads Try Again, and the list then has ONE computer of that name.
-/// Run: TEST_RUNNER_DUO_ADD_RETRY=1 xcodebuild … -only-testing:DuoDesktopUITests/AddComputerRetryUITests test
+/// Project notes item 2. Adds a computer by JetKVM at an address where nothing answers (192.0.2.10, a documentation
+/// address), waits for the check to fail, then reports the sheet's state, corrects the address in the same sheet and
+/// tries again. Passes only when the fields stay editable, the button reads Try Again, and the list then has ONE
+/// computer of that name. Run: TEST_RUNNER_DUO_ADD_RETRY=1 xcodebuild …
+/// -only-testing:DuoDesktopUITests/AddComputerRetryUITests test
 @MainActor
 final class AddComputerRetryUITests: XCTestCase {
     override func setUp() async throws {
@@ -25,7 +24,7 @@ final class AddComputerRetryUITests: XCTestCase {
         app.buttons["addConfirm"].tap()
         let check = app.staticTexts["addCheck"]
         XCTAssertTrue(check.waitForExistence(timeout: 30), "the check reported")
-        // The state the sheet is left in after a failed check (the order: "say exactly what state the sheet was in").
+        // The state the sheet is left in after a failed check.
         let state = "after the failed check: check=\"\(check.label)\" addressEnabled=\(address.isEnabled) "
             + "addButton=\(app.buttons["addConfirm"].exists ? app.buttons["addConfirm"].label : "gone") "
             + "doneButton=\(app.buttons["addDone"].exists) doneEnabled=\(app.buttons["addDone"].exists && app.buttons["addDone"].isEnabled)"

@@ -3,10 +3,9 @@ import GlassActSession
 import SwiftUI
 import UIKit
 
-/// The outer screen's two views (the owner 2026-11-21: "the goal of the outside screen is only the permissions dialogues.
-/// That should be the primary focus"). Vertical (the default): fixed sideways at the centre, one finger scrolls up
-/// and down and a tap clicks. Free ("a traditional screen sharing app where you move the screen with two fingers and
-/// you tap with one"): one finger taps or drags on the Mac, two fingers move the picture in any direction.
+/// The outer screen's two views. Vertical (the default): fixed sideways at the centre, one finger scrolls up and down
+/// and a tap clicks. Free ("a traditional screen sharing app where you move the screen with two fingers and you tap
+/// with one"): one finger taps or drags on the Mac, two fingers move the picture in any direction.
 enum OuterMode: String, CaseIterable, Identifiable {
     case vertical, free
 
@@ -66,11 +65,10 @@ enum OuterWindow {
               mac: mac, display: display)
     }
 
-    /// Vertical: x fixed at the Mac's centre on the display's centre; y between the Mac screen's top (at the
-    /// display's top) and its bottom (at the touchable area's bottom, so the last Mac rows stay tappable; build 23).
-    /// With the keyboard up the Mac's bottom stops at the keyboard's top instead, so every row can be scrolled
-    /// above it, and never further: no black between the Mac's bottom and the keyboard (the owner 2026-11-21: "Yes, rest
-    /// the [Mac's] bottom edge on the keyboard.").
+    /// Vertical: x fixed at the Mac's centre on the display's centre; y between the Mac screen's top (at the display's
+    /// top) and its bottom (at the touchable area's bottom, so the last Mac rows stay tappable; build 23). With the
+    /// keyboard up the Mac's bottom stops at the keyboard's top instead, so every row can be scrolled above it, and
+    /// never further: no black between the Mac's bottom and the keyboard.
     static func verticalClamp(_ o: CGPoint, mac: CGSize, display: CGSize, touchable: CGRect,
                               keyboardTop: CGFloat? = nil) -> CGPoint {
         let x = clamp(CGPoint(x: (mac.width - display.width) / 2, y: 0), mac: mac, display: display).x
@@ -90,10 +88,9 @@ enum OuterWindow {
         keyboardTop.map { min($0, touchable.maxY) } ?? touchable.maxY
     }
 
-    /// Vertical's opening place (the owner: "open on the password field with the keyboard up"): the Mac's centre on the
-    /// display's centre. Keyboard up: the Mac's bottom edge resting on the keyboard's top (the owner 2026-11-21), which
-    /// leaves the password field (0.909 down the Mac) about 98 pt above the keys at 1080 tall, 109 pt at 1200.
-    /// Keyboard not up yet: the field in the middle of the touchable area.
+    /// Vertical's opening place: the Mac's centre on the display's centre. Keyboard up: the Mac's bottom edge resting
+    /// on the keyboard's top, which leaves the password field (0.909 down the Mac) about 98 pt above the keys at 1080
+    /// tall, 109 pt at 1200. Keyboard not up yet: the field in the middle of the touchable area.
     static func passwordSpot(mac: CGSize, display: CGSize, touchable: CGRect, keyboardTop: CGFloat?) -> CGPoint {
         if keyboardTop != nil {
             return verticalClamp(CGPoint(x: 0, y: CGFloat.greatestFiniteMagnitude), mac: mac, display: display,
@@ -139,8 +136,8 @@ struct OuterSessionView: View {
     /// Bumped to put the picture back at the dialog spot (each appearance, each return to the app, choosing vertical).
     @State private var home = 0
     @State private var mode = OuterMode.start
-    /// The iPhone's own keyboard (the owner: "we need to be able to bring up the system keyboard"). Up on every opening:
-    /// the Mac is almost always locked when this screen is used, and the phone cannot tell (RESULT §2).
+    /// The iPhone's own keyboard. Up on every opening: the Mac is almost always locked when this screen is used, and
+    /// the phone cannot tell (RESULT §2).
     @State private var typing = true
     /// The keyboard's height above the bottom safe area (`KeyboardGuideReader`); 0 while it is down.
     @State private var keyboardInset: CGFloat = 0
@@ -149,11 +146,30 @@ struct OuterSessionView: View {
     @State private var showMacs = false
     @Environment(\.scenePhase) private var scenePhase
     let list: MacList
+    /// The strip's free run, display points (Apple's occlusion regions, `OuterStripLayout.run`): from where the
+    /// system area ends at the top to where a region low in the column (the camera, turned) starts; the 190 floor
+    /// and no bottom region until the first read.
+    @State private var stripRun = OuterStripLayout.Run()
+    /// A new run read while a finger is on the controls: applied when the finger lifts, so the controls never move
+    /// under a touch in progress.
+    @State private var pendingStripRun: OuterStripLayout.Run?
+    /// Apple's active occlusion regions in display points (the full-display reader below); empty before iOS 27.1.
+    @State private var occlusion: [CGRect] = []
+    @GestureState private var stripTouched = false
+
+    /// A new run from the region read: the controls move only when no finger is on them.
+    private func takeStripRun(_ run: OuterStripLayout.Run) {
+        #if targetEnvironment(simulator)
+        if run != stripRun, run != pendingStripRun {
+            print("[outer-system-area] end \(run.systemEnd) bottom region \(run.bottomRegionTop.map { "\($0)" } ?? "none")")
+        }
+        #endif
+        if stripTouched { pendingStripRun = run } else if run != stripRun { stripRun = run; pendingStripRun = nil }
+    }
 
     /// Opening with the keyboard up (on the password field) only when the password still has to be typed here
     /// (`SessionModel.outerOpensOnPassword`: locked and not unlocking automatically, or an older Host that does not
-    /// say). Otherwise the dialog spot with the keyboard down (project notes). Simulator only:
-    /// `--outer-keyboard-down` starts down.
+    /// say). Otherwise the dialog spot with the keyboard down. Simulator only: `--outer-keyboard-down` starts down.
     static func keyboardAtOpen(onPassword: Bool) -> Bool {
         #if targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("--outer-keyboard-down") { return false }
@@ -163,6 +179,12 @@ struct OuterSessionView: View {
         return onPassword
     }
     private var keyboardAtStart: Bool { Self.keyboardAtOpen(onPassword: model.outerOpensOnPassword) }
+
+    /// The active occlusion regions in the reader's own points (the whole display); none before iOS 27.1.
+    static func occlusionFrames(_ proxy: GeometryProxy) -> [CGRect] {
+        guard #available(iOS 27.1, *) else { return [] }
+        return proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map(\.frame)
+    }
 
     init(model: SessionModel, grid: TileGrid, list: MacList) {
         self.model = model
@@ -181,9 +203,9 @@ struct OuterSessionView: View {
             // area, in the picture's own points, sets the dialog spot's height.
             let touchable = CGRect(x: insets.leading, y: insets.top, width: proxy.size.width,
                                    height: proxy.size.height)
-            // The keyboard's top in the picture's points (the picture spans the whole display).
-            // Measured directly as the keyboard guide's top in window points (the picture spans the window), not
-            // from safe-area sums, which put it ~38 pt high sideways (the owner's sideways screenshot: a black band).
+            // The keyboard's top in the picture's points (the picture spans the whole display). Measured directly as
+            // the keyboard guide's top in window points (the picture spans the window), not from safe-area sums, which
+            // put it ~38 pt high sideways.
             let keyboardTop: CGFloat? = typing && keyboardInset > 0 ? keyboardWindowTop : nil
             OuterCanvasHost(controller: model.pictureController, grid: model.shownGrid ?? grid, generation: model.gridGeneration,
                             parts: parts, fullWidth: model.fullCanvasWidth, home: home, touchable: touchable,
@@ -201,7 +223,8 @@ struct OuterSessionView: View {
                         let display = CGSize(width: proxy.size.width + insets.leading + insets.trailing,
                                              height: proxy.size.height + insets.top + insets.bottom)
                         let place = OuterStripLayout.place(display: display, stripOnRight: stripOnRight,
-                                                           keyboardTop: keyboardTop)
+                                                           keyboardTop: keyboardTop, systemEnd: stripRun.systemEnd,
+                                                           bottomRegionTop: stripRun.bottomRegionTop)
                         OuterStrip(mode: mode, typing: typing, choose: { m in
                             // Choosing vertical (even when already chosen) returns to the opening place: the
                             // password spot with the keyboard up; choosing free keeps the picture where it is.
@@ -210,11 +233,22 @@ struct OuterSessionView: View {
                         }, toggleKeyboard: { typing.toggle() }, showMacs: { typing = false; showMacs = true },
                         arrangement: place.arrangement)
                         .fixedSize()
-                        // `OuterStripLayout`: below the system capsule's largest form, on its centre line, never
-                        // under the keyboard. The overlay's origin is the safe area's top-left.
+                        // Watches for a finger on the controls without taking it: a simultaneous gesture, so the
+                        // buttons still get every tap; the state resets itself when the touch ends or is cancelled.
+                        .simultaneousGesture(DragGesture(minimumDistance: 0).updating($stripTouched) { _, s, _ in
+                            s = true
+                        })
+                        // `OuterStripLayout`: 16 pt below where the system area ends (measured), on its centre
+                        // line, never under the keyboard. The overlay's origin is the safe area's top-left.
                         .offset(x: place.frame.minX - insets.leading, y: place.frame.minY - insets.top)
                     }
                 }
+                // The strip's free run from the regions in its column (the system area at the top, the camera
+                // wherever it is): the controls follow it.
+                .onChange(of: OuterStripLayout.run(regions: occlusion, display: CGSize(
+                    width: proxy.size.width + insets.leading + insets.trailing,
+                    height: proxy.size.height + insets.top + insets.bottom), stripOnRight: stripOnRight),
+                          initial: true) { _, new in takeStripRun(new) }
                 // The one hidden input for the iPhone's keyboard: the upright view's field (same traits, typing
                 // goes straight to the Mac, nothing kept). No Mac keys row: the outer screen is 466 pt wide.
                 .background {
@@ -223,6 +257,19 @@ struct OuterSessionView: View {
                 }
         }
         .ignoresSafeArea(.keyboard)
+        // Where the system area ends: Apple's occlusion region (iOS 27.1), read from a reader that spans the whole
+        // display (one that stops at the safe area does not overlap the strip and gets an empty list). The read
+        // redraws this reader when the region changes (a Live Activity starting or ending), so nothing polls.
+        .background {
+            GeometryReader { full in
+                let frames = Self.occlusionFrames(full)
+                Color.clear.onChange(of: frames, initial: true) { _, new in occlusion = new }
+            }
+            .ignoresSafeArea()
+        }
+        .onChange(of: stripTouched) { _, touched in
+            if !touched, let run = pendingStripRun { pendingStripRun = nil; stripRun = run }
+        }
         .background {
             KeyboardGuideReader(onChange: { keyboardInset = $0 }, onWindowTop: { keyboardWindowTop = $0 })
                 .ignoresSafeArea()
@@ -337,16 +384,15 @@ struct OuterStrip: View {
     }
 }
 
-/// Where the outer screen's controls go (project notes, defects 1 and 2). In display points.
+/// Where the outer screen's controls go. In display points.
 ///
-/// Defect 1 (the owner: "When you rotate the external view and then rotate it back, the buttons on the right are
-/// misaligned"): build 31 put the groups at a fixed y (183) measured from one screenshot, where the system's
-/// indicator capsule ended at 166.7. In the owner's later screenshot the capsule is taller (the microphone-in-use island
-/// above the time) and ends at about 189.3 (a real-phone screenshot, 568 px
-/// at 3x); the centre line is unchanged (418.7). iOS exposes no frame for that capsule on this screen: the safe
-/// area gives only the strip's width, `UIStatusBarManager.statusBarFrame` is the top bar (deprecated for layout,
-/// not this side strip), and no layout guide covers it. So the room for its largest seen form is reserved:
-/// `reservedSystemBottom` 190 pt, then the 16 pt gap: the groups start at 206.
+/// Defect 1: build 31 put the groups at a fixed y (183) measured from one screenshot, where the system's indicator
+/// capsule ended at 166.7. In the owner's later screenshot the capsule is taller (the microphone-in-use island above
+/// the time) and ends at about 189.3 (a real-phone screenshot, 568 px at 3x); the centre line is unchanged (418.7). iOS
+/// exposes no frame for that capsule on this screen: the safe area gives only the strip's width,
+/// `UIStatusBarManager.statusBarFrame` is the top bar (deprecated for layout, not this side strip), and no layout guide
+/// covers it. So the room for its largest seen form is reserved: `reservedSystemBottom` 190 pt, then the 16 pt gap: the
+/// groups start at 206.
 ///
 /// Defect 2 (sideways, keyboard up: "it covers the keyboard button"): every arrangement is chosen for the space
 /// actually above the keyboard; no control ever goes under it.
@@ -356,10 +402,29 @@ struct OuterStrip: View {
 /// - Sideways: keyboard down: the same column as upright (206 + 218 = 424 of 466). Keyboard up: one row of the two
 ///   groups (218 x 53) along the top edge, 8 pt in, on the strip's side: the space above the keyboard is too short
 ///   for a column, and the middle of the picture (the password field) stays clear.
+///
+/// `systemEnd` is where the system area really ends, from Apple's occlusion region
+/// (`systemEnd(regions:display:stripOnRight:)`), followed both ways (174 with nothing running on the simulator, 264
+/// with a Live Activity). 190 is used only when there is no reading (before iOS 27.1, or no region). The groups start
+/// `OuterStrip.gap` below it, and every arrangement stays clear of the system area (the strip's column from the top
+/// down to `systemEnd`).
+///
+/// Turned with the camera at the bottom-right, the camera is a region low in the strip's column, and the controls ran
+/// into it. Every region in the column now counts: those in its top half end the system area (`systemEnd`), those in
+/// its bottom half end the run (`bottomRegionTop`), 16 pt above the highest of them. The ladder works in what is left;
+/// nothing goes under either.
 enum OuterStripLayout {
+    /// The strip's free run, display points: `systemEnd` (the top regions' end, 190 without a reading) down to
+    /// `bottomRegionTop` (the top of the highest region in the column's bottom half; nil when there is none).
+    struct Run: Equatable {
+        var systemEnd: CGFloat = OuterStripLayout.reservedSystemBottom
+        var bottomRegionTop: CGFloat?
+    }
+
     enum Arrangement: Equatable { case twoGroups, oneGroup, row }
 
     static let reservedSystemBottom: CGFloat = 190
+    /// The first group's top with the system area at its floor (206).
     static let top: CGFloat = reservedSystemBottom + OuterStrip.gap
     static let margin: CGFloat = 8
     static let groupLong: CGFloat = 2 * OuterStrip.button + 4 + 2 * OuterStrip.padding // 101
@@ -372,25 +437,87 @@ enum OuterStripLayout {
         let frame: CGRect
     }
 
-    static func place(display: CGSize, stripOnRight: Bool, keyboardTop: CGFloat?) -> Placement {
+    /// The system area as a rectangle in display points: the strip's column (as wide as the strip's controls, on
+    /// the capsule's centre line, `margin` either side) from the top down to `systemEnd`.
+    static func systemArea(display: CGSize, stripOnRight: Bool, systemEnd: CGFloat) -> CGRect {
+        let centreX = stripOnRight ? display.width - OuterStrip.edgeToCentre : OuterStrip.edgeToCentre
+        let half = OuterStrip.width / 2 + margin
+        return CGRect(x: centreX - half, y: 0, width: 2 * half, height: max(0, systemEnd))
+    }
+
+    /// The system area's end from the occlusion regions (display points): the lowest bottom among the regions in
+    /// the strip's column (the strip's side of the display, `edgeToCentre` x 2 wide). A region elsewhere is
+    /// ignored. 190 when none is there or the reading is nonsense (not above 0, or more than 3/4 down the display).
+    static func systemEnd(regions: [CGRect], display: CGSize, stripOnRight: Bool) -> CGFloat {
+        let column = column(display: display, stripOnRight: stripOnRight)
+        let ends = regions.filter { $0.intersects(column) && $0.minY < display.height / 2 }.map(\.maxY)
+        guard let end = ends.max(), end.isFinite, end > 0, end <= display.height * 0.75 else { return reservedSystemBottom }
+        return end
+    }
+
+    /// The strip's side of the display, `edgeToCentre` x 2 wide, full height: where the regions that count are.
+    static func column(display: CGSize, stripOnRight: Bool) -> CGRect {
+        let w = OuterStrip.edgeToCentre * 2
+        return CGRect(x: stripOnRight ? display.width - w : 0, y: 0, width: w, height: display.height)
+    }
+
+    /// The top of the highest region in the bottom half of the strip's column (the camera when turned with it at
+    /// the bottom); nil when there is none or the reading is nonsense.
+    static func bottomRegionTop(regions: [CGRect], display: CGSize, stripOnRight: Bool) -> CGFloat? {
+        let column = column(display: display, stripOnRight: stripOnRight)
+        let tops = regions.filter { $0.intersects(column) && $0.minY >= display.height / 2 }.map(\.minY)
+        guard let top = tops.min(), top.isFinite, top < display.height else { return nil }
+        return top
+    }
+
+    /// The strip's free run from the occlusion regions (display points).
+    static func run(regions: [CGRect], display: CGSize, stripOnRight: Bool) -> Run {
+        Run(systemEnd: systemEnd(regions: regions, display: display, stripOnRight: stripOnRight),
+            bottomRegionTop: bottomRegionTop(regions: regions, display: display, stripOnRight: stripOnRight))
+    }
+
+    /// The region low in the strip's column as a rectangle: the column's width (as `systemArea`) from
+    /// `bottomRegionTop` to the display's bottom.
+    static func bottomArea(display: CGSize, stripOnRight: Bool, bottomRegionTop: CGFloat) -> CGRect {
+        let top = systemArea(display: display, stripOnRight: stripOnRight, systemEnd: 0)
+        return CGRect(x: top.minX, y: bottomRegionTop, width: top.width, height: max(0, display.height - bottomRegionTop))
+    }
+
+    /// `systemEnd`: where the system area ends (`systemEnd(regions:display:stripOnRight:)`); 190 when not given.
+    /// `bottomRegionTop`: where a region low in the strip's column starts (`bottomRegionTop(regions:…)`); the
+    /// controls stay 16 pt above it.
+    static func place(display: CGSize, stripOnRight: Bool, keyboardTop: CGFloat?,
+                      systemEnd: CGFloat = reservedSystemBottom, bottomRegionTop: CGFloat? = nil) -> Placement {
         let w = OuterStrip.width
         let centreX = stripOnRight ? display.width - OuterStrip.edgeToCentre : OuterStrip.edgeToCentre
         let limit = (keyboardTop.map { min($0, display.height) } ?? display.height) - margin
+        // The column's own bottom: 16 pt above a region low in it, never below the keyboard's limit.
+        let columnLimit = bottomRegionTop.map { min(limit, $0 - OuterStrip.gap) } ?? limit
         let sideways = display.width > display.height
+        let end = max(0, systemEnd)
+        let top = end + OuterStrip.gap
+        let blocked = [systemArea(display: display, stripOnRight: stripOnRight, systemEnd: end)]
+            + (bottomRegionTop.map { [bottomArea(display: display, stripOnRight: stripOnRight, bottomRegionTop: $0)] } ?? [])
+        // A row on the strip's side, or, when that would meet a region there, on the other side (the regions are
+        // only in the strip's column). Never under a region.
         func row(y: CGFloat) -> Placement {
-            let x = stripOnRight ? display.width - margin - twoGroupsLong : margin
-            return Placement(arrangement: .row, frame: CGRect(x: x, y: y, width: twoGroupsLong, height: w))
+            let near = stripOnRight ? display.width - margin - twoGroupsLong : margin
+            let far = stripOnRight ? margin : display.width - margin - twoGroupsLong
+            let frame = CGRect(x: near, y: y, width: twoGroupsLong, height: w)
+            if !blocked.contains(where: frame.intersects) { return Placement(arrangement: .row, frame: frame) }
+            return Placement(arrangement: .row, frame: CGRect(x: far, y: y, width: twoGroupsLong, height: w))
         }
         if sideways, keyboardTop != nil { return row(y: margin) }
-        if top + twoGroupsLong <= limit {
+        if top + twoGroupsLong <= columnLimit {
             return Placement(arrangement: .twoGroups,
                              frame: CGRect(x: centreX - w / 2, y: top, width: w, height: twoGroupsLong))
         }
-        if top + oneGroupLong <= limit {
+        if top + oneGroupLong <= columnLimit {
             return Placement(arrangement: .oneGroup,
                              frame: CGRect(x: centreX - w / 2, y: top, width: w, height: oneGroupLong))
         }
-        return row(y: max(margin, limit - w))
+        // The row lies across the column too: it keeps clear of a region low in it as well as of the keyboard.
+        return row(y: max(margin, columnLimit - w))
     }
 }
 
@@ -438,10 +565,10 @@ struct OuterModeSelector: View {
     }
 }
 
-/// The Mac list on the outer screen (the owner: "We also need to have the Mac selection screen on this view"): each Mac's
-/// name and state line as on the main list, a tap connects, the current Mac marked, Disconnect. No add, edit or
-/// settings here (they stay on the open screen). A Mac that needs a password sign-in says to open the iPhone: the
-/// sign-in sheet's two fields and the keyboard do not fit this 466 x 678 pt screen together.
+/// The Mac list on the outer screen: each Mac's name and state line as on the main list, a tap connects, the current
+/// Mac marked, Disconnect. No add, edit or settings here (they stay on the open screen). A Mac that needs a password
+/// sign-in says to open the iPhone: the sign-in sheet's two fields and the keyboard do not fit this 466 x 678 pt screen
+/// together.
 struct OuterMacList: View {
     @Bindable var model: SessionModel
     let list: MacList
@@ -577,9 +704,9 @@ enum LastMac {
         guard let id = d.string(forKey: key) else { return nil }
         return macs.first { $0.id == id }
     }
-    /// The Mac an outer-screen cold open connects to: none while the session already holds a Mac (live, rejoining,
-    /// or keeping the last picture), so the cold open never replaces the Mac the inner screen was on. With more than
-    /// one Mac it does not guess: the outer screen shows the Mac list (project notes item 3).
+    /// The Mac an outer-screen cold open connects to: none while the session already holds a Mac (live, rejoining, or
+    /// keeping the last picture), so the cold open never replaces the Mac the inner screen was on. With more than one
+    /// Mac it does not guess: the outer screen shows the Mac list.
     static func coldTarget(sessionMac: MacEntry?, idle: Bool, macs: [MacEntry],
                            d: UserDefaults = .standard) -> MacEntry? {
         guard sessionMac == nil, idle, macs.count == 1 else { return nil }

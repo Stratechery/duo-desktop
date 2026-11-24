@@ -9,9 +9,8 @@ enum TypingAim: Equatable {
     case field(y: CGFloat)
 }
 
-/// The horizontal view's keyboard rules (project notes, part 2). The owner: "when you click on an
-/// editable area where you need the keyboard, we will have a keyboard slide up ... the view should center on the
-/// editable area". The Mac's Host says where typing goes (TEXT_FOCUS) and whether it is locked (SCREEN_LOCK).
+/// The horizontal view's keyboard rules. The Mac's Host says where typing goes (TEXT_FOCUS) and whether it is locked
+/// (SCREEN_LOCK).
 ///
 /// - A text place reported within `clickWindow` of the user's click raises the keyboard and aims at it.
 /// - Focus leaving text puts the keyboard down, unless it was raised by hand (or the Mac is locked).
@@ -96,8 +95,7 @@ struct AutoKeyboard: Equatable {
 }
 
 enum TypingFocusMap {
-    /// Lock screen password field, as a fraction of the Mac screen (`OuterWindow.passwordField`, measured from
-    /// The owner's screenshot: build 31).
+    /// Lock screen password field, as a fraction of the Mac screen.
     static var passwordField: CGPoint { OuterWindow.passwordField }
 
     /// The picture height (pixels) where typing goes for a TEXT_FOCUS, or nil when it is not a text place or lies
@@ -108,9 +106,8 @@ enum TypingFocusMap {
         if f.caretH > 0 {
             globalY = CGFloat(f.caretY) + CGFloat(f.caretH) / 2
         } else if f.fieldH > 0 {
-            // A tall text area with no caret: aim near its BOTTOM line (the owner 2026-11-21: "Shouldn't terminal aim for
-            // the bottom, since that is usually where you will type the next command?"). A Host with the end-of-text
-            // fallback sends Terminal's prompt as the caret instead, so this is only the last resort.
+            // A tall text area with no caret: aim near its BOTTOM line. A Host with the end-of-text fallback sends
+            // Terminal's prompt as the caret instead, so this is only the last resort.
             globalY = f.fieldH <= 120 ? CGFloat(f.fieldY) + CGFloat(f.fieldH) / 2
                 : CGFloat(f.fieldY) + CGFloat(f.fieldH) - 30
         } else {
@@ -121,8 +118,8 @@ enum TypingFocusMap {
         return local / screen.height * CGFloat(pictureHeight)
     }
 
-    /// The shown screen's frame in global points, or (no screen list) the main screen at 1920 wide (the owner's rule:
-    /// his Macs are 1920 wide) with the picture's shape.
+    /// The shown screen's frame in global points, or (no screen list) the main screen at 1920 wide with the picture's
+    /// shape.
     static func screenFrame(shown: CGRect?, pictureWidth: Int, pictureHeight: Int) -> CGRect {
         if let shown, shown.height > 0 { return shown }
         guard pictureWidth > 0 else { return CGRect(x: 0, y: 0, width: 1920, height: 1080) }

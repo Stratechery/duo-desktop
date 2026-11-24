@@ -2,7 +2,7 @@ import GlassActCore
 import XCTest
 @testable import DuoDesktop
 
-/// M4 (project notes): one test per claim.
+/// M4: one test per claim.
 final class MultiScreenTests: XCTestCase {
     /// The test host's four fake screens (glassact-testhost --displays), in global points.
     private let four = [

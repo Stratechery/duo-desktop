@@ -1,9 +1,7 @@
 import XCTest
 
-/// The owner 2026-11-21, a rule: "There absolutely should not be any hard coding of [a Mac], even to start the list. This
-/// app needs to be usable by someone else on their Macs." Fails if any of your own Mac names, tailnet, account
-/// names or a home/Tailscale address appears in the app's sources (code, help text, comments), its tests or the
-/// project file.
+///  Fails if any of your own Mac names, tailnet, account names or a home/Tailscale address appears in the app's sources
+/// (code, help text, comments), its tests or the project file.
 final class NoBuiltInMacsTests: XCTestCase {
     /// Your own Mac names, user names and tailnet name, one per line, in `app/private-names.local.txt`. That file is
     /// ignored by git, so the names never enter the repository; without it only the address check runs.
@@ -26,7 +24,7 @@ final class NoBuiltInMacsTests: XCTestCase {
         let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         var checked = 0
         var hits: [String] = []
-        // The terminal's SSH engine and the JetKVM client are part of the app too (the joined build, 2026-11-21).
+        // The terminal's SSH engine and the JetKVM client are part of the app too.
         for folder in ["DuoDesktop", "DuoDesktopTests", "DuoDesktopUITests", "scripts", "Notices", "DuoTerminalKit",
                        "../jetkvm-client"] {
             let root = app.appendingPathComponent(folder)

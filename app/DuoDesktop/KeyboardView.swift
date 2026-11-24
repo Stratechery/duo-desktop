@@ -34,11 +34,13 @@ final class KeyboardState {
         _ = revision
         return engine.switcherOpen
     }
+
+    /// A Remote Desktop PC: the keys show and send Windows' meanings.
+    var windows: Bool { engine.target == .windows }
 }
 
-/// Key sizes: one grid of equal keys (the owner 2026-11-20, of the horizontal Mac keys row: "look modern and
-/// correct"). Every key is `keyWidth` x `keyHeight` with `gap` between keys both ways; keys keep their size and
-/// never shrink to fit more in (the "more" key swaps a block instead).
+/// Key sizes: one grid of equal keys. Every key is `keyWidth` x `keyHeight` with `gap` between keys both ways; keys
+/// keep their size and never shrink to fit more in (the "more" key swaps a block instead).
 struct KeyMetrics: Equatable {
     /// Between keys, both ways: the horizontal row's spacing.
     static let gap: CGFloat = 6
@@ -127,7 +129,8 @@ struct SpecialKeysView: View {
         HStack(alignment: .top, spacing: KeyMetrics.gap) {
             if side == .right { buttons }
             VStack(alignment: .leading, spacing: metrics.rowGap) {
-                ForEach(Array(SpecialKeysLayout.rows(functionKeys: state.functionKeys).enumerated()),
+                ForEach(Array(SpecialKeysLayout.rows(functionKeys: state.functionKeys,
+                                                     windows: state.windows).enumerated()),
                         id: \.offset) { _, row in
                     HStack(spacing: KeyMetrics.gap) {
                         ForEach(row) { cell in
@@ -160,16 +163,15 @@ struct ClickColumn: View {
     }
 }
 
-/// The click column in the 16:10 band: Scroll (outer edge) and Right click side by side in the top row, then Left
-/// click 2 rows tall under them, each one key wide (mock-up `screenshots/view-16x10-v2-normal-2026-11-21.png`).
+/// The click column in the 16:10 band: Scroll (outer edge) and Right click side by side in the top row, then Left click
+/// 2 rows tall under them, each one key wide.
 struct ShortClickColumn: View {
     let pad: TrackpadEngine
     let metrics: KeyMetrics
     let side: TrackpadSide
 
     var body: some View {
-        // Right click and Scroll on top, the two-row Left click under them (the owner 2026-11-21, build 27: the click
-        // column matches the horizontal view's order, Left click at the bottom).
+        // Right click and Scroll on top, the two-row Left click under them.
         VStack(spacing: metrics.rowGap) {
             HStack(spacing: KeyMetrics.gap) {
                 ForEach(ClickButtonsLayout.sixteenTenThirdRow(side: side), id: \.self) { b in
@@ -183,12 +185,11 @@ struct ShortClickColumn: View {
     }
 }
 
-/// A band button. Left and Right click: the Mac's mouse button down while the finger is down, up when it lifts,
-/// at the pointer, so holding Left click while the other hand moves on the trackpad drags. Scroll: while it is
-/// held, one finger on the trackpad scrolls the Mac instead of moving the pointer; alone it does nothing. Same
-/// flat key look. Each shows a symbol: Right click and Scroll since build 6; Left click `cursorarrow.click` since
-/// build 33 (the owner 2026-11-21, on the candidates picture: "I think the cursor with the broken circle is okay.");
-/// VoiceOver names each and the Keys sheet lists them.
+/// A band button. Left and Right click: the Mac's mouse button down while the finger is down, up when it lifts, at the
+/// pointer, so holding Left click while the other hand moves on the trackpad drags. Scroll: while it is held, one
+/// finger on the trackpad scrolls the Mac instead of moving the pointer; alone it does nothing. Same flat key look.
+/// Each shows a symbol: Right click and Scroll since build 6; Left click `cursorarrow.click` since build 33; VoiceOver
+/// names each and the Keys sheet lists them.
 struct ClickButton: View {
     let pad: TrackpadEngine
     let button: BandButton
@@ -273,12 +274,10 @@ struct ClickButton: View {
     }
 }
 
-/// The keys' look, one recipe for both layouts: the iOS 27 system keyboard's own (the owner 2026-11-20, from his first
-/// session on the real Duo: "Can we make our extra keyboard have the same flat gray look as the built in
-/// keyboard? I think you did the iOS 26 look not the ios27 look"). Flat filled rounded rectangles, no glass, rim,
-/// outline or shadow, on a flat panel the colour of the keyboard's. iOS offers apps no keyboard key colour or
-/// material (HIG Virtual keyboards names none; `UIInputView.Style.keyboard` draws only the panel), so the values
-/// are sampled: the owner's real-Duo screenshot (dark) and the iOS 27.2 iPhone Duo simulator's keyboard (dark and light)
+/// The keys' look, one recipe for both layouts: the iOS 27 system keyboard's own. Flat filled rounded rectangles, no
+/// glass, rim, outline or shadow, on a flat panel the colour of the keyboard's. iOS offers apps no keyboard key colour
+/// or material (HIG Virtual keyboards names none; `UIInputView.Style.keyboard` draws only the panel), so the values are
+/// sampled: the owner's real-Duo screenshot (dark) and the iOS 27.2 iPhone Duo simulator's keyboard (dark and light)
 /// agree to within one level. The system draws every key, shift, 123 and return included, in ONE shade.
 /// - key:    light #FFFFFF, dark #444444 (sampled);
 /// - panel:  light #E2E3E8, dark #202020 (sampled);
@@ -353,10 +352,9 @@ struct KeyFace: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clearSurface(shape, pressed: pressed)
         } else if glass {
-            // The column while our keyboard is up. Drawn by us in the keys' own fill, not the system's Liquid Glass
-            // (the owner 2026-11-21: the Keyboard, Right click and Scroll buttons "sort of fade out ... non-highlighted.
-            // And after about like 5 seconds, it comes back", seen only on the phone). Glass is drawn by the system
-            // and changes with what is behind it and with the window's state; a plain fill cannot fade.
+            // The column while our keyboard is up. Drawn by us in the keys' own fill, not the system's Liquid Glass.
+            // Glass is drawn by the system and changes with what is behind it and with the window's state; a plain fill
+            // cannot fade.
             glyph
                 .foregroundStyle(Color.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -427,12 +425,65 @@ struct KeyCell: View {
         case .gap: Color.clear
         case let .shortcut(sc) where sc == .paste:
             PasteKey(dimmed: state.switcherOpen) { text in state.pasteToMac(text) }.disabled(state.switcherOpen)
+        case let .shortcut(sc) where state.windows && sc.id == MacShortcut.ctrlAltDelID:
+            CtrlAltDelKey(dimmed: state.switcherOpen) { state.engine.sendCtrlAltDel($0) }.disabled(state.switcherOpen)
         case let .shortcut(sc):
             // While the app switcher is open, Apps shows held and the other shortcuts are off (Quit would quit the
-            // highlighted app).
-            ShortcutKey(shortcut: sc, lit: sc == .switchApp && state.switcherOpen,
+            // highlighted app). On a PC each key shows its Windows shortcut (Search, not Spotlight).
+            let shown = sc.for(state.engine.target)
+            ShortcutKey(shortcut: shown, lit: sc == .switchApp && state.switcherOpen,
                         disabled: sc != .switchApp && state.switcherOpen) { state.engine.sendShortcut(sc) }
         }
+    }
+}
+
+/// Ctrl Alt Del on a PC, in the power key's place: Windows' security screen (lock, switch user, sign out, Task
+/// Manager), drawn in the accent colour as the plan's drawing (`H-windows-keys-compared.png`). A tap sends the
+/// remembered form (`CtrlAltDelForm.remembered`, Ctrl Alt Delete at first). Touch and hold offers both forms; the
+/// one picked is sent and remembered, so if Windows ignores the first form the other is one hold away.
+struct CtrlAltDelKey: View {
+    var dimmed = false
+    let send: (CtrlAltDelForm) -> Void
+
+    var body: some View {
+        Button {
+            KeyFeedback.keyDown()
+            send(CtrlAltDelForm.remembered)
+        } label: {
+            EmptyView()
+        }
+        .buttonStyle(TwoLineStyle(dimmed: dimmed))
+        .contextMenu {
+            ForEach(CtrlAltDelForm.allCases, id: \.self) { form in
+                Button {
+                    CtrlAltDelForm.remembered = form
+                    send(form)
+                } label: {
+                    if form == CtrlAltDelForm.remembered { Label(form.title, systemImage: "checkmark") } else { Text(form.title) }
+                }
+            }
+        }
+        .accessibilityLabel("Control Alt Delete")
+        .accessibilityHint("Windows' security screen: lock, switch user, sign out, Task Manager. Touch and hold to choose how it is sent.")
+        .accessibilityIdentifier("ctrlAltDel")
+    }
+}
+
+/// "Ctrl Alt / Del" on two lines, white on the accent, as the drawing; pressed shows a little darker.
+private struct TwoLineStyle: ButtonStyle {
+    var dimmed = false
+    func makeBody(configuration: Configuration) -> some View {
+        Text("Ctrl Alt\nDel")
+            .font(.system(size: KeyLook.wordSize - 2))
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, 2)
+            .foregroundStyle(Color.white)
+            .opacity(dimmed ? 0.3 : 1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(KeyLook.shape.fill(Color.accentColor).opacity(configuration.isPressed ? 0.7 : 1))
+            .contentShape(KeyLook.shape)
     }
 }
 
@@ -557,14 +608,14 @@ struct KeyCap: View {
     /// while the Apps key holds the app switcher open, or the "more" key while its block shows.
     static func isLit(_ key: MacKey, state: KeyboardState) -> Bool {
         if case let .modifier(m) = key.role {
-            return state.latch(m) != .off || (m == .command && state.switcherOpen)
+            return state.latch(m) != .off || (m == state.engine.switcherModifier && state.switcherOpen)
         }
         return key.role == .functionBlock && state.functionKeys
     }
 
     var body: some View {
         let lit = Self.isLit(key, state: state)
-        KeyFace(content: Self.face(key), lit: lit, pressed: pressed && onKey)
+        KeyFace(content: Self.face(key, windows: state.windows), lit: lit, pressed: pressed && onKey)
             .background(GeometryReader { g in Color.clear.preference(key: KeySizeKey.self, value: g.size) })
             .onPreferenceChange(KeySizeKey.self) { size = $0 }
             .gesture(DragGesture(minimumDistance: 0)
@@ -575,7 +626,7 @@ struct KeyCap: View {
                 }
                 .onEnded { _ in up() })
             .accessibilityElement()
-            .accessibilityLabel(Self.accessibilityName(key, more: state.functionKeys))
+            .accessibilityLabel(Self.accessibilityName(key, more: state.functionKeys, windows: state.windows))
             .accessibilityHint(KeyInfo.description(.key(key), more: state.functionKeys))
             .accessibilityAddTraits(.isKeyboardKey)
             .accessibilityAddTraits(lit ? .isSelected : [])
@@ -584,8 +635,17 @@ struct KeyCap: View {
 
     /// The Mac glyph as text, or the SF Symbol that draws the same glyph where the system font draws it small
     /// (⇥) or the key has no glyph character ("more").
-    static func face(_ key: MacKey) -> KeyFaceContent {
+    static func face(_ key: MacKey, windows: Bool = false) -> KeyFaceContent {
         if key.role == .functionBlock { return .symbol("ellipsis") }
+        // On a PC: ⌃ ⌥ ⌘ are Ctrl, Alt and the Windows key (plan §2 "Keys").
+        if windows, case let .modifier(m) = key.role {
+            switch m {
+            case .control: return .text("Ctrl")
+            case .option: return .text("Alt")
+            case .command: return .symbol("squareshape.split.2x2")
+            default: break
+            }
+        }
         switch key.label {
         case "⇥": return .symbol("arrow.right.to.line")
         default: return .text(key.label)
@@ -593,8 +653,13 @@ struct KeyCap: View {
     }
 
     /// Spoken names for the glyph keys.
-    static func accessibilityName(_ key: MacKey, more: Bool) -> String {
-        switch key.id {
+    static func accessibilityName(_ key: MacKey, more: Bool, windows: Bool = false) -> String {
+        if windows, case let .modifier(m) = key.role {
+            if m == .option { return "Alt" }
+            if m == .command { return "Windows" }
+        }
+        return switch key.id {
+        case "printscreen": "Print Screen"
         case "shift", "shift-right": "Shift"
         case "control", "control-2": "Control"
         case "option", "option-2", "option-right": "Option"

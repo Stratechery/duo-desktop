@@ -1,10 +1,7 @@
 import SwiftUI
 import UIKit
 
-// Our keys' feedback, matched to the iPhone's system keyboard (the owner 2026-11-21, on the real phone: "Our keyboard
-// doesn't give the same feedback when keys are pressed as the system keyboard. Can we mimic that?"; of the haptic:
-// "It's ok, I don't use haptic keyboard" / "We should probably put it in with the best effort for people who do,
-// though.").
+// Our keys' feedback, matched to the iPhone's system keyboard.
 //
 // SOUND. `UIDevice.playInputClick()` is the system keyboard's own click: Apple, playInputClick(): "A click plays only
 // if the user has enabled keyboard clicks in Settings > Sounds, and only if the input view is itself enabled and

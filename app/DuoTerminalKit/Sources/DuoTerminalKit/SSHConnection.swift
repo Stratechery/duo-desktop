@@ -8,8 +8,8 @@ import NIOSSH
 public enum SSHSignIn: Sendable {
     case key(PhoneKey)
     case password(String)
-    /// Tailscale SSH (project notes, terminal-only computers, §2): the computer's Tailscale already knows who this phone is
-    /// over WireGuard, so the sign-in offers SSH's `none` method and carries no key and no password.
+    /// Tailscale SSH: the computer's Tailscale already knows who this phone is over WireGuard, so the sign-in offers
+    /// SSH's `none` method and carries no key and no password.
     case tailscale
 }
 
@@ -42,8 +42,8 @@ public struct SSHSignInTimedOut: Error, CustomStringConvertible, Sendable {
     public var description: String { "The sign-in did not finish in time." }
 }
 
-/// Tailscale SSH refuses a user it does not allow with a banner and then holds the connection open (measured
-/// 2026-11-22: still open after 90 s). That banner is read as a refusal.
+/// Tailscale SSH refuses a user it does not allow with a banner and then holds the connection open. That banner is read
+/// as a refusal.
 public enum TailscaleBanner {
     public static func isRefusal(_ banner: String) -> Bool {
         let b = banner.lowercased()
@@ -137,6 +137,9 @@ public final class SSHConnection: @unchecked Sendable {
     let channel: Channel
     let handler: NIOSSHHandler
 
+    /// The server's identification line (`SSHServerLine`), e.g. `SSH-2.0-OpenSSH_for_Windows_9.5`.
+    public internal(set) var serverLine: String?
+
     init(channel: Channel, handler: NIOSSHHandler) { self.channel = channel; self.handler = handler }
 
     /// Connects and signs in. The host key is checked against `hostKeys` before anything else happens: a changed
@@ -146,13 +149,15 @@ public final class SSHConnection: @unchecked Sendable {
                                timeout: TimeAmount = .seconds(10),
                                attempt: SSHConnectAttempt? = nil,
                                onBanner: (@Sendable (String) -> Void)? = nil,
-                               signInTimeout: TimeAmount = .seconds(30)) async throws -> SSHConnection {
+                               signInTimeout: TimeAmount = .seconds(30),
+                               onServerLine: (@Sendable (String) -> Void)? = nil) async throws -> SSHConnection {
         let refuses: (@Sendable (String) -> Bool)? = {
             if case .tailscale = signIn { return TailscaleBanner.isRefusal } else { return nil }
         }()
         let validator = TOFUHostKeyValidator(store: hostKeys, id: hostKeyID)
         let auth = SignInDelegate(user: user, signIn: signIn)
         let ready = group.next().makePromise(of: Void.self)
+        let line = ServerLineBox()
         let channel: Channel
         do {
             channel = try await ClientBootstrap(group: group)
@@ -162,6 +167,8 @@ public final class SSHConnection: @unchecked Sendable {
                 ch.eventLoop.makeCompletedFuture {
                     let ssh = NIOSSHHandler(role: .client(.init(userAuthDelegate: auth, serverAuthDelegate: validator)),
                                             allocator: ch.allocator, inboundChildChannelInitializer: nil)
+                    // The server's first line, seen before the sign-in (a Windows PC names itself there).
+                    try ch.pipeline.syncOperations.addHandler(ServerLineReader { l in line.value = l; onServerLine?(l) })
                     try ch.pipeline.syncOperations.addHandler(ssh)
                     try ch.pipeline.syncOperations.addHandler(ReadyWatcher(ready: ready, onBanner: onBanner, refuses: refuses,
                                                                               deadline: signInTimeout))
@@ -185,7 +192,9 @@ public final class SSHConnection: @unchecked Sendable {
         }
         if attempt?.isCancelled == true { channel.close(promise: nil); throw CancellationError() }
         let handler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
-        return SSHConnection(channel: channel, handler: handler)
+        let c = SSHConnection(channel: channel, handler: handler)
+        c.serverLine = line.value
+        return c
     }
 
     /// Runs one command (no PTY) and returns its output and exit status.
@@ -252,6 +261,12 @@ public final class SSHConnectAttempt: @unchecked Sendable {
         let closeNow = lock.withLock { () -> Bool in channel = ch; return cancelled }
         if closeNow { ch.close(promise: nil) }
     }
+}
+
+final class ServerLineBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: String?
+    var value: String? { get { lock.withLock { _value } } set { lock.withLock { _value = newValue } } }
 }
 
 final class OutputBox: @unchecked Sendable {

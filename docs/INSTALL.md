@@ -3,6 +3,11 @@
 This is the full guide: what you need, installing the Host on each Mac, building the iPhone app, the first
 connection and each Mac's settings. Back to the [README](../README.md).
 
+This guide covers Macs. For a Windows PC see the README's [Remote Desktop](../README.md#remote-desktop-a-windows-pc)
+and [Terminal](../README.md#terminal-mac-linux-pc); for Linux, [Terminal](../README.md#terminal-mac-linux-pc); for
+any computer through a JetKVM box, [JetKVM](../README.md#jetkvm-any-computer). The build switches for each are under
+[Building](../README.md#building).
+
 A note on the commands below: each one was run while writing this guide, from a fresh copy of this repository,
 unless it says **(not run here)** with the reason.
 

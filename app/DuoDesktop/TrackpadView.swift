@@ -160,8 +160,7 @@ final class TrackpadUIView: UIView {
 struct TrackpadView: UIViewRepresentable {
     let engine: TrackpadEngine
 
-    /// The trackpad's surface: one large flat key, the keys' fill and corner (KeyLook; the owner 2026-11-20: the system
-    /// keyboard's flat grey look), like the system keyboard's space bar.
+    /// The trackpad's surface: one large flat key, the keys' fill and corner, like the system keyboard's space bar.
     static let cornerRadius: CGFloat = KeyLook.cornerRadius
 
     func makeUIView(context: Context) -> TrackpadUIView {

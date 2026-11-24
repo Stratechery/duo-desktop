@@ -1,9 +1,9 @@
 import Foundation
 
-/// Project notes 5 (the owner: "doing a hand crafted fix isn't very sustainable..."): on a computer with
-/// ordinary SSH, sign in ONCE with the account's password, add this iPhone's key to `~/.ssh/authorized_keys` with the
-/// same idempotent command the Host path uses (`AuthorizedKeys.installCommand`), sign out. From then on the app signs
-/// in with the key. The password is passed straight to the one sign-in and is never stored or logged here.
+/// Project notes 5: on a computer with ordinary SSH, sign in ONCE with the account's password, add this iPhone's key to
+/// `~/.ssh/authorized_keys` with the same idempotent command the Host path uses (`AuthorizedKeys.installCommand`), sign
+/// out. From then on the app signs in with the key. The password is passed straight to the one sign-in and is never
+/// stored or logged here.
 public enum KeyInstallByPassword {
     public enum Outcome: Equatable, Sendable {
         /// The key was added (or was already there).

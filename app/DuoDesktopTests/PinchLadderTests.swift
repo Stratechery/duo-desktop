@@ -1,8 +1,7 @@
 import XCTest
 @testable import DuoDesktop
 
-/// The pinch steps between the views (project notes; the owner's words in
-/// project notes). One test per claim.
+/// The pinch steps between the views. One test per claim.
 final class PinchLadderTests: XCTestCase {
     private func next(_ v: SessionView, _ s: PinchStep, multi: Bool = true, overview: Bool = false,
                       upright: Bool = true) -> PinchLadder.Outcome {
@@ -30,7 +29,7 @@ final class PinchLadderTests: XCTestCase {
         XCTAssertEqual(next(.regular, .pinchOut, upright: false), .nothing)
     }
 
-    /// Claim: no pinch in All Screens (the owner: "You just tap to select a screen.").
+    /// Claim: no pinch in All Screens.
     func testNoPinchInAllScreens() {
         for v in SessionView.allCases {
             XCTAssertEqual(next(v, .pinchIn, overview: true), .nothing)

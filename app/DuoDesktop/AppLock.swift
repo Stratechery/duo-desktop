@@ -2,10 +2,10 @@ import Foundation
 import LocalAuthentication
 import Observation
 
-/// The app lock (plan §8, M4). The iPhone Duo has Touch ID, not Face ID. Behind the "Require Touch ID" setting,
-/// ON by default (the owner 2026-11-20: "Yes on Touch ID."). When on: locked at launch and after 5 minutes in the
-/// background; unlocked with Touch ID, the device passcode as the fallback (`.deviceOwnerAuthentication`).
-/// Turning it off asks for Touch ID first. Tests skip it only through `bypass` (Simulator-only `--no-app-lock`).
+/// The app lock (plan §8, M4). The iPhone Duo has Touch ID, not Face ID. Behind the "Require Touch ID" setting, ON by
+/// default. When on: locked at launch and after 5 minutes in the background; unlocked with Touch ID, the device
+/// passcode as the fallback (`.deviceOwnerAuthentication`). Turning it off asks for Touch ID first. Tests skip it only
+/// through `bypass` (Simulator-only `--no-app-lock`).
 @MainActor @Observable
 final class AppLock {
     static let settingKey = "requireTouchID"
@@ -19,14 +19,14 @@ final class AppLock {
     var message: String?
     @ObservationIgnored private var backgroundedAt: Date?
     /// An automatic request for Face ID / Touch ID is due: once at launch, and once after each real return from the
-    /// background while locked. Spent when it is made. First-launch Face ID fix (project notes): the system's own
-    /// Face ID alerts (the first-use "Allow … to use Face ID?" question, "Face Not Recognized", the passcode pad)
-    /// make the app inactive and then active again; that is not a return, so it must never start another request.
+    /// background while locked. Spent when it is made. First-launch Face ID fix: the system's own Face ID alerts (the
+    /// first-use "Allow … to use Face ID?" question, "Face Not Recognized", the passcode pad) make the app inactive and
+    /// then active again; that is not a return, so it must never start another request.
     @ObservationIgnored private(set) var autoAskDue: Bool
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let authenticate: (String) async -> Result<LAContext?, Error>
-    /// The context the last successful unlock evaluated (project notes, "One Touch ID"): the saved Mac passwords
-    /// are read with it, so no second prompt. Dropped (invalidated) the moment the app locks again.
+    /// The context the last successful unlock evaluated: the saved Mac passwords are read with it, so no second prompt.
+    /// Dropped (invalidated) the moment the app locks again.
     @ObservationIgnored private(set) var authContext: LAContext?
 
     /// `bypass`: this run only, the lock is off and nothing is stored. Passed only from

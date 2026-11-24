@@ -1,8 +1,8 @@
 import XCTest
 @testable import DuoDesktop
 
-/// Project notes (computers-m3) (project notes, milestone 3): the one-line rows with three way-in icons,
-/// opening exactly the way in that was tapped, the "open another way" offer and the view switch for every mix.
+/// Project notes (computers-m3): the one-line rows with three way-in icons, opening exactly the way in that was tapped,
+/// the "open another way" offer and the view switch for every mix.
 @MainActor
 final class ComputersM3Tests: XCTestCase {
     override func tearDown() async throws {

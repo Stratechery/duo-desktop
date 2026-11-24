@@ -4,7 +4,7 @@ import GlassActWire
 import XCTest
 @testable import DuoDesktop
 
-/// The Host adds the phone's terminal key (project notes): one test per claim.
+/// The Host adds the phone's terminal key: one test per claim.
 @MainActor
 final class TerminalKeyByHostTests: XCTestCase {
     /// A channel standing in for the Glass Act session: answers with `answer`, or never (an older Host).

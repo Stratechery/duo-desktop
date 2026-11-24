@@ -21,8 +21,8 @@ final class TrackpadEngine {
     private(set) var canvasWidth = 1920
     private(set) var canvasHeight = 1080
     /// The session's full picture width (the size before any shrink on a slow link). The gain is tuned for the full
-    /// picture: on a shrunk one it is scaled by width ÷ full width, so the pointer crosses the Mac at the same
-    /// speed whatever size is sent (the owner 2026-11-20: "This needs to work on all connections").
+    /// picture: on a shrunk one it is scaled by width ÷ full width, so the pointer crosses the Mac at the same speed
+    /// whatever size is sent.
     private(set) var fullWidth = 1920
     private(set) var x = 960.0
     private(set) var y = 540.0
@@ -174,7 +174,7 @@ final class TrackpadEngine {
         sink.sendInput(kind: InputKind.buttonUp, x: p.0, y: p.1, a: 1, b: 0)
     }
 
-    // MARK: Click buttons (the owner 2026-11-20: "There should be a button under the left thumb for click.")
+    // MARK: Click buttons
 
     /// Presses closer together than this, with the pointer still, count as a double (or triple) click. The Host
     /// posts the count the phone sends (`HostController`, kind 2: "The viewer's click count"), so the phone does
@@ -214,7 +214,7 @@ final class TrackpadEngine {
         sink.sendInput(kind: InputKind.buttonUp, x: p.0, y: p.1, a: lastPress?.count ?? 1, b: button)
     }
 
-    // MARK: Scroll button (the owner 2026-11-20: "If you press that button and scroll on the trackpad, then it scrolls.")
+    // MARK: Scroll button
 
     /// The Scroll button is down: one finger on the trackpad scrolls instead of moving the pointer.
     private(set) var scrollHeld = false

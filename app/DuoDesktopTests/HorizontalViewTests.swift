@@ -5,7 +5,7 @@ import GlassActSession
 import XCTest
 @testable import DuoDesktop
 
-/// The horizontal view (project notes, round 4, 589 pt): one test per claim.
+/// The horizontal view: one test per claim.
 @MainActor
 final class HorizontalViewTests: XCTestCase {
     let open = CGSize(width: 951, height: 669)
@@ -238,9 +238,9 @@ private extension UIImage {
     var cg_w: Int { cgImage?.width ?? 0 }
 }
 
-/// Proof renders for the clear controls and the screen-corner shapes (2026-11-21 leftovers order). The simulator
-/// cannot show the Duo's physical corner, so its curve is drawn as a red guide line here only, at the display's own
-/// corner radius (read from the simulator's screen for the proof; the app itself uses `ConcentricRectangle`).
+/// Proof renders for the clear controls and the screen-corner shapes. The simulator cannot show the Duo's physical
+/// corner, so its curve is drawn as a red guide line here only, at the display's own corner radius (read from the
+/// simulator's screen for the proof; the app itself uses `ConcentricRectangle`).
 @MainActor
 final class HorizontalClearSnapshotTests: XCTestCase {
     func testRenderClearControls() throws {

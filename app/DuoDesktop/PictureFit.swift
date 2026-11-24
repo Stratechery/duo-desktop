@@ -37,8 +37,7 @@ enum PictureFit {
         return (CGRect(x: x, y: y, width: w, height: h), p)
     }
 
-    /// The centred view's zoom (the owner 2026-11-21: "about a quarter of the screen"): half the Mac screen's width and
-    /// height in the same frame.
+    /// The centred view's zoom: half the Mac screen's width and height in the same frame.
     static let centredZoom: CGFloat = 2
 
     /// The pan that puts canvas point (x, y) at the view's centre at `zoom`. Pass it to `zoomed`, which stops it at

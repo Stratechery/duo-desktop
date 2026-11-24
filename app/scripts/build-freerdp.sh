@@ -1,8 +1,7 @@
 #!/bin/sh
-# Builds the Remote Desktop engine for the DUO_RDP switch (project notes, Remote Desktop milestone 0;
-# the owner 2026-11-22: "Yes on library."): FreeRDP 3 and OpenSSL 3, static, for iPhone and the iPhone simulator (arm64),
-# into one xcframework:
-#   ../vendor/freerdp-build/FreeRDP.xcframework   (libfreerdp-all.a + headers per platform)
+# Builds the Remote Desktop engine for the DUO_RDP switch: FreeRDP 3 and OpenSSL 3, static, for iPhone and the iPhone
+# simulator (arm64), into one xcframework:../vendor/freerdp-build/FreeRDP.xcframework (libfreerdp-all.a + headers per
+# platform)
 #
 # Third-party source is fetched here at pinned tags (and checked against the pinned commit), never copied into
 # this repository, as the Glass Act fetch does. FFmpeg and OpenH264 are OFF (LGPL / patents); H.264 uses Apple's

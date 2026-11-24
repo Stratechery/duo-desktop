@@ -1,8 +1,7 @@
 #if DUO_JETKVM
-// A computer reached only through its JetKVM (project notes, one computer with any connection, milestone 2; the owner
-// 2026-11-22: "I can't approve the permission in two Macs until you add jetkvm support"). Its Add check, and
-// its own screen: the JetKVM's picture with the same keys, trackpad and typing as the JetKVM view in a Mac's
-// session, with no Glass Act session or picture behind it. Behind DUO_JETKVM with the rest of the JetKVM.
+// A computer reached only through its JetKVM. Its Add check, and its own screen: the JetKVM's picture with the same
+// keys, trackpad and typing as the JetKVM view in a Mac's session, with no Glass Act session or picture behind it.
+// Behind DUO_JETKVM with the rest of the JetKVM.
 import Foundation
 import JetKVMClient
 import JetKVMProtocol
@@ -108,13 +107,11 @@ enum JetKVMAddCheck {
 /// A JetKVM-only computer open: the JetKVM's picture where a Mac's picture goes, and under it the same band and
 /// typing as the JetKVM view of a Mac's session (that view's `JetKVMLink` and its keys, trackpad and keyboard):
 /// - a normal iPhone: the Click/column/trackpad band and our own keyboard (as `SessionScreen`, normal iPhone);
-/// - the open Duo: the special keys and trackpad band over the system keyboard (as `SessionScreen`, upright).
-/// Sideways (project notes, 2026-11-22: "Give the JetKVM-only screen the same sideways overlay trackpad and button
-/// column a Mac session has"): the picture full screen with the session's `HorizontalControls` over it (Keyboard,
-/// the click column, the trackpad, back), driving the JetKVM. The top bar upright: back, and the name bubble with
-/// "JetKVM" under the name, and the session's views control when the computer has other ways in (order
-/// view-selector-back). Opened from the list's JetKVM icon on any computer, with no Glass Act session. Sideways the
-/// bar hides, as in a Mac's session.
+/// - the open Duo: the special keys and trackpad band over the system keyboard (as `SessionScreen`, upright). Sideways:
+/// the picture full screen with the session's `HorizontalControls` over it (Keyboard, the click column, the trackpad,
+/// back), driving the JetKVM. The top bar upright: back, and the name bubble with "JetKVM" under the name, and the
+/// session's views control when the computer has other ways in. Opened from the list's JetKVM icon on any computer,
+/// with no Glass Act session. Sideways the bar hides, as in a Mac's session.
 struct JetKVMOnlyScreen: View {
     let entry: MacEntry
     let store: MacStore
@@ -129,10 +126,6 @@ struct JetKVMOnlyScreen: View {
     @State private var wideNow = false
     @AppStorage(TrackpadSide.storageKey) private var trackpadSide: TrackpadSide = .standard
     private let normalPhone = PhoneKind.current
-    /// The bar's width (the screen's, upright), for the views control's switch-or-menu rule.
-    @State private var rowWidth: CGFloat = 669
-    /// The bar's narrow-first state (project notes (session-top-bar-narrow-first)).
-    @State private var fit = TopBarFit()
 
     init(entry: MacEntry, store: MacStore, leave: @escaping () -> Void) {
         self.entry = entry
@@ -156,7 +149,6 @@ struct JetKVMOnlyScreen: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-                .onChange(of: proxy.size.width, initial: true) { _, w in if !wide { rowWidth = w } }
                 .onChange(of: wide, initial: true) { _, now in
                     if wideNow != now { wideNow = now }
                     // Turning lets go of every held key and button and puts the keyboard away (as a Mac's session).
@@ -166,28 +158,11 @@ struct JetKVMOnlyScreen: View {
             }
             .background { KeyboardGuideReader { keyboardInset = $0 }.ignoresSafeArea() }
             .ignoresSafeArea(.keyboard)
-            .background(wideNow ? Color.black : Color(.systemBackground))
+            .background(wideNow ? Color.black : JetKVMTopBar.behind.colour)
             .statusBarHidden(wideNow)
             .persistentSystemOverlays(wideNow ? .hidden : .automatic)
-            .modifier(NarrowFirstBar(fit: fit, rowWidth: rowWidth, parts: WayViewSwitch.shows(current) ? 3 : 2,
-                                     hidden: wideNow, enabled: !normalPhone,
-                                     canWiden: WayViewSwitch.shows(current) && TopBarFit.canWiden(rowWidth: rowWidth)))
-            .navigationTitle(entry.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                TopBarItem { BackToMacsButton(action: goBack) }
-                ToolbarSpacer(.fixed, placement: .topBarLeading)
-                TopBarItem { TopRowName(mac: entry.name, screen: "JetKVM", notice: nil, maxWidth: views.nameMaxWidth) }
-                ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
-                    .sharedBackgroundVisibility(.hidden)
-                // Project notes (view-selector-back): the same views control as the computer's Screen Sharing session (only
-                // with more than one way in).
-                if WayViewSwitch.shows(current) {
-                    ToolbarSpacer(.fixed, placement: .topBarLeading)
-                    TopBarItem { views }
-                }
-                TopBarStandIn(width: SimulatorSwitches.topBarReserve ?? 0)
-            }
+            .modifier(JetKVMTopBar(entry: entry, views: views, normalPhone: normalPhone, hidden: wideNow,
+                                   back: goBack))
         }
         .onDisappear { link.parts.releaseAll() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -201,9 +176,9 @@ struct JetKVMOnlyScreen: View {
     private func letGo() { link.parts.releaseAll(); link.disconnect() }
     /// The computer as saved now (its ways in may have changed in its settings).
     private var current: MacEntry { store.entry(entry.id) ?? entry }
-    /// The views control (project notes (view-selector-back)).
+    /// The views control.
     private var views: WayViewSwitch {
-        WayViewSwitch(entry: current, current: .jetkvm, fit: fit, normalPhone: normalPhone, leave: letGo)
+        WayViewSwitch(entry: current, current: .jetkvm, normalPhone: normalPhone, leave: letGo)
     }
 
     /// Sideways, a normal iPhone and the Duo: the picture aspect-fitted to the whole screen, and over it the Mac
@@ -294,6 +269,28 @@ struct JetKVMOnlyScreen: View {
         TrackpadView(engine: link.parts.trackpad)
             .frame(width: upright.trackpad.width, height: upright.trackpad.height)
             .background(KeyLook.keyFill, in: RoundedRectangle(cornerRadius: TrackpadView.cornerRadius, style: .continuous))
+    }
+}
+
+/// The JetKVM screen's top bar. The Duo: back, the computer's name as the bar's title (`DuoTitleBar`), the views switch
+/// as the trailing item kept longest. A normal iPhone: the same bar, with its views drop-down. Hidden sideways.
+struct JetKVMTopBar: ViewModifier {
+    /// Upright the screen paints the system background behind the bar.
+    static let behind = BarBackdrop.app
+    let entry: MacEntry
+    let views: WayViewSwitch
+    let normalPhone: Bool
+    let hidden: Bool
+    let back: () -> Void
+
+    func body(content: Content) -> some View {
+        // One bar for the Duo and a normal iPhone; only the views control differs.
+        content
+            .modifier(DuoTitleBar(title: entry.name, subtitle: "JetKVM", hidden: hidden, behind: Self.behind, back: back) { EmptyView() })
+            .toolbar {
+                if WayViewSwitch.shows(views.entry) { TopBarViewsItem { views } }
+                TopBarStandIn(width: SimulatorSwitches.topBarReserve ?? 0)
+            }
     }
 }
 #endif

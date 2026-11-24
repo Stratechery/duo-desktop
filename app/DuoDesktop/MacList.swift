@@ -4,7 +4,7 @@ import GlassActWire
 import Observation
 import Security
 
-/// Which of a Mac's two addresses (project notes §2).
+/// Which of a Mac's two addresses.
 enum AddressKind: String, Codable, CaseIterable, Hashable {
     case home, tailscale
 
@@ -32,16 +32,15 @@ enum AddressKind: String, Codable, CaseIterable, Hashable {
     }
 }
 
-/// What a list entry was before one computer could have several ways in (project notes, terminal-only computers, §1): a Mac
-/// running Glass Act Host, or a computer reached only over SSH. Entries saved before this existed have no kind and
-/// read as a Mac. Now only read for the carry-over, and still written so an older build reads the list as before.
+/// What a list entry was before one computer could have several ways in: a Mac running Glass Act Host, or a computer
+/// reached only over SSH. Entries saved before this existed have no kind and read as a Mac. Now only read for the
+/// carry-over, and still written so an older build reads the list as before.
 enum EntryKind: String, Codable, Hashable {
     case mac, terminal
 }
 
-/// One way in to a computer (project notes), in the list's column order. Each list icon
-/// opens exactly its own way in; a tap on the name opens the computer's Opens In way (`MacEntry.defaultWay`; the owner
-/// 2026-11-23: "Clicking the computer name should also go to the default view").
+/// One way in to a computer, in the list's column order. Each list icon opens exactly its own way in; a tap on the name
+/// opens the computer's Opens In way.
 enum WayIn: String, Codable, CaseIterable, Hashable, Identifiable {
     case screenSharing, terminal, jetkvm
 
@@ -114,10 +113,36 @@ enum TerminalOpens: String, Codable, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// One computer, stored on the phone (plan §4; project notes, one computer with any connection). The id is fixed, so renaming it
-/// or changing its addresses keeps everything (SSH trust, JetKVM and unlock passwords are keyed by it). A computer
-/// has any of three ways in: Screen Sharing (Glass Act Host), Terminal (SSH) and JetKVM. Every field is stored in
-/// every build, so a build without the Terminal or the JetKVM keeps their settings.
+/// What a computer's Terminal is, as learned from its SSH server's own first line. Outside the Terminal switch so every
+/// build keeps it. Stored as raw words so a newer value still reads.
+enum TerminalSystem: String, Codable, Hashable {
+    /// The server named itself `OpenSSH_for_Windows_…`: a Windows PC, which opens PowerShell (or Command Prompt).
+    case windows
+    /// Any other server (a Mac, Linux): it overrides the Remote Desktop sign, so a wrong guess corrects itself.
+    case other
+}
+
+/// What a computer runs, for the list's system mark. Outside every build switch. Stored as raw words.
+enum ComputerSystem: String, Codable, Hashable, CaseIterable {
+    case mac, windows, linux
+
+    /// What `uname -s` printed, read from its last non-empty line: Darwin is a Mac, Linux is Linux; anything else
+    /// (a BSD, an error) is nil, so the mark stays empty rather than guess.
+    static func fromUname(_ output: String) -> ComputerSystem? {
+        let last = output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty }
+        switch last?.lowercased() {
+        case "darwin": return .mac
+        case "linux": return .linux
+        default: return nil
+        }
+    }
+}
+
+/// One computer, stored on the phone. The id is fixed, so renaming it or changing its addresses keeps everything (SSH
+/// trust, JetKVM and unlock passwords are keyed by it). A computer has any of three ways in: Screen Sharing (Glass Act
+/// Host), Terminal (SSH) and JetKVM. Every field is stored in every build, so a build without the Terminal or the
+/// JetKVM keeps their settings.
 struct MacEntry: Identifiable, Hashable, Codable {
     var id: String = UUID().uuidString
     var name: String
@@ -127,7 +152,7 @@ struct MacEntry: Identifiable, Hashable, Codable {
     var port: UInt16 = 4433
     /// The Mac's Glass Act key (SHA-256 of its public key), learned the first time either address answers.
     var key: String?
-    /// The address that worked last (used when both answer: the owner agreed 2026-11-21).
+    /// The address that worked last.
     var lastAddress: AddressKind?
     /// The session view last used on this Mac (SessionView raw value).
     var view: String?
@@ -149,13 +174,17 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// How the Terminal signs in and what it opens.
     var terminalSignIn: TerminalSignIn?
     var terminalOpens: TerminalOpens?
+    /// What the SSH server said it is at the last check or connect (nil: not seen yet). See `isPC`.
+    var terminalSystem: TerminalSystem?
+    /// What the computer answered when asked once with `uname -s` after a Terminal sign-in (`.mac` or `.linux`; nil:
+    /// not asked yet, or an answer that names neither). Its own key, so an older build ignores it. See `system`.
+    var unameSystem: ComputerSystem?
     /// JetKVM is set up (the JetKVM switch, `jetkvmOn`); nil read as off.
     var jetkvm: Bool?
     /// The JetKVM's address (its password is in the Keychain, never here).
     var jetkvmAddress: String?
-    /// Opens In, the ⓘ page's choice: the way in a tap on the name opens (project notes (name-opens-default) 2; the owner earlier:
-    /// "You should be able to choose which opens first"). Set to the Start With way when the computer is added; nil
-    /// in entries saved before it (they open in their first way in: `defaultWay`).
+    /// Opens In, the ⓘ page's choice: the way in a tap on the name opens. Set to the Start With way when the computer
+    /// is added; nil in entries saved before it (they open in their first way in: `defaultWay`).
     var opensIn: WayIn?
     /// When a synced field was last changed by the person (list sync, plan §A9.3): newest wins between iPhones. nil in
     /// entries saved before sync (read as the earliest time, never given a new one). Last used, last address, view and
@@ -167,9 +196,8 @@ struct MacEntry: Identifiable, Hashable, Codable {
     /// The JetKVM has a password (the yes/no only; the password is in this iPhone's Keychain). Synced, so another
     /// iPhone without that password shows JetKVM as needing setting up there. nil: not known (saved before sync).
     var jetkvmPassword: Bool?
-    /// Remote Desktop fills the Screen Sharing slot on a Windows PC (project notes: "Remote Desktop
-    /// ... lands as a second kind of Screen Sharing in the same slot"; project notes milestone 1). Kept apart
-    /// from Glass Act's `screenSharing`, so nothing Glass Act (`MacStore.macs`) ever sees a PC. nil read as off.
+    /// Remote Desktop fills the Screen Sharing slot on a Windows PC. Kept apart from Glass Act's `screenSharing`, so
+    /// nothing Glass Act (`MacStore.macs`) ever sees a PC. nil read as off.
     var remoteDesktop: Bool?
     /// Remote Desktop's port (3389 when nil), user name, and the session it asks Windows for (`RDPScreen`).
     var rdpPort: UInt16?
@@ -180,6 +208,9 @@ struct MacEntry: Identifiable, Hashable, Codable {
     var rdpCertificate: String?
     /// "Don't Ask Again for This PC": the takeover notice before each connect is skipped (plan §3).
     var rdpSkipTakeover: Bool?
+    /// Remember Password (milestone 3): the PC's password is kept in this iPhone's Keychain behind the app lock
+    /// (`RDPPasswordKeychain`). nil read as on. The password itself is never in this list.
+    var rdpRememberPassword: Bool?
 
     /// The entry in today's shape (review finding 1, the exact mapping). Already carried over: unchanged.
     /// - A Mac (no kind, or `.mac`): Screen Sharing with its own address, port and key; Terminal and JetKVM as its
@@ -207,10 +238,40 @@ struct MacEntry: Identifiable, Hashable, Codable {
     }
 
     var hasScreenSharing: Bool { screenSharing ?? (kind != .terminal) }
+    /// Its Terminal is a Windows PC's. Either sign is enough: the SSH server named itself Windows' (`terminalSystem`),
+    /// or, before the server has been seen, Remote Desktop is a way in. The server's own word wins over Remote Desktop
+    /// (a Linux box with Remote Desktop is not a PC), and it is read again at every check and connect, so a wrong mark
+    /// corrects itself. A Mac with Glass Act Host is never a PC.
+    var isPC: Bool {
+        guard !hasScreenSharing else { return false }
+        if let s = terminalSystem { return s == .windows }
+        return hasRemoteDesktop
+    }
+    /// A PC's Terminal has one way in and one shell: this iPhone's key (no Tailscale SSH on Windows) and the PC's own
+    /// shell (no tmux). Changes nothing for any other computer. Returns whether anything changed.
+    @discardableResult mutating func correctForPC() -> Bool {
+        guard isPC, terminalSignIn != .phoneKey || terminalOpens != .loginShell else { return false }
+        terminalSignIn = .phoneKey
+        terminalOpens = .loginShell
+        return true
+    }
+    /// The list's system mark, in this order:
+    /// - Glass Act Host's Screen Sharing: a Mac;
+    /// - a PC (`isPC`: its SSH server named Windows, or Remote Desktop before the server has been seen): Windows;
+    /// - otherwise what the computer answered to `uname -s` after a Terminal sign-in (`unameSystem`).
+    /// nil until one of these is known: the row shows no mark, never a guess.
+    var system: ComputerSystem? {
+        if hasScreenSharing { return .mac }
+        if isPC { return .windows }
+        return unameSystem
+    }
+    /// The Terminal should ask the computer what it is once (`uname -s`): nothing else has said, and its server is
+    /// not Windows' (cmd and PowerShell have no `uname`).
+    var asksSystem: Bool { system == nil && terminalSystem != .windows }
     /// Its Screen Sharing slot is Windows' Remote Desktop (never together with Glass Act's).
     var hasRemoteDesktop: Bool { (remoteDesktop ?? false) && !hasScreenSharing }
     var rdpPortValue: UInt16 { rdpPort ?? 3389 }
-    /// The session Remote Desktop asks for (default 1920 x 1080, text at 200%: the owner 2026-11-23 "yes 1080p at 200%").
+    /// The session Remote Desktop asks for.
     var rdpScreen: RDPScreen { RDPScreen(size: rdpSize ?? .default, textSize: rdpTextSize ?? .default) }
     var hasTerminal: Bool { terminal ?? false }
     /// The JetKVM switch is on and its address is set (what the view switch has always required).
@@ -232,10 +293,17 @@ struct MacEntry: Identifiable, Hashable, Codable {
         waysIn.filter { WayIn.inThisBuild.contains($0) && ($0 != .screenSharing || hasScreenSharing || RDPScreen.inThisBuild) }
     }
 
+    /// What a way in is called on this computer: a PC's Screen Sharing slot is Remote Desktop.
+    func label(_ way: WayIn) -> String { way == .screenSharing && hasRemoteDesktop ? AddWay.remoteDesktop.label : way.label }
+
+    /// The list icon for a way in on this computer: the same for every computer, Remote Desktop included. The system
+    /// shows in its own mark.
+    func symbol(_ way: WayIn) -> String { way.symbol }
+
     /// Whether this build can open the computer in `way` (it has that way in, and the build has its code).
     func opens(_ way: WayIn) -> Bool { waysInThisBuild.contains(way) }
 
-    /// The way in a tap on the name opens (project notes (name-opens-default) 2):
+    /// The way in a tap on the name opens:
     /// - the Opens In choice, while this build can open it;
     /// - else the next way in it has after that one, in column order (wrapping round);
     /// - with no choice saved (a computer added before Opens In): its first way in, so Screen Sharing if set up, else
@@ -324,9 +392,8 @@ struct MacEntry: Identifiable, Hashable, Codable {
 /// fields only); the OS backup follows the phone's settings (Reviewer wording correction).
 @MainActor @Observable
 final class MacStore {
-    /// A fresh install starts with no Macs (the owner 2026-11-21: "There absolutely should not be any hard coding of
-    /// [a Mac], even to start the list. This app needs to be usable by someone else on their Macs."). Only the
-    /// simulator gets this Mac's own test host, so screen proofs can run; a device build has none.
+    /// A fresh install starts with no Macs. Only the simulator gets this Mac's own test host, so screen proofs can run;
+    /// a device build has none.
     static var starting: [MacEntry] {
         #if targetEnvironment(simulator)
         var e = MacEntry(name: "Test host", port: 4533)
@@ -347,8 +414,8 @@ final class MacStore {
     /// The computers with Screen Sharing only: everything Glass Act (probes, sessions, the outer screen, cold
     /// connect, key matching, auto-unlock) reads this, so a computer without Glass Act never reaches any of it.
     var macs: [MacEntry] { entries.filter(\.hasScreenSharing) }
-    /// The Computers list (project notes, one computer with any connection): every computer with a way in this build can show, in
-    /// the order added. One this build cannot show at all stays saved, untouched, and out of the list.
+    /// The Computers list: every computer with a way in this build can show, in the order added. One this build cannot
+    /// show at all stays saved, untouched, and out of the list.
     var computers: [MacEntry] { entries.filter { !$0.waysInThisBuild.isEmpty } }
     private let url: URL
     private let defaults: UserDefaults
@@ -359,8 +426,7 @@ final class MacStore {
         self.url = url
         self.defaults = defaults
         if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([MacEntry].self, from: data) {
-            // Every entry in today's shape (project notes, one computer with any connection: nothing re-added, no new sign-ins),
-            // saved back at once when anything was carried over.
+            // Every entry in today's shape, saved back at once when anything was carried over.
             entries = list.map { $0.carriedOver() }
             let carried = zip(list, entries).filter { $0 != $1 }.count
             loadNote = "loaded \(list.count) entries" + (carried > 0 ? ", carried over \(carried)" : "")
@@ -398,10 +464,9 @@ final class MacStore {
         sync?.changed(e)
     }
 
-    /// A computer new from Add Computer: its Opens In starts as the Start With way it was added with (order
-    /// name-opens-default 2). Ways in added to it later do not change it. A computer this iPhone hid (Remove from This
-    /// iPhone Only) comes back as itself, with the way in just added (plan §A9.1), under the new local id the sheet
-    /// already holds.
+    /// A computer new from Add Computer: its Opens In starts as the Start With way it was added with. Ways in added to
+    /// it later do not change it. A computer this iPhone hid (Remove from This iPhone Only) comes back as itself, with
+    /// the way in just added (plan §A9.1), under the new local id the sheet already holds.
     func addNew(_ e: MacEntry, startWith way: WayIn) {
         var e = e
         e.opensIn = way
@@ -420,6 +485,16 @@ final class MacStore {
         e.name = t.name
         e.opensIn = way
         switch way {
+        case .screenSharing where t.remoteDesktop == true:
+            // A PC: Remote Desktop in the slot, as typed (never Glass Act's Screen Sharing).
+            e.remoteDesktop = true
+            e.screenSharing = false
+            e.home = t.home ?? h.home
+            e.tailscale = t.tailscale ?? h.tailscale
+            e.rdpPort = t.rdpPort
+            e.rdpUser = t.rdpUser
+            e.rdpSize = t.rdpSize ?? h.rdpSize
+            e.rdpTextSize = t.rdpTextSize ?? h.rdpTextSize
         case .screenSharing:
             e.screenSharing = true
             e.home = t.home ?? h.home
@@ -434,6 +509,8 @@ final class MacStore {
             e.sshPort = t.sshPort
             e.terminalSignIn = t.terminalSignIn
             e.terminalOpens = t.terminalOpens
+            e.terminalSystem = t.terminalSystem ?? h.terminalSystem
+            e.unameSystem = t.unameSystem ?? h.unameSystem
         case .jetkvm:
             e.jetkvm = true
             e.jetkvmAddress = t.jetkvmAddress
@@ -460,6 +537,8 @@ final class MacStore {
 
     /// Where the Macs' passwords are (tests pass their own).
     @ObservationIgnored var passwords: MacPasswordKeeping = MacPasswordKeychain.shared
+    /// The PCs' saved Remote Desktop passwords (milestone 3), deleted with the PC or its Remote Desktop.
+    @ObservationIgnored var rdpPasswords: RDPPasswordKeeping = RDPPasswordKeychain.shared
 
     /// Removes a computer from the list. `everywhere` (Remove from All Devices, the default): a dated removal mark
     /// goes to iCloud. Otherwise (This iPhone Only) it is kept hidden on this iPhone. Either way this iPhone's
@@ -473,11 +552,12 @@ final class MacStore {
         onGone(id)
     }
 
-    /// This iPhone's own secrets and pins for a computer, in every build (review finding 2): the Mac password for Unlock
-    /// Automatically (project notes), the JetKVM password, and the Terminal's SSH key pins.
+    /// This iPhone's own secrets and pins for a computer, in every build (review finding 2): the Mac password for
+    /// Unlock Automatically, the JetKVM password, and the Terminal's SSH key pins.
     private func forgetHere(_ e: MacEntry) {
         passwords.delete(macID: e.id)
         AutoUnlockFailures.set(e.id, failed: false, in: defaults)
+        rdpPasswords.delete(pcID: e.id)
         secrets.deleteJetKVMPassword(e.id)
         #if DUO_JETKVM
         JetKVMSettings.macRemoved(e.id)
@@ -501,6 +581,7 @@ final class MacStore {
             passwords.delete(macID: id)
             AutoUnlockFailures.set(id, failed: false, in: defaults)
         }
+        if old.hasRemoteDesktop && !e.hasRemoteDesktop { rdpPasswords.delete(pcID: id) }
         if (old.jetkvm ?? false) && !(e.jetkvm ?? false) { secrets.deleteJetKVMPassword(id) }
         entries[i] = e
         save()
@@ -546,9 +627,10 @@ final class MacStore {
         }
         switch way {
         case .screenSharing:
-            // As removing the Mac did (project notes): its saved password goes with its Screen Sharing.
+            // As removing the Mac did: its saved password goes with its Screen Sharing.
             passwords.delete(macID: id)
             AutoUnlockFailures.set(id, failed: false, in: defaults)
+            rdpPasswords.delete(pcID: id)
         case .jetkvm:
             secrets.deleteJetKVMPassword(id)
             #if DUO_JETKVM
@@ -654,9 +736,9 @@ final class MacList {
         #endif
     }
 
-    /// From each address's answer so far, what the row shows and which address Connect uses: an address that
-    /// answered with the right key wins; when both answered, the one that worked last (the owner agreed 2026-11-21);
-    /// a wrong key at an address that is the only answer refuses the Mac.
+    /// From each address's answer so far, what the row shows and which address Connect uses: an address that answered
+    /// with the right key wins; when both answered, the one that worked last; a wrong key at an address that is the
+    /// only answer refuses the Mac.
     static func choose(_ answers: [AddressKind: Reach], expected: Int, last: AddressKind?) -> (reach: Reach, kind: AddressKind?) {
         let good = AddressKind.allCases.filter { answers[$0]?.answered == true }
         if let last, good.contains(last) { return (answers[last]!, last) }

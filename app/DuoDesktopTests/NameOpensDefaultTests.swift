@@ -2,10 +2,8 @@ import GlassActTransport
 import XCTest
 @testable import DuoDesktop
 
-/// Project notes (name-opens-default) (the owner 2026-11-23: "Clicking the computer name should also go to the default view; setting
-/// should go back inside the (i)", and the light: "We should add the green light at the beginning of the row if the
-/// computer is reachable", "yellow light if reachable but not logged in", "red light if not reachable"). One test per
-/// claim; the (i) and the name tap on the real list are in `NameOpensDefaultUITests`.
+/// Project notes (name-opens-default). One test per claim; the (i) and the name tap on the real list are in
+/// `NameOpensDefaultUITests`.
 @MainActor
 final class NameOpensDefaultTests: XCTestCase {
     private var dir: URL!
@@ -100,8 +98,8 @@ final class NameOpensDefaultTests: XCTestCase {
         #endif
     }
 
-    /// Claim 4: removing the default way in falls to the next that exists (column order, wrapping round), and that
-    /// stays when the removed way in is added back.
+    /// Claim 4: removing the default way in falls to the next that exists, and that stays when the removed way in is
+    /// added back.
     func testRemovingTheDefaultWay() {
         let s = store()
         let e = computer("Guest Mac Mini", [.screenSharing, .terminal, .jetkvm])

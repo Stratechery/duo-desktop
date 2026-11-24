@@ -121,15 +121,6 @@ final class NormalPhoneViewsTests: XCTestCase {
         XCTAssertEqual(Array(SessionView.choices(terminal: true, jetkvm: true).prefix(2)), [.regular, .centred])
     }
 
-    func testNameBubbleHasTheRoomTheThreeButtonsTook() {
-        // 402 wide: margins 2x16, back 48, ONE view button 48, two spacers 2x12, 40 slack -> 210 (was 146 with three
-        // 48 pt view buttons), whatever the Mac offers.
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 402), 210)
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 375), 183)
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 440), 248)
-        XCTAssertEqual(NormalPhoneTopRow.nameMax(rowWidth: 200), 80)
-    }
-
     func testTerminalTakesPictureAndBandLessOneRow() {
         for (w, h, kb) in [(375.0, 640.0, 250.0), (402, 740, 260), (440, 818, 270), (402, 600, 300)] {
             let l = NormalPhoneLayout(size: CGSize(width: w, height: h), keyboardInset: kb)
@@ -171,7 +162,7 @@ final class NormalPhoneViewMenuTests: XCTestCase {
         let j = SessionView.normalPhoneChoices(terminal: false, jetkvm: true)
         XCTAssertEqual(ViewMenuButton.items(choices: j, current: .centred), [
             .init(view: .centred, title: "Follow Pointer", symbol: "scope", checked: true),
-            .init(view: .jetkvm, title: "JetKVM", symbol: "cable.connector", checked: false),
+            .init(view: .jetkvm, title: "JetKVM", symbol: "mediastick", checked: false),
         ])
         #endif
         #if DUO_TERMINAL && DUO_JETKVM
@@ -265,7 +256,7 @@ final class NormalPhoneOwnKeyboardTests: XCTestCase {
     }
 }
 
-/// The wide sideways trackpad on a normal iPhone (project notes).
+/// The wide sideways trackpad on a normal iPhone.
 final class SidewaysWidePadTests: XCTestCase {
     /// Each class of supported iPhone held sideways: screen in points, the Dynamic Island's (or notch's) inset on
     /// one side, and points per millimetre (dpi / scale / 25.4).
@@ -293,8 +284,8 @@ final class SidewaysWidePadTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(pad.width, upright.width, p.name)
                     // (No height bound against the upright pad any more: build 58 makes the height the column's.)
                     XCTAssertGreaterThanOrEqual(pad.width / p.ptPerMM, duoPad.width / Self.duoPtPerMM, p.name)
-                    // Build 58 (the owner: "It should be the same vertically as the buttons."): top level with the
-                    // top of Keyboard, bottom level with the bottom of Click, exactly the column's height; 3:2.
+                    // Build 58: top level with the top of Keyboard, bottom level with the bottom of Click, exactly the
+                    // column's height; 3:2.
                     XCTAssertEqual(pad.minY, column.minY, p.name)
                     XCTAssertEqual(pad.maxY, column.maxY, p.name)
                     XCTAssertEqual(pad.minY, l.frame(.keyboard).minY, p.name)

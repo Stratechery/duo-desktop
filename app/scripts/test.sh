@@ -6,7 +6,8 @@
 # Switch check: the app must compile in every version, not only the full one TestFlight ships. It builds the app
 # (compile only, simulator, unsigned) with NO switches, with only DUO_TERMINAL, with only DUO_JETKVM and with only
 # DUO_RDP (Remote Desktop: FreeRDP, built first by scripts/build-freerdp.sh), with only DUO_SYNC and with only
-# DUO_VNC (Basic Screen Sharing: our RoyalVNCKit copy in ../royalvnc), and stops
+# DUO_VNC (Basic Screen Sharing: our RoyalVNCKit copy in ../royalvnc), then the TestFlight version in Release for a
+# device (build 79: simulator-only code reached a Release archive), and stops
 # with a failure if any of them does not compile. (Build 53 to 57: the plain version did not compile because
 # Screens.swift used a Terminal-only type outside `#if DUO_TERMINAL`; nothing caught it, because every build had
 # both switches on.)
@@ -36,11 +37,12 @@ restore() {
 trap restore EXIT
 
 failed=""
-compile() { # name, then the environment for xcodegen
+compile() { # name, then the environment for xcodegen; COMPILE_DEST/COMPILE_CONFIG pick device + Release
     name=$1; shift
     env "$@" xcodegen generate --quiet
     if xcodebuild build -project DuoDesktop.xcodeproj -scheme DuoDesktop \
-        -destination 'generic/platform=iOS Simulator' -derivedDataPath "$out/dd-$name" \
+        -configuration "${COMPILE_CONFIG:-Debug}" \
+        -destination "${COMPILE_DEST:-generic/platform=iOS Simulator}" -derivedDataPath "$out/dd-$name" \
         -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO > "$out/compile-$name.log" 2>&1; then
         echo "compiles: $name"
     else
@@ -55,11 +57,15 @@ compile jetkvm-only DUO_TERMINAL= DUO_JETKVM=YES DUO_RDP= DUO_SYNC= DUO_VNC=
 compile rdp-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP=YES DUO_SYNC= DUO_VNC=
 compile sync-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP= DUO_SYNC=YES DUO_VNC=
 compile vnc-only DUO_TERMINAL= DUO_JETKVM= DUO_RDP= DUO_SYNC= DUO_VNC=YES
+# The TestFlight version as the hand-back archives it (app/tools/handback.env): Release, a real device, so code
+# that only the simulator has (SimulatorSwitches) is compiled out. Build 79 failed to archive on exactly that.
+COMPILE_CONFIG=Release COMPILE_DEST='generic/platform=iOS' \
+    compile release-testflight DUO_TERMINAL=YES DUO_JETKVM=YES DUO_RDP=YES DUO_SYNC=YES DUO_VNC=
 if [ -n "$failed" ]; then
     echo "FAILED: not every version compiles:$failed"
     exit 1
 fi
-echo "switch check passed: plain, Terminal only, JetKVM only, Remote Desktop only, iCloud sync only and Basic Screen Sharing only all compile"
+echo "switch check passed: plain, Terminal only, JetKVM only, Remote Desktop only, iCloud sync only, Basic Screen Sharing only and the Release TestFlight version all compile"
 [ "${1:-}" = --switches-only ] && exit 0
 
 # The whole unit suite on the full version (every switch), as TestFlight ships it.

@@ -1,8 +1,7 @@
 import Foundation
 
-/// Adding the phone's key to the Mac's `~/.ssh/authorized_keys` (the owner 2026-11-21: "signing in with your Mac username
-/// and password is reasonable"). Never duplicates: a key is "there" when its type and base64 body already appear
-/// on a line, whatever the comment.
+/// Adding the phone's key to the Mac's `~/.ssh/authorized_keys`. Never duplicates: a key is "there" when its type and
+/// base64 body already appear on a line, whatever the comment.
 public enum AuthorizedKeys {
     /// The file with the line added, or nil when the key is already there.
     public static func appending(_ line: String, to existing: String) -> String? {
@@ -46,9 +45,9 @@ public enum PasteRule {
     }
 }
 
-/// What runs when the terminal opens (the owner: "Yes, on Tmux"): tmux's `duo` session, made or reattached; a plain login
-/// shell with a one-line notice when the Mac has no tmux. Homebrew's folders are added because a command run over
-/// SSH does not read the login profile.
+/// What runs when the terminal opens: tmux's `duo` session, made or reattached; a plain login shell with a one-line
+/// notice when the Mac has no tmux. Homebrew's folders are added because a command run over SSH does not read the login
+/// profile.
 public enum ShellCommand {
     public static let session = "duo"
     public static let tmuxOrShell = """

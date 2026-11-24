@@ -5,7 +5,7 @@ import Network
 import XCTest
 @testable import DuoDesktop
 
-/// project notes, terminal-only computers, milestones 1 and 2: one test per claim. Made-up names only.
+/// Project notes, terminal-only computers, milestones 1 and 2: one test per claim. Made-up names only.
 @MainActor
 final class TerminalComputersTests: XCTestCase {
     private var dir: URL!
@@ -50,8 +50,8 @@ final class TerminalComputersTests: XCTestCase {
         XCTAssertTrue(store().computers.filter { !$0.hasScreenSharing }.isEmpty)
     }
 
-    /// Claim (M1): the address is filed by the Mac rule (a home name is Home, anything else Tailscale); the row's
-    /// ways in are Terminal only (project notes).
+    /// Claim (M1): the address is filed by the Mac rule (a home name is Home, anything else Tailscale); the row's ways
+    /// in are Terminal only.
     func testNewEntryAddressAndRowWords() {
         let t = labServer()
         XCTAssertEqual(t.tailscale, "lab-server")
@@ -119,13 +119,13 @@ final class TerminalComputersTests: XCTestCase {
         let p = TerminalComputerProblem.diagnose(SSHSignInRefused(reason: said), user: "root", host: "lab-server",
                                                  port: 22, tailscale: true)
         XCTAssertEqual(p, .tailscaleRefused(user: "root", said: said))
-        XCTAssertTrue(p.text.hasPrefix("Tailscale refused “root” for this iPhone."))
+        XCTAssertTrue(p.text.hasPrefix("Tailscale did not let this iPhone sign in as “root”. Check User Name."), p.text)
         XCTAssertFalse(p.retries)
         XCTAssertEqual(TerminalComputerProblem.diagnose(SSHSignInRefused(), user: "me", host: "h", port: 22, tailscale: false),
-                       .keyRefused(user: "me"))
+                       .keyRefused(user: "me", offersPassword: false))
         let refused = NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNREFUSED))
         let q = TerminalComputerProblem.diagnose(refused, user: "me", host: "h", port: 2222, tailscale: true)
-        XCTAssertEqual(q.text, "Nothing answers on port 2222. Check that the computer’s SSH server is on.")
+        XCTAssertEqual(q.text, "Nothing answers on port 2222. Check Port, and that the computer’s SSH server is turned on.")
         XCTAssertTrue(q.retries)
         XCTAssertEqual(TerminalComputerProblem.diagnose(SSHSignInTimedOut(), user: "me", host: "h", port: 22, tailscale: true),
                        .signInTimedOut)
@@ -158,7 +158,7 @@ final class TerminalComputersTests: XCTestCase {
         AppAccess.set(.open)
         let gate = CheckGate()
         let task = Task { @MainActor in
-            await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, attempt in
+            await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, attempt, _ in
                 await gate.hold(attempt)
             }
         }
@@ -172,7 +172,7 @@ final class TerminalComputersTests: XCTestCase {
 
         // Open throughout: the same stub reports success (the check itself is unchanged).
         AppAccess.set(.open)
-        let ok = await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, _ in }
+        let ok = await TerminalComputerCheck.run(labServer()) { _, _, _, _, _, _, _ in }
         XCTAssertTrue(ok.ok)
     }
 }

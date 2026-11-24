@@ -28,10 +28,10 @@ settings:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: 63
-    # The two build switches (the owner 2026-11-21: "a choice at build to incorporate either the JetKVM or the terminal or
-    # both"). Both empty here: the plain Glass Act version, with no SwiftTerm, SwiftNIO or WebRTC linked.
-    # project-terminal.yml (xcodegen with DUO_TERMINAL=YES) sets DUO_TERMINAL_FLAG and adds the terminal packages;
-    # project-jetkvm.yml (xcodegen with DUO_JETKVM=YES) sets DUO_JETKVM_FLAG and adds the JetKVM client and WebRTC.
+    # The two build switches. Both empty here: the plain Glass Act version, with no SwiftTerm, SwiftNIO or WebRTC
+    # linked. project-terminal.yml (xcodegen with DUO_TERMINAL=YES) sets DUO_TERMINAL_FLAG and adds the terminal
+    # packages; project-jetkvm.yml (xcodegen with DUO_JETKVM=YES) sets DUO_JETKVM_FLAG and adds the JetKVM client and
+    # WebRTC.
     DUO_TERMINAL_FLAG: ""
     DUO_JETKVM_FLAG: ""
     # project-rdp.yml (xcodegen with DUO_RDP=YES) sets DUO_RDP_FLAG and links FreeRDP and OpenSSL.
@@ -42,15 +42,14 @@ settings:
     DUO_VNC_FLAG: ""
     DUO_ENTITLEMENTS_NAME: DuoDesktop.entitlements
     DUO_INFOPLIST_NAME: Info.plist
-    # THE ONE PLACE for the app's name and identifier (the owner 2026-11-20: "Let's just call it Duo Desktop."). The
-    # display name, usage texts and all three bundle identifiers below read these. In-app texts in DuoDesktop/*.swift
-    # and Notices/ spell the name out.
+    # THE ONE PLACE for the app's name and identifier. The display name, usage texts and all three bundle identifiers
+    # below read these. In-app texts in DuoDesktop/*.swift and Notices/ spell the name out.
     DUO_APP_NAME: Duo Desktop
     # CHANGE THIS: a bundle id of your own, for example com.yourname.duodesktop.
     DUO_BUNDLE_ID: com.example.duodesktop
-    # Signed device builds for TestFlight (the owner 2026-11-20). Simulator builds stay unsigned as before, so there the
-    # phone's key falls back to a file (plan section 8).
-    # CHANGE THIS: your own Apple developer team id (Xcode > Settings > Accounts, or developer.apple.com > Membership).
+    # Signed device builds for TestFlight. Simulator builds stay unsigned as before, so there the phone's key falls back
+    # to a file (plan section 8). CHANGE THIS: your own Apple developer team id (Xcode > Settings > Accounts, or
+    # developer.apple.com > Membership).
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": NO
@@ -78,8 +77,8 @@ targets:
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) $(DUO_TERMINAL_FLAG) $(DUO_JETKVM_FLAG) $(DUO_RDP_FLAG) $(DUO_SYNC_FLAG) $(DUO_VNC_FLAG)
         PRODUCT_BUNDLE_IDENTIFIER: $(DUO_BUNDLE_ID)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        # The app's one accent colour, #FAA634 (the owner 2026-11-21: "everywhere in the app that is blue. Can we change to
-        # FAA634?"). Every tint, selected toggle, switch, cursor and Color.accentColor follows it.
+        # The app's one accent colour, #FAA634. Every tint, selected toggle, switch, cursor and Color.accentColor
+        # follows it.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # The phone's key in the Keychain / Secure Enclave needs this (plan section 8; KeychainIdentity.appAccessGroup).
         # DuoDesktop-sync.entitlements in the iCloud sync build (project-sync.yml sets DUO_ENTITLEMENTS_NAME).
@@ -88,9 +87,8 @@ targets:
         # Merged with the generated keys: NSBonjourServices is a list, which INFOPLIST_KEY_ cannot express.
         # Info-jetkvm.plist in the JetKVM build (project-jetkvm.yml sets DUO_INFOPLIST_NAME).
         INFOPLIST_FILE: DuoDesktop/$(DUO_INFOPLIST_NAME)
-        # An ordinary space (the owner 2026-11-21: "Yes, you need to go back to a regular space between Duo and desktop.");
-        # build 20's en space showed as a wide gap in Settings. The squeezed Home Screen label beside TestFlight's
-        # dot is accepted.
+        # An ordinary space; build 20's en space showed as a wide gap in Settings. The squeezed Home Screen label beside
+        # TestFlight's dot is accepted.
         INFOPLIST_KEY_CFBundleDisplayName: $(DUO_APP_NAME)
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

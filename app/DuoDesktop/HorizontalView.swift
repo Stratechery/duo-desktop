@@ -2,16 +2,13 @@ import SwiftUI
 import UIKit
 import os
 
-// The horizontal view on the open Duo (project notes, round 4, 589 pt keyboard). The owner
-// 2026-11-21: "The horizontal view on the Duo, when it's open, is where we're really going for the full Mac screen.
-// The Mac screen should fill the entire Duo without stretching. ... a trackpad under your right thumb in the corner.
-// ... Then on the left, there are three buttons" / "the scroll should be the bottom button, the right click the
-// middle button, and the keyboard the top button." / "Yes, we should do our own keyboard. That keyboard should also
-// be moved to the left so it's off center" / "The four buttons can then be collapsed to being a single column with
-// the click on the bottom." / "We can make a smaller keyboard that is the same as the vertical view." / "589".
-// Settled answers: the same column and the same 250 x 251 trackpad in the same places in both states;
-// keyboard up keeps the full-screen scale and moves the view up and down to follow the pointer; regular glass; the
-// column keeps its order when the sides swap; the keyboard comes up only from the Keyboard button.
+// The horizontal view on the open Duo. / "the scroll should be the bottom button, the right click the middle button,
+// and the keyboard the top button." / "Yes, we should do our own keyboard. That keyboard should also be moved to the
+// left so it's off center" / "The four buttons can then be collapsed to being a single column with the click on the
+// bottom." / "We can make a smaller keyboard that is the same as the vertical view." / "589". Settled answers: the same
+// column and the same 250 x 251 trackpad in the same places in both states; keyboard up keeps the full-screen scale and
+// moves the view up and down to follow the pointer; regular glass; the column keeps its order when the sides swap; the
+// keyboard comes up only from the Keyboard button.
 
 /// Where everything sits on the open Duo held sideways, in points. Pure geometry, the same in both states: the
 /// keyboard state only adds the key row and the keyboard between the column and the trackpad.
@@ -42,12 +39,9 @@ struct HorizontalLayout: Equatable {
     /// Our keyboard is up (only changes anything on a normal iPhone).
     var typing = false
 
-    /// The wide overlay on a normal iPhone, keyboard down (project notes; the owner: "The
-    /// trackpad overlays the picture. This is the horizontal view. It doesn't matter how wide it is."). Build 58
-    /// (the owner: "It should be the same vertically as the buttons."): exactly the column's height, read from the
+    /// The wide overlay on a normal iPhone, keyboard down. Build 58: exactly the column's height, read from the
     /// column's own frame (top of Keyboard to bottom of Click), and `wideAspect` times as wide as it is tall, never
-    /// past the room beside the column.
-    /// 3:2: wide like a Mac trackpad (a Magic Trackpad is 160 x 115 mm, about 1.4:1).
+    /// past the room beside the column. 3:2: wide like a Mac trackpad (a Magic Trackpad is 160 x 115 mm, about 1.4:1).
     static let wideAspect: CGFloat = 1.5
     var widePad: Bool { normalPhone && !typing }
 
@@ -158,9 +152,8 @@ enum TouchKey: Equatable {
     }
 }
 
-/// The upright iPhone keyboard's layout and proportions (measured from the owner's real screenshots: letter key
-/// 53.5 x 49 at 669 wide, 64.2 across and 63.8 down, 18.8 at the sides; ⇧ and ⌫ 72.7; 123 49.5; return 79.4),
-/// scaled as one piece. Globe, emoji and mic are not ours to offer, so their slots join the space bar.
+/// The upright iPhone keyboard's layout and proportions, scaled as one piece. Globe, emoji and mic are not ours to
+/// offer, so their slots join the space bar.
 enum TouchKeyboardLayout {
     enum Page: String { case letters, numbers, symbols }
 
@@ -321,10 +314,10 @@ final class TouchKeyboardModel {
         lastShiftTap = time
     }
 
-    /// The keys drawn as pressed now (pop-up for a letter, the darker shade for the others), by key id. Kept apart
-    /// from the click and the haptic (the owner 2026-11-21: with mute on, "no sound and no haptics, but I still want the
-    /// pop-ups"): set first, on touch down, before any feedback is asked for, and nothing in `KeyFeedback` can
-    /// clear or skip it. Held at least `minimumShown` after the press, so an 80 ms tap still shows it.
+    /// The keys drawn as pressed now (pop-up for a letter, the darker shade for the others), by key id. Kept apart from
+    /// the click and the haptic: set first, on touch down, before any feedback is asked for, and nothing in
+    /// `KeyFeedback` can clear or skip it. Held at least `minimumShown` after the press, so an 80 ms tap still shows
+    /// it.
     private(set) var shownKeys: Set<String> = []
     @ObservationIgnored private var shownSince: [String: TimeInterval] = [:]
     @ObservationIgnored private var shownToken: [String: Int] = [:]
@@ -549,8 +542,7 @@ private struct TouchPadArea: ViewModifier {
 /// The column, trackpad, key row and our keyboard, laid over the whole-screen picture. Only the controls take
 /// touches; everywhere else touches reach the picture (tap = click, as today).
 struct HorizontalControls: View {
-    /// The Glass Act session, or nil for a JetKVM-only computer's screen (project notes, 2026-11-22: the same
-    /// sideways trackpad and button column as a Mac's session), which passes its own `back`.
+    /// The Glass Act session, or nil for a JetKVM-only computer's screen, which passes its own `back`.
     let model: SessionModel?
     let parts: SessionParts
     let keyboard: TouchKeyboardModel
@@ -671,10 +663,8 @@ private struct KeyboardButtonSurface: ViewModifier {
     }
 }
 
-/// Back to Macs (top-left, the shared `BackToMacsButton`); Screens (several screens only, top-right): small round
-/// glass buttons. No info control (the owner
-/// 2026-11-21: the shortcuts "don't need to be on every screen"; Keyboard Shortcuts is a row on the Mac list; after
-/// build 46 brought it back: "No, no truncation. Cut it again").
+/// Back to Macs (top-left, the shared `BackToMacsButton`); Screens (several screens only, top-right): small round glass
+/// buttons. No info control.
 private struct TopCornerButtons: View {
     let model: SessionModel?
     var back: (() -> Void)? = nil
@@ -705,12 +695,10 @@ private struct TopCornerButtons: View {
     }
 }
 
-/// The horizontal view's controls over the Mac picture (full-screen state). The owner 2026-11-21: "In the horizontal view,
-/// we need almost total transparency for the trackpad and the buttons so we can see the pointer behind it." / "We
-/// can't depend on system settings for transparency. We need to enforce super transparent." So no system material
-/// (Liquid Glass follows Clear/Tinted, Reduce Transparency and Increase Contrast): a fixed near-zero fill with no
-/// blur, a thin two-tone rim (light line on a dark line, so it shows over a white window and a dark one), and the
-/// symbol with a halo of the opposite colour.
+/// The horizontal view's controls over the Mac picture (full-screen state). / "We can't depend on system settings for
+/// transparency. We need to enforce super transparent." So no system material (Liquid Glass follows Clear/Tinted,
+/// Reduce Transparency and Increase Contrast): a fixed near-zero fill with no blur, a thin two-tone rim (light line on
+/// a dark line, so it shows over a white window and a dark one), and the symbol with a halo of the opposite colour.
 enum ClearLook {
     /// 6% of black in light mode, 6% of white in dark mode.
     static let fill = Color(UIColor { $0.userInterfaceStyle == .dark
@@ -743,11 +731,9 @@ extension View {
 }
 
 /// The two controls in the screen's bottom corners (the Click button and the trackpad) follow the open Duo's own
-/// rounded display corner (the owner 2026-11-21: "the bottom left edge of the left click button and the bottom right edge
-/// of the touchpad are covered by the actual physical curve of the Duo. Ideally, we have a rounded edge on both of
-/// those corners to fit the screen."). The corner in the screen's corner is `.concentric`: SwiftUI's
-/// `ConcentricRectangle` (iOS 26) gives it the container shape's radius minus the distance from it; with no closer
-/// container shape that is the window, whose shape is the display's corner. The other three keep `fixed`.
+/// rounded display corner. The corner in the screen's corner is `.concentric`: SwiftUI's `ConcentricRectangle` (iOS 26)
+/// gives it the container shape's radius minus the distance from it; with no closer container shape that is the window,
+/// whose shape is the display's corner. The other three keep `fixed`.
 enum CornerShapes {
     static func shape(fixed: CGFloat, concentric corner: HorizontalLayout.ScreenCorner?) -> AnyShape {
         let f = Edge.Corner.Style.fixed(fixed)
@@ -758,11 +744,10 @@ enum CornerShapes {
     }
 }
 
-/// A log line each time something that can change the column's look changes, with the reason (the owner's fading buttons,
-/// 2026-11-21, not reproduced in the simulator): the keyboard up or down, the held-picture fade (half opacity), input
-/// on or off, the system's dimmed tint (`tintAdjustmentMode`, set while the system shows something over the app),
-/// and the window gaining or losing key status. Read with Console, subsystem com.example.duodesktop, category
-/// "column".
+/// A log line each time something that can change the column's look changes, with the reason: the keyboard up or down,
+/// the held-picture fade (half opacity), input on or off, the system's dimmed tint (`tintAdjustmentMode`, set while the
+/// system shows something over the app), and the window gaining or losing key status. Read with Console, subsystem
+/// com.example.duodesktop, category "column".
 struct ColumnLookWatch: UIViewRepresentable {
     let typing: Bool
     let held: Bool

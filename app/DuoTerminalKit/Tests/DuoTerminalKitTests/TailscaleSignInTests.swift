@@ -4,7 +4,7 @@ import NIOEmbedded
 import NIOSSH
 import XCTest
 
-/// project notes, terminal-only computers, M2: the Tailscale (`none`) sign-in.
+/// Project notes, terminal-only computers, M2: the Tailscale (`none`) sign-in.
 final class TailscaleSignInTests: XCTestCase {
     /// The Tailscale sign-in offers SSH's `none` method with the user name, once; no key, no password.
     func testTailscaleSignInOffersNoneOnce() throws {
@@ -22,8 +22,8 @@ final class TailscaleSignInTests: XCTestCase {
         XCTAssertThrowsError(try second.futureResult.wait()) { XCTAssertTrue($0 is SSHNotTailscale) }
     }
 
-    /// Tailscale's refusal banner (its exact words, from the live probe of 2026-11-22) ends the sign-in at once
-    /// with those words; another banner is passed on and the sign-in goes on.
+    /// Tailscale's refusal banner ends the sign-in at once with those words; another banner is passed on and the
+    /// sign-in goes on.
     func testTailscaleRefusalBannerFailsTheSignInAtOnce() throws {
         let words = "tailscale: tailnet policy does not permit you to SSH as user \"root\"\n"
         XCTAssertTrue(TailscaleBanner.isRefusal(words))

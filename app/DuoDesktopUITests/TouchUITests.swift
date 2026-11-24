@@ -1,8 +1,8 @@
 import XCTest
 
-// UI-level touch tests (host key release order, item 4, 2026-11-20): real touches on the Mac picture in the
-// simulator, checked against what Glass Act's test host received. Needs the patched test host running and logging
-// (`duo-screens/patches/testhost-input-log-and-release.patch`); its log path comes in as DUO_HOST_LOG (set with
+// UI-level touch tests: real touches on the Mac picture in the simulator, checked against what Glass Act's test host
+// received. Needs the patched test host running and logging
+// (`patches/testhost-input-log-and-release.patch`); its log path comes in as DUO_HOST_LOG (set with
 // TEST_RUNNER_DUO_HOST_LOG). Run with the DuoDesktopUITests scheme; the unit tests do not need the host.
 
 /// The test host's stdout: "glassact-testhost: [time] input: …" lines.
@@ -79,10 +79,9 @@ final class TouchUITests: XCTestCase {
         print("DUO-UI \(name):\n" + lines.joined(separator: "\n"))
     }
 
-    // MARK: Our horizontal keyboard's pop-up, seen while a real touch is down (project notes).
-    // Each key is held for 2.5 s; the screen is captured from outside (`xcrun simctl io … screenshot`) while it is
-    // down. The marker file (TEST_RUNNER_DUO_PRESS_MARK) names the key being held, so the capture loop labels the
-    // pictures.
+    // MARK: Our horizontal keyboard's pop-up, seen while a real touch is down. Each key is held for 2.5 s; the screen
+    // is captured from outside (`xcrun simctl io … screenshot`) while it is down. The marker file
+    // (TEST_RUNNER_DUO_PRESS_MARK) names the key being held, so the capture loop labels the pictures.
 
     func testKeyPopupShownWhileHeldHorizontal() throws {
         let mark = ProcessInfo.processInfo.environment["DUO_PRESS_MARK"]
@@ -124,9 +123,9 @@ final class TouchUITests: XCTestCase {
     func testHoldThenDragUpright() { holdThenDrag(horizontal: false) }
     func testHoldThenDragHorizontal() { holdThenDrag(horizontal: true) }
 
-    // Three-finger swipes: not here. XCUITest has no public multi-finger swipe, and driving XCTest's private
-    // event synthesis (XCPointerEventPath) crashed the test runner on iOS 27.2 (2026-11-20). Covered at the
-    // engine level by TouchLikeMacBookProTests; by hand on the device.
+    // Three-finger swipes: not here. XCUITest has no public multi-finger swipe, and driving XCTest's private event
+    // synthesis (XCPointerEventPath) crashed the test runner on iOS 27.2. Covered at the engine level by
+    // TouchLikeMacBookProTests; by hand on the device.
 
     // MARK: Edge swipes: in from the top → pointer to the top edge; from the bottom → bottom edge. No scroll.
 
@@ -183,7 +182,7 @@ final class TouchUITests: XCTestCase {
         if !order.contains(nil) { XCTAssertEqual(order.map { $0! }, order.map { $0! }.sorted(), "wrong order") }
     }
 
-    // MARK: Click buttons (the owner 2026-11-20: "There should be a button under the left thumb for click.")
+    // MARK: Click buttons
 
     /// Left click held by one finger while another moves on the trackpad: button down, drag moves, button up, in
     /// that order. XCUITest has no public API for two fingers on two elements at once, so both fingers go in one
@@ -308,11 +307,10 @@ enum TwoFingers {
     }
 }
 
-/// Every picture size the Host can send, through changes mid-session (project notes).
-/// Needs the test host with the picture-size patch, started with
-/// `--size 1920x1080 --picture-steps 4:960x540,55:1366x767,105:1920x1080,155:960x540` (seconds after the
-/// viewer's geometry settles); DUO_PICTURE_STEPS=1 (TEST_RUNNER_DUO_PICTURE_STEPS) turns this test on, and the
-/// other UI tests run against a host without steps.
+/// Every picture size the Host can send, through changes mid-session. Needs the test host with the picture-size patch,
+/// started with `--size 1920x1080 --picture-steps 4:960x540,55:1366x767,105:1920x1080,155:960x540` (seconds after the
+/// viewer's geometry settles); DUO_PICTURE_STEPS=1 (TEST_RUNNER_DUO_PICTURE_STEPS) turns this test on, and the other UI
+/// tests run against a host without steps.
 final class PictureSizeUITests: XCTestCase {
     private var app: XCUIApplication!
     private var log: HostLog!

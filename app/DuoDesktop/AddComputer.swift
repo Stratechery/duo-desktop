@@ -4,15 +4,45 @@ import Security
 import SwiftUI
 import UIKit
 
-// Add Computer (project notes, one computer with any connection, milestone 2). the owner 2026-11-22: "You should choose to add
-// a computer and then choose what to start with: screen sharing or terminal or jetkvm. Then you can add the others".
-// One sheet (HIG Sheets: "a distinct, narrowly scoped task"): Name, then Start With, a segmented control (HIG
-// Segmented controls: closely related, mutually exclusive choices that change what the view below shows), then
-// only that way in's fields. Add checks that one way in and says what happened in place (HIG: validate in place,
-// say how to fix it). The same sheet, from a computer's ⓘ page, adds one more way in to that computer.
+// Add Computer. One sheet (HIG Sheets: "a distinct, narrowly scoped task"): Name, then Start With, a segmented control
+// (HIG Segmented controls: closely related, mutually exclusive choices that change what the view below shows), then
+// only that way in's fields. Add checks that one way in and says what happened in place (HIG: validate in place, say
+// how to fix it). The same sheet, from a computer's ⓘ page, adds one more way in to that computer.
 
-/// Set when a check's deadline passed (project notes 2), read by the check that it cut short.
+/// Set when a check's deadline passed, read by the check that it cut short.
 @MainActor final class DeadlineFlag { var passed = false }
+
+/// Start With's choices: the ways in, with Remote Desktop beside Screen Sharing in a Remote Desktop build. Remote
+/// Desktop fills Screen Sharing's slot on the computer (`MacEntry.remoteDesktop`): a computer has one or the other.
+enum AddWay: String, Identifiable, Hashable, CaseIterable {
+    case screenSharing, remoteDesktop, terminal, jetkvm
+
+    init(_ way: WayIn) {
+        switch way {
+        case .screenSharing: self = .screenSharing
+        case .terminal: self = .terminal
+        case .jetkvm: self = .jetkvm
+        }
+    }
+
+    var id: String { rawValue }
+    /// The computer's way in this fills.
+    var slot: WayIn {
+        switch self {
+        case .screenSharing, .remoteDesktop: .screenSharing
+        case .terminal: .terminal
+        case .jetkvm: .jetkvm
+        }
+    }
+    var label: String { self == .remoteDesktop ? "Remote Desktop" : slot.label }
+
+    /// What this build's Start With lists.
+    static var inThisBuild: [AddWay] {
+        var w = WayIn.inThisBuild.map(AddWay.init)
+        if RDPScreen.inThisBuild { w.insert(.remoteDesktop, at: 1) }
+        return w
+    }
+}
 
 /// What the Add check said, in place.
 struct AddCheckResult: Equatable {
@@ -29,7 +59,7 @@ struct AddComputerSheet: View {
     @Environment(\.openURL) private var openURL
 
     @State private var name: String
-    @State private var way: WayIn
+    @State private var way: AddWay
     // Screen Sharing (Glass Act Host), as the Add Mac sheet before it.
     @State private var nearby = NearbyHosts()
     @State private var check = AddressCheck()
@@ -48,6 +78,8 @@ struct AddComputerSheet: View {
     // JetKVM.
     @State private var kvmAddress: String
     @State private var kvmPassword = ""
+    // Remote Desktop (a Windows PC): Address, Port, User Name; the name is the sheet's own.
+    @State private var pc: RDPForm
 
     // Project notes 5/6: the Terminal check's steps, said in place, and the one-time password sign-in that
     // adds this iPhone's key when the computer does not accept it yet.
@@ -64,7 +96,7 @@ struct AddComputerSheet: View {
     @State private var added: String?
     @State private var result: AddCheckResult?
 
-    init(store: MacStore, identity: SecIdentity?, existingID: String? = nil, fixedWay: WayIn? = nil) {
+    init(store: MacStore, identity: SecIdentity?, existingID: String? = nil, fixedWay: AddWay? = nil) {
         self.store = store
         self.identity = identity
         self.existingID = existingID
@@ -77,15 +109,21 @@ struct AddComputerSheet: View {
         _address = State(initialValue: fields?.address ?? e.flatMap { $0.address(.tailscale) ?? $0.address(.home) } ?? "")
         _port = State(initialValue: String(e?.sshPort ?? 22))
         _user = State(initialValue: fields?.user ?? e?.sshUser ?? "")
-        _signIn = State(initialValue: e?.terminalSignIn ?? .tailscale)
-        _opens = State(initialValue: e?.terminalOpens ?? .tmux)
+        // A PC starts from a PC's choices (`correctForPC`), whatever was saved before it was known to be one.
+        let c = e.map { x -> MacEntry in var y = x; y.correctForPC(); return y }
+        _signIn = State(initialValue: c?.terminalSignIn ?? .tailscale)
+        _opens = State(initialValue: c?.terminalOpens ?? .tmux)
         _kvmAddress = State(initialValue: fields?.kvmAddress ?? e?.jetkvmAddress ?? "")
         _kvmPassword = State(initialValue: SimulatorSwitches.addKVMPasswordFromFile ?? "")
+        // Remote Desktop added later starts from the computer's address and its last Remote Desktop fields.
+        var pc = e.map(RDPForm.init) ?? RDPForm()
+        if let fields { pc.address = fields.address; pc.user = fields.user }
+        _pc = State(initialValue: pc)
     }
 
-    /// The computer this sheet changes: the one from the ⓘ page, or the one its first Add saved. Order
-    /// computers-m2-fixes 2: after a failed check the plan's "saved anyway" holds, so the computer is in the list; a
-    /// corrected try updates that SAME computer, never a second one.
+    /// The computer this sheet changes: the one from the ⓘ page, or the one its first Add saved. after a failed check
+    /// the plan's "saved anyway" holds, so the computer is in the list; a corrected try updates that SAME computer,
+    /// never a second one.
     private var existing: MacEntry? { (existingID ?? added).flatMap { store.entry($0) } }
     /// Add ran and its check is still out.
     private var checking: Bool { added != nil && result == nil }
@@ -93,8 +131,8 @@ struct AddComputerSheet: View {
     private var passed: Bool { result?.ok == true }
     /// Add ran and its check failed: the fields stay editable and the button reads Try Again.
     private var failed: Bool { added != nil && result?.ok == false }
-    /// The ways this build can add (review finding 4: never one the build cannot show).
-    private var choices: [WayIn] { WayIn.inThisBuild }
+    /// The ways this build can add.
+    private var choices: [AddWay] { AddWay.inThisBuild }
 
     var body: some View {
         NavigationStack {
@@ -106,13 +144,10 @@ struct AddComputerSheet: View {
                     }
                     if choices.count > 1 {
                         Section {
-                            Picker("Start With", selection: $way) {
-                                ForEach(choices) { Text($0.label).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                            .accessibilityIdentifier("addStartWith")
-                            // Once saved, the computer has this way in; a different one is added from its ⓘ page.
-                            .disabled(added != nil)
+                            startWithPicker
+                                .accessibilityIdentifier("addStartWith")
+                                // Once saved, the computer has this way in; a different one is added from its ⓘ page.
+                                .disabled(added != nil)
                         } header: {
                             Text("Start With")
                         } footer: {
@@ -124,6 +159,7 @@ struct AddComputerSheet: View {
                 case .screenSharing: screenSharingFields
                 case .terminal: terminalFields
                 case .jetkvm: jetkvmFields
+                case .remoteDesktop: remoteDesktopFields
                 }
                 if let problem {
                     Section {
@@ -142,7 +178,7 @@ struct AddComputerSheet: View {
                                 .accessibilityIdentifier("addCheck")
                                 .id("addCheck")
                             if !r.ok {
-                                Text("Saved anyway. Change what is wrong above and tap Try Again, or fix it later in the computer’s settings (ⓘ).")
+                                Text(Self.savedAnyway)
                                     .foregroundStyle(.secondary)
                             }
                         } else {
@@ -241,9 +277,19 @@ struct AddComputerSheet: View {
         }
     }
 
-    static func footer(_ way: WayIn) -> String {
+    /// Start With: a segmented control for up to three choices; four (a Remote Desktop build) do not fit its labels on
+    /// an iPhone's width, so a menu row (HIG Pickers: a menu for a short list in a form).
+    @ViewBuilder private var startWithPicker: some View {
+        let picker = Picker("Start With", selection: $way) {
+            ForEach(choices) { Text($0.label).tag($0) }
+        }
+        if choices.count > 3 { picker.pickerStyle(.menu) } else { picker.pickerStyle(.segmented) }
+    }
+
+    static func footer(_ way: AddWay) -> String {
         switch way {
         case .screenSharing: "Screen Sharing: a Mac running Glass Act Host."
+        case .remoteDesktop: "Remote Desktop: a Windows PC with Remote Desktop turned on."
         case .terminal: "Terminal: any computer you reach over SSH."
         case .jetkvm: "JetKVM: any computer with a JetKVM plugged in, even with nothing installed on it."
         }
@@ -292,8 +338,8 @@ struct AddComputerSheet: View {
             Text("A Tailscale name (my-mac) or a home name (My-Mac.local).")
         }
         if check.state == .noAnswer {
-            // The owner 2026-11-22: "I tried to add a Mac and it errored out with "no glass host" installed. But I could
-            // have added jetkvm". The sheet says so and offers the other ways in, keeping what was typed.
+            // No glass host" installed. But I could have added jetkvm". The sheet says so and offers the other ways in,
+            // keeping what was typed.
             Section {
                 Label("No Glass Act Host answered at \(check.checked?.host ?? "this address").",
                       systemImage: "exclamationmark.triangle.fill")
@@ -355,9 +401,12 @@ struct AddComputerSheet: View {
     }
 
     /// No Host: carry on with another way in. Everything typed stays; the Terminal starts at the typed address.
-    private func switchTo(_ w: WayIn) {
+    private func switchTo(_ w: AddWay) {
         if w == .terminal, address.trimmingCharacters(in: .whitespaces).isEmpty, let h = check.checked?.host {
             address = h
+        }
+        if w == .remoteDesktop, pc.address.trimmingCharacters(in: .whitespaces).isEmpty, let h = check.checked?.host {
+            pc.address = h
         }
         if name.trimmingCharacters(in: .whitespaces).isEmpty, let h = check.checked?.host {
             name = Self.suggestedName(h)
@@ -446,20 +495,25 @@ struct AddComputerSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled().textContentType(.username)
                         .accessibilityIdentifier("addTerminalUser")
                 }
-                Picker("Sign In With", selection: $signIn) {
-                    ForEach(TerminalSignIn.allCases) { Text($0.label).tag($0) }
+                if isPC {
+                    // A PC's one way in and its one shell, as plain lines.
+                    PCTerminalRows()
+                } else {
+                    Picker("Sign In With", selection: $signIn) {
+                        ForEach(TerminalSignIn.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("addTerminalSignIn")
+                    Picker("Opens", selection: $opens) {
+                        ForEach(TerminalOpens.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("addTerminalOpens")
                 }
-                .pickerStyle(.menu)
-                .accessibilityIdentifier("addTerminalSignIn")
-                Picker("Opens", selection: $opens) {
-                    ForEach(TerminalOpens.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .accessibilityIdentifier("addTerminalOpens")
             } header: {
                 Text("Sign In")
             } footer: {
-                Text("Tailscale: for a computer with Tailscale SSH on; nothing to install. This iPhone’s Key: the computer must list the key below. tmux keeps the session when the link drops; Login Shell is whatever the computer starts.")
+                Text(isPC ? PCTerminalRows.footer : Self.terminalSignInFooter)
             }
             if signIn == .phoneKey, let k = try? TerminalKeys.phoneKey() {
                 PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
@@ -467,6 +521,9 @@ struct AddComputerSheet: View {
         }
         #endif
     }
+
+    /// This computer's Terminal is a PC's (`MacEntry.isPC`): Remote Desktop is a way in, or a check heard Windows.
+    private var isPC: Bool { existing?.isPC ?? false }
 
     private func saveTerminal() {
         #if DUO_TERMINAL
@@ -509,6 +566,7 @@ struct AddComputerSheet: View {
                 x.sshUser = t(user)
                 x.terminalSignIn = signIn
                 x.terminalOpens = opens
+                x.correctForPC()
             }
             added = e.id
         } else {
@@ -523,12 +581,14 @@ struct AddComputerSheet: View {
     #if DUO_TERMINAL
     private func runTerminalCheck(_ id: String) async {
         guard let e = store.entry(id) else { return }
-        let r = await TerminalComputerCheck.check(e)
+        let r = await TerminalComputerCheck.check(e, store: store)
+        // The check may have found a PC (its server's first line): the sheet shows a PC's choices from now on.
+        if let now = store.entry(id), now.isPC { signIn = .phoneKey; opens = .loginShell }
         keyHelp = r.passwordCanAddKey ? .password : (r.keyByHandOnly ? .copyOnly : .none)
         result = AddCheckResult(ok: r.ok, text: r.ok ? "\(r.text) \(e.name) is added." : r.text)
     }
 
-    /// What the Host said, in plain words (project notes 6), pure for tests.
+    /// What the Host said, in plain words, pure for tests.
     static func hostSteps(_ o: TerminalKeyByHost.LinkOutcome, typed: String) -> [String] {
         switch o {
         case let .answered(.answered(r)):
@@ -552,7 +612,7 @@ struct AddComputerSheet: View {
         }
     }
 
-    /// The one-time password sign-in (project notes 5).
+    /// The one-time password sign-in.
     private func installByPassword() async {
         guard let id = added, let e = store.entry(id), AppAccess.isOpen else { return }
         let pw = sshPassword
@@ -561,6 +621,10 @@ struct AddComputerSheet: View {
         installNote = nil
         defer { installing = false }
         let r = await TerminalKeyByPassword.install(e, user: e.sshUser ?? user, password: pw)
+        if r.windows {
+            store.update(id) { $0.terminalSystem = .windows; $0.correctForPC() }
+            signIn = .phoneKey; opens = .loginShell
+        }
         guard r.ok else {
             installNote = r.text
             if r.keyByHandOnly { keyHelp = .copyOnly }
@@ -608,19 +672,30 @@ struct AddComputerSheet: View {
             } header: {
                 Text("Add This iPhone’s Key")
             } footer: {
-                // the owner 2026-11-21: "signing in with your Mac username and password is reasonable".
-                Text("Duo Desktop signs in to \(existing?.name ?? "the computer") once as “\(existing?.sshUser ?? user)” with this password, adds this iPhone’s key to ~/.ssh/authorized_keys and signs out. The password is used for that one sign-in and is never kept or logged. After that, Terminal signs in with the key.")
+                // 
+                Text("Duo Desktop signs in to \(existing?.name ?? "the computer") once as “\(existing?.sshUser ?? user)” with this password, adds this iPhone’s key to the account’s list of allowed keys and signs out. The password is used for that one sign-in and is never kept or logged. After that, Sign In With is This iPhone’s Key.")
             }
         case .copyOnly:
             if let installNote {
                 Section { Label(installNote, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
             }
-            if let k = try? TerminalKeys.phoneKey() {
+            // Once Sign In With is This iPhone's Key the fields already show the key; never two copies.
+            if signIn != .phoneKey, let k = try? TerminalKeys.phoneKey() {
                 PhoneKeySection(line: k.authorizedKeysLine(comment: "duo-desktop"))
             }
         }
         #endif
     }
+
+    /// Under a failed check: the check's words already say what to do.
+    static let savedAnyway = "Saved anyway. When that is done, tap Try Again. Or tap Done and fix it later in the computer’s settings (ⓘ)."
+    /// Under Sign In for a computer without Glass Act Host: one line per choice, when to pick it.
+    static let terminalSignInFooter = """
+        Tailscale: pick this if the computer has Tailscale SSH turned on.
+        This iPhone’s Key: pick this for any other computer, including a Windows PC.
+        tmux: pick this for a Mac or Linux computer, to come back to the same session after the link drops.
+        Login Shell: pick this for a Windows PC, or for a fresh prompt each time.
+        """
 
     // MARK: JetKVM
 
@@ -692,6 +767,47 @@ struct AddComputerSheet: View {
         #endif
     }
 
+    // MARK: Remote Desktop
+
+    @ViewBuilder private var remoteDesktopFields: some View {
+        #if DUO_RDP
+        RDPAddressFields(form: $pc, prefix: "addPC", header: "Address")
+        Section {
+            LabeledContent("User Name") {
+                TextField("Required", text: $pc.user)
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().textContentType(.username)
+                    .accessibilityIdentifier("addPCUser")
+            }
+        } header: {
+            Text("Sign In")
+        } footer: {
+            Text(RDPForm.passwordFoot)
+        }
+        Section {
+        } footer: {
+            Text(RDPForm.needs)
+        }
+        #endif
+    }
+
+    /// Saves the PC (new, or Remote Desktop added to this computer) and closes: nothing is contacted here; the list's
+    /// light shows whether the PC answers.
+    private func saveRemoteDesktop() {
+        #if DUO_RDP
+        var f = pc
+        f.name = existingID == nil ? name : (existing?.name ?? name)
+        if let p = f.problem { problem = p; return }
+        problem = nil
+        if let e = existing {
+            store.update(e.id) { f.addWay(to: &$0) }
+        } else {
+            f.add(to: store)
+        }
+        dismiss()
+        #endif
+    }
+
     // MARK: Add
 
     private func add() {
@@ -712,6 +828,8 @@ struct AddComputerSheet: View {
             saveTerminal()
         case .jetkvm:
             saveJetKVM()
+        case .remoteDesktop:
+            saveRemoteDesktop()
         }
     }
 }

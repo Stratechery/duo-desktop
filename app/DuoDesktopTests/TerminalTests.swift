@@ -3,7 +3,7 @@ import GlassActTransport
 import XCTest
 @testable import DuoDesktop
 
-/// project notes, M1: one test per claim.
+/// Project notes, M1: one test per claim.
 @MainActor
 final class TerminalTests: XCTestCase {
     /// Claim: a Mac list saved before the Terminal switch existed loads unchanged, every Mac with Terminal off,
@@ -58,8 +58,8 @@ final class TerminalTests: XCTestCase {
         XCTAssertEqual(TerminalPaste.prepare("printf 'duo-paste\\n'\n"), "printf 'duo-paste\\n'")
     }
 
-    /// Claim: the band is one row of the nine chosen keys in the owner's order (the owner 2026-11-21: "make it only one
-    /// row"), 44 pt tall, and the terminal takes the rest of the band.
+    /// Claim: the band is one row of the nine chosen keys in the owner's order, 44 pt tall, and the terminal takes the
+    /// rest of the band.
     func testOneRowOfKeys() {
         XCTAssertEqual(TerminalKey.row, [.esc, .tab, .ctrl, .left, .up, .down, .right, .ctrlC, .paste])
         XCTAssertEqual(TerminalKey.row.map(\.label), ["esc", "tab", "ctrl", "←", "↑", "↓", "→", "⌃C", "Paste"])

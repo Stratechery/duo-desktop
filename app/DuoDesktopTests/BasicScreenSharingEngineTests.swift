@@ -1,6 +1,6 @@
-// Milestone 0 of project notes: our RoyalVNCKit copy is linked and runs in the DUO_VNC build,
-// and About names it with its licences. No computer is contacted. (The library's own sign-in tests are in
-// ../royalvnc/Tests: `swift test` there.)
+// Milestone 0 of project notes: our RoyalVNCKit copy is linked and runs in the DUO_VNC build, and About names it with
+// its licences. No computer is contacted. (The library's own sign-in tests are in../royalvnc/Tests: `swift test`
+// there.)
 #if DUO_VNC
 import XCTest
 import RoyalVNCKit

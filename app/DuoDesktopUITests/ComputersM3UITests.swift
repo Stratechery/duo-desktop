@@ -33,7 +33,7 @@ final class ComputersM3UITests: XCTestCase {
         XCTAssertTrue(icon.waitForExistence(timeout: 10))
         XCTAssertEqual(icon.label, "Open Both Test Mac in Terminal")
         icon.tap()
-        XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5), "the Terminal screen's name bubble")
+        XCTAssertTrue(app.descendants(matching: .any)["terminal"].waitForExistence(timeout: 5), "the Terminal screen")
         XCTAssertFalse(app.buttons["Cancel"].exists, "no Glass Act connecting row")
         XCTAssertTrue(app.buttons["openInstead.screenSharing"].waitForExistence(timeout: 15), "offers Screen Sharing")
         // Project notes (view-selector-back): the session's own views control (the switch, or its one-button menu form).
@@ -50,7 +50,7 @@ final class ComputersM3UITests: XCTestCase {
         let instead = app.buttons["openInstead.terminal"]
         XCTAssertTrue(instead.waitForExistence(timeout: 10), "offered while connecting")
         instead.tap()
-        XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5), "the Terminal screen")
+        XCTAssertTrue(app.descendants(matching: .any)["terminal"].waitForExistence(timeout: 5), "the Terminal screen")
         app.buttons["backToMacs"].firstMatch.tap()
         XCTAssertTrue(app.buttons["way.terminal.Both Test Mac"].waitForExistence(timeout: 5), "back on the list")
         XCTAssertFalse(app.buttons["Cancel"].exists, "the Screen Sharing attempt was ended")

@@ -8,10 +8,10 @@ import DuoTerminalKit
 import JetKVMProtocol
 #endif
 
-/// Review fixes (review finding 3, 2026-11-21): the Terminal and JetKVM links obey the app lock. the reviewer's focused
-/// check: start the optional views, go to the background past the lock threshold, come back and CANCEL Touch ID
-/// while the SSH transport is lost; zero SSH attempts, JetKVM password reads or JetKVM starts until the same unlock
-/// succeeds. Fake Touch ID, fake JetKVM password and start, an SSH link to a closed local port. Made-up names only.
+/// Review fixes: the Terminal and JetKVM links obey the app lock. the reviewer's focused check: start the optional
+/// views, go to the background past the lock threshold, come back and CANCEL Touch ID while the SSH transport is lost;
+/// zero SSH attempts, JetKVM password reads or JetKVM starts until the same unlock succeeds. Fake Touch ID, fake JetKVM
+/// password and start, an SSH link to a closed local port. Made-up names only.
 @MainActor
 final class AppLockLinksTests: XCTestCase {
     private var before: AppAccess.State = .locked

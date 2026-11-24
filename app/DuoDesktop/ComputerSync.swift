@@ -3,8 +3,7 @@ import GlassActTransport
 import Observation
 import Security
 
-// The computer list syncing through iCloud (project notes, Part A, with the reviewer's corrections
-// in its §A9). the owner 2026-11-22: "CloudKit"; "Newest wins"; on removing, "Maybe ask if it deletes everywhere?"; "On".
+// The computer list syncing through iCloud.
 //
 // This file holds the rules and nothing of CloudKit, so the tests can run them with two lists and a pretend iCloud:
 // - `SyncedComputer`: the fields that sync (the A3 allow-list). Passwords, private keys and Keychain items are not in
@@ -31,6 +30,12 @@ struct SyncedComputer: Codable, Equatable {
     var sshPort: UInt16?
     var terminalSignIn: String?
     var terminalOpens: String?
+    /// `TerminalSystem`. Never in `payload`: `CloudComputerSync` keeps it in its own record field, as Remote Desktop's,
+    /// so an older build, which saves only `payload`, leaves it in iCloud. nil: not known there; this iPhone's own
+    /// value stays.
+    var terminalSystem: String?
+    /// `MacEntry.unameSystem`, in its own record field the same way. nil: this iPhone's stays.
+    var unameSystem: String?
     var jetkvm: Bool
     var jetkvmAddress: String?
     /// Whether the JetKVM has a password (typed on some iPhone). Only this yes/no syncs; the password stays in that
@@ -38,6 +43,10 @@ struct SyncedComputer: Codable, Equatable {
     var jetkvmPassword: Bool?
     var opensIn: String?
     var layout: String
+    /// The Remote Desktop way in. Never in `payload`: `CloudComputerSync` keeps it in its own record field, so an older
+    /// build, which saves only `payload`, leaves it as it was in iCloud. nil: not known (a record an older build made):
+    /// this iPhone's own values stay.
+    var remoteDesktop: SyncedRemoteDesktop?
 
     init(_ e: MacEntry) {
         name = e.name
@@ -51,11 +60,14 @@ struct SyncedComputer: Codable, Equatable {
         sshPort = e.sshPort
         terminalSignIn = e.terminalSignIn?.rawValue
         terminalOpens = e.terminalOpens?.rawValue
+        terminalSystem = e.terminalSystem?.rawValue
+        unameSystem = e.unameSystem?.rawValue
         jetkvm = e.jetkvm ?? false
         jetkvmAddress = e.jetkvmAddress
         jetkvmPassword = e.jetkvmPassword
         opensIn = e.opensIn?.rawValue
         layout = e.layout
+        remoteDesktop = SyncedRemoteDesktop(e)
     }
 
     /// Writes these fields into `e`, keeping its own (id, last used, last address, view, Unlock Automatically).
@@ -72,11 +84,14 @@ struct SyncedComputer: Codable, Equatable {
         e.sshPort = sshPort
         e.terminalSignIn = terminalSignIn.flatMap(TerminalSignIn.init(rawValue:)) ?? e.terminalSignIn
         e.terminalOpens = terminalOpens.flatMap(TerminalOpens.init(rawValue:)) ?? e.terminalOpens
+        e.terminalSystem = terminalSystem.flatMap(TerminalSystem.init(rawValue:)) ?? e.terminalSystem
+        e.unameSystem = unameSystem.flatMap(ComputerSystem.init(rawValue:)) ?? e.unameSystem
         e.jetkvm = jetkvm
         e.jetkvmAddress = jetkvmAddress
         e.jetkvmPassword = jetkvmPassword
         e.opensIn = opensIn.flatMap(WayIn.init(rawValue:))
         e.layout = layout
+        remoteDesktop?.apply(to: &e)
         e.kind = screenSharing ? nil : .terminal
         if !screenSharing {
             e.lastAddress = nil
@@ -95,6 +110,35 @@ struct SyncedComputer: Codable, Equatable {
 
     /// An edit time as the list keeps it: "the earliest time" (an entry saved before sync) stays no time at all.
     static func stored(_ editedAt: Date) -> Date? { editedAt == .distantPast ? nil : editedAt }
+}
+
+/// The Remote Desktop fields that sync: whether the PC has it, its port, user name, size and text size. Never: the
+/// password (typed at each connect, never stored), the PC's trusted certificate and "Don't Ask Again". Choices are raw
+/// words, as in `SyncedComputer`.
+struct SyncedRemoteDesktop: Codable, Equatable {
+    var on: Bool
+    var port: UInt16?
+    var user: String?
+    var size: String?
+    var textSize: Int?
+
+    init(_ e: MacEntry) {
+        on = e.remoteDesktop ?? false
+        port = e.rdpPort
+        user = e.rdpUser
+        size = e.rdpSize?.rawValue
+        textSize = e.rdpTextSize?.rawValue
+    }
+
+    /// Writes these fields into `e`. Taken away elsewhere: the trusted certificate goes too, as Remove does here.
+    func apply(to e: inout MacEntry) {
+        e.remoteDesktop = on
+        e.rdpPort = port
+        e.rdpUser = user
+        e.rdpSize = size.flatMap(RDPScreen.Size.init(rawValue:)) ?? (size == nil ? nil : e.rdpSize)
+        e.rdpTextSize = textSize.flatMap(RDPScreen.TextSize.init(rawValue:)) ?? (textSize == nil ? nil : e.rdpTextSize)
+        if !on { e.rdpCertificate = nil }
+    }
 }
 
 /// One record in iCloud (record type `Computer`, all of it in one encrypted field): when the person last changed the
@@ -118,6 +162,8 @@ enum ComputerIdentity {
         if a.screenSharing && b.screenSharing && a.port == b.port && shared { return true }
         if a.terminal && b.terminal && (a.sshPort ?? 22) == (b.sshPort ?? 22) && shared { return true }
         if a.jetkvm && b.jetkvm, let ja = jetkvmHost(a), ja == jetkvmHost(b) { return true }
+        if let ra = a.remoteDesktop, let rb = b.remoteDesktop, ra.on && rb.on, (ra.port ?? 3389) == (rb.port ?? 3389),
+           shared { return true }
         return false
     }
 
@@ -220,6 +266,12 @@ final class ComputerSync {
         /// CloudKit's own saved state (CKSyncEngine.State.Serialization, JSON) and each record's change tag.
         var engine: Data?
         var tags: [String: Data] = [:]
+        /// Computers iCloud refused (not a network blip), by sync id: the refusal in plain words. They stay in `unsent`
+        /// and go again each time the app opens.
+        var refused: [String: String] = [:]
+        /// When iCloud last took a computer from this iPhone, and when this iPhone last finished a check for changes.
+        var lastSent: Date?
+        var lastChecked: Date?
     }
 
     static let enabledKey = "syncComputersWithICloud"
@@ -254,7 +306,7 @@ final class ComputerSync {
 
     // MARK: The switch
 
-    /// On by default (the owner 2026-11-22: "On").
+    /// On by default.
     var enabled: Bool {
         get {
             access(keyPath: \.enabled)
@@ -301,6 +353,28 @@ final class ComputerSync {
 
     var hiddenCount: Int { state.hidden.count }
 
+    /// The footer's lines about what moved and what waits: when this iPhone last sent and last checked, how many
+    /// computers wait, and iCloud's last refusal with what happens next.
+    var detailLines: [String] {
+        var out: [String] = []
+        let when: (Date?) -> String = { d in
+            guard let d else { return "not yet" }
+            return d.formatted(date: Calendar.current.isDateInToday(d) ? .omitted : .abbreviated, time: .shortened)
+        }
+        out.append("Last sent: \(when(state.lastSent)). Last checked for changes: \(when(state.lastChecked)).")
+        let waiting = state.unsent.count
+        if waiting > 0 {
+            out.append(waiting == 1 ? "1 computer is waiting to be sent." : "\(waiting) computers are waiting to be sent.")
+        }
+        let refused = state.refused.count
+        if let why = state.refused.values.sorted().first {
+            out.append(refused == 1
+                ? "iCloud refused 1 computer: \(why) It goes again each time you open Duo Desktop. You do not need to change it."
+                : "iCloud refused \(refused) computers: \(why) They go again each time you open Duo Desktop. You do not need to change them.")
+        }
+        return out
+    }
+
     /// Add Computer typed a computer this iPhone hid: that hidden one, taken out of hiding (plan §A9.1: re-adding finds
     /// the same computer and does not make a second one). nil when none matches.
     func takeHidden(matching e: MacEntry) -> (syncID: String, entry: MacEntry)? {
@@ -332,14 +406,50 @@ final class ComputerSync {
     /// iCloud took `sent` for `sid`. Still unsent if it changed again since.
     func sent(_ sid: String, _ sent: CloudComputer?) {
         state.inCloud.insert(sid)
+        state.refused[sid] = nil
+        state.lastSent = store.now()
         if let sent, record(for: sid) == sent { state.unsent.remove(sid) }
+        save()
+    }
+
+    /// iCloud refused `sid` for a reason that is not a network blip (the engine does not try it again by itself).
+    /// It stays unsent; `retryUnsent` puts it back in the engine's queue the next time the app opens.
+    func refused(_ sid: String, _ why: String) {
+        state.refused[sid] = why
+        save()
+    }
+
+    /// The app opened (or came back to the front): every change iCloud has not taken yet goes in the queue again,
+    /// refused ones included, so a refusal that iCloud no longer makes (a schema fixed since) clears by itself.
+    func retryUnsent() {
+        guard state.joined, !state.unsent.isEmpty else { return }
+        onUnsent(state.unsent)
+    }
+
+    #if targetEnvironment(simulator)
+    /// `--sync-demo` (simulator pictures only): made-up sent/checked times, waiting computers and a refusal.
+    func showDemo(_ what: String) {
+        status = .on
+        let now = Date()
+        state.lastChecked = now.addingTimeInterval(-60)
+        state.lastSent = now.addingTimeInterval(what == "uptodate" ? -120 : -3 * 3600)
+        if what != "uptodate" { state.unsent = ["demo-1", "demo-2", "demo-3"] }
+        if what == "error" {
+            state.refused = ["demo-1": "iCloud is not ready for this app yet.", "demo-2": "iCloud is not ready for this app yet."]
+        }
+    }
+    #endif
+
+    /// A check for changes finished.
+    func fetched() {
+        state.lastChecked = store.now()
         save()
     }
 
     // MARK: What comes from iCloud
 
-    /// A record from iCloud. Newest edit wins, the whole computer (the owner: "Newest wins"); on a tie, iCloud's copy wins,
-    /// so two iPhones end with the same entry.
+    /// A record from iCloud. Newest edit wins, the whole computer; on a tie, iCloud's copy wins, so two iPhones end
+    /// with the same entry.
     func received(_ sid: String, _ remote: CloudComputer) {
         state.inCloud.insert(sid)
         defer { save() }

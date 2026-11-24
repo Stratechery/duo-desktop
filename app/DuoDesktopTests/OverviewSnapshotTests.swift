@@ -3,8 +3,7 @@ import UIKit
 import XCTest
 @testable import DuoDesktop
 
-/// project notes (the owner: "I need to see a snapshot of the screens here so I know which one to go
-/// to."): the two new messages, and an older Host that does not know them.
+/// Project notes: the two new messages, and an older Host that does not know them.
 @MainActor
 final class OverviewSnapshotTests: XCTestCase {
     private func jpeg(_ w: Int, _ h: Int) -> [UInt8] {

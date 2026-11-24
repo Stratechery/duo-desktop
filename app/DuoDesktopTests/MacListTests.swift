@@ -2,7 +2,7 @@ import GlassActTransport
 import XCTest
 @testable import DuoDesktop
 
-/// project notes build part 1: one test per claim.
+/// Project notes build part 1: one test per claim.
 @MainActor
 final class MacListTests: XCTestCase {
     private var dir: URL!
@@ -19,8 +19,8 @@ final class MacListTests: XCTestCase {
         MacStore(url: dir.appendingPathComponent("macs.json"), defaults: defaults, knownHosts: knownHosts())
     }
 
-    /// Claim (the owner 2026-11-21, no Mac built in): a fresh install starts with an empty list (the simulator only has
-    /// its own test host), and nothing is written until the user adds a Mac.
+    /// Claim: a fresh install starts with an empty list (the simulator only has its own test host), and nothing is
+    /// written until the user adds a Mac.
     func testFreshInstallStartsEmpty() {
         let s = store()
         #if targetEnvironment(simulator)

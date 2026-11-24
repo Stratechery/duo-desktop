@@ -243,9 +243,8 @@ public final class JetKVMSession: NSObject, @unchecked Sendable {
     /// Press and release a key.
     public func tapKey(usage: UInt8) { sendKey(usage: usage, down: true); sendKey(usage: usage, down: false) }
 
-    /// Wakes a sleeping display (project notes 3, the owner: "You need to hit a key to wake up the screen so that
-    /// JetKVM can hold on to it ... Hit Shift or something."): Left Shift pressed alone and released. It types
-    /// nothing, confirms nothing and cancels nothing. Returns false when the input channel is not ready yet.
+    /// Wakes a sleeping display: Left Shift pressed alone and released. It types nothing, confirms nothing and cancels
+    /// nothing. Returns false when the input channel is not ready yet.
     @discardableResult
     public func pressWakeKey() -> Bool {
         guard queue.sync(execute: { hidrpcVersion == HIDRPC.supportedVersion && hid?.readyState == .open }) else { return false }

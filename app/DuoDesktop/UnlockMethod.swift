@@ -1,13 +1,11 @@
 import Foundation
 import LocalAuthentication
 
-/// The phone's own way of unlocking, named the way Apple writes it (Face ID wording change; the owner:
-/// "Duo Desktop on a regular phone makes references to Touch ID, but those phones have Face ID."). The iPhone Duo
-/// has Touch ID; ordinary iPhones have Face ID. Every word people read about the app lock comes from here, so no
-/// screen keeps its own copy. HIG Managing accounts
-/// (https://developer.apple.com/design/human-interface-guidelines/managing-accounts): "Always identify the
+/// The phone's own way of unlocking, named the way Apple writes it. The iPhone Duo has Touch ID; ordinary iPhones have
+/// Face ID. Every word people read about the app lock comes from here, so no screen keeps its own copy. HIG Managing
+/// accounts (https://developer.apple.com/design/human-interface-guidelines/managing-accounts): "Always identify the
 /// authentication method you offer" and "Refer only to authentication methods that are available in the current
-/// context. ... Check the device's capabilities and use the appropriate terminology" (`LABiometryType`).
+/// context.... Check the device's capabilities and use the appropriate terminology" (`LABiometryType`).
 enum UnlockMethod: String, CaseIterable, Sendable {
     case faceID, touchID, opticID
     /// No enrolled Face ID / Touch ID / Optic ID (or none on the device): the lock uses the device passcode.
@@ -23,7 +21,7 @@ enum UnlockMethod: String, CaseIterable, Sendable {
         return Device.now.current
     }
 
-    // MARK: The device read, kept (First-launch Face ID fix (project notes))
+    // MARK: The device read, kept
 
     /// What LocalAuthentication said about this phone, read once and kept. `canEvaluatePolicy` is a synchronous call
     /// to the system's authentication service; it used to run in view bodies (the lock screen, the Mac list, about

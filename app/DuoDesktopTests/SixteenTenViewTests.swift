@@ -1,15 +1,14 @@
 import XCTest
 @testable import DuoDesktop
 
-/// The 16:10 view (project notes; mock-ups `screenshots/view-16x10-v2-*-2026-11-21.png`).
+/// The 16:10 view.
 @MainActor
 final class SixteenTenViewTests: XCTestCase {
     /// The owner's upright safe area below the top row (as `DuoDesktopTests.safeUpright`) and his keyboard (293 pt).
     let safeUpright = CGSize(width: 669, height: 951 - 82 - 34)
     let bensKeyboard: CGFloat = 293
 
-    /// Layout chosen by the larger fitted picture (the owner 2026-11-21: "change the rule to show the largest possible
-    /// picture"); a tie goes to 16:9. The order's examples, then more.
+    /// Layout chosen by the larger fitted picture; a tie goes to 16:9. The order's examples, then more.
     func testShapeShowsTheLargestPicture() {
         for (w, h) in [(3456, 2234), (2560, 2880), (1920, 1200), (1728, 1080), (1440, 900), (1024, 768), (1080, 1920)] {
             XCTAssertEqual(PictureShape.of(width: w, height: h), .sixteenTen, "\(w)x\(h)")
@@ -23,7 +22,7 @@ final class SixteenTenViewTests: XCTestCase {
         XCTAssertGreaterThan(ten, nine)
     }
 
-    /// 16:9 is unchanged: the same numbers as before this build (project notes table, "Today").
+    /// 16:9 is unchanged: the same numbers as before this build.
     func testSixteenNineUnchanged() {
         let u = SessionLayout.Upright(size: safeUpright, keyboardInset: bensKeyboard)
         XCTAssertEqual(u.shape, .sixteenNine)
@@ -137,8 +136,7 @@ final class SixteenTenViewTests: XCTestCase {
         XCTAssertEqual(state.latch(.command), .off, "the key used the held modifier, as always")
     }
 
-    /// Third row of the 16:10 click column: Scroll at the screen's outer edge, Right click inside it, on both sides
-    /// (the owner 2026-11-21: "The scroll button is more important and should be on the outside.").
+    /// Third row of the 16:10 click column: Scroll at the screen's outer edge, Right click inside it, on both sides.
     func testScrollIsOnTheOutsideOnBothSides() {
         // Trackpad Right: the column is at the far left, so Scroll is leftmost.
         XCTAssertEqual(ClickButtonsLayout.sixteenTenThirdRow(side: .right), [.scroll, .right])
@@ -149,8 +147,7 @@ final class SixteenTenViewTests: XCTestCase {
     }
 }
 
-/// The shape is decided once per shown screen and then held (project notes; the owner: "the size
-/// test to see if it should be 1610 or 16:9 needs to run once, not multiple times").
+/// The shape is decided once per shown screen and then held.
 final class LayoutShapeDecisionTests: XCTestCase {
     /// Decided once at the first picture; a later picture size (slow-link halving, a re-fit) does not change it.
     func testDecidedOnceAtFirstPicture() {

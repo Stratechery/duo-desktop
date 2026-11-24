@@ -1,7 +1,6 @@
 // swift-tools-version: 5.9
-// The Duo Desktop terminal's SSH engine (project notes, M2 + the engine side of M4). Kept apart
-// from the app so the "super version" (terminal + KVM) stays separable from the plain Glass Act version: the app
-// links this only when built with DUO_TERMINAL. swift-nio-ssh is Apache-2.0, pinned to one exact release.
+// The Duo Desktop terminal's SSH engine. Kept apart from the app so the "super version" (terminal + KVM) stays separable from the plain Glass Act version: the app links this only when built with
+// DUO_TERMINAL. swift-nio-ssh is Apache-2.0, pinned to one exact release.
 import PackageDescription
 
 let package = Package(

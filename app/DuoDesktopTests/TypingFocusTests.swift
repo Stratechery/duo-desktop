@@ -1,4 +1,4 @@
-// project notes: one test per claim.
+// Project notes: one test per claim.
 import XCTest
 import GlassActCore
 import GlassActWire
@@ -80,7 +80,7 @@ final class TypingFocusTests: XCTestCase {
         // Not on the shown screen, or not text: nothing to aim at.
         XCTAssertNil(TypingFocusMap.pictureY(up, screen: main, pictureHeight: 1080))
         XCTAssertNil(TypingFocusMap.pictureY(.none, screen: main, pictureHeight: 1080))
-        // No caret, short field: its middle. No caret, tall text area: near its bottom line (the owner: Terminal types there).
+        // No caret, short field: its middle. No caret, tall text area: near its bottom line.
         let short = WireTextFocus(hasText: true, fieldX: 0, fieldY: 100, fieldW: 300, fieldH: 30)
         XCTAssertEqual(TypingFocusMap.pictureY(short, screen: main, pictureHeight: 1080), 115)
         let tall = WireTextFocus(hasText: true, fieldX: 0, fieldY: 100, fieldW: 600, fieldH: 600)
@@ -126,7 +126,7 @@ final class TypingFocusTests: XCTestCase {
 
     let upright = CGSize(width: 466, height: 678)
     let sideways = CGSize(width: 678, height: 466)
-    /// The system capsule's largest seen form: x 392.0–445.3, top to 189.3 (the owner's later screenshot).
+    /// The system capsule's largest seen form: x 392.0–445.3, top to 189.3.
     let capsule = CGRect(x: 392, y: 0, width: 53.3, height: 189.3)
 
     /// Claim: after a rotation and back the layout equals the layout before, and the groups never meet the system
@@ -160,7 +160,9 @@ final class TypingFocusTests: XCTestCase {
             }
         }
         let side = OuterStripLayout.place(display: sideways, stripOnRight: false, keyboardTop: 466 - 193)
-        XCTAssertEqual(side, .init(arrangement: .row, frame: CGRect(x: 8, y: 8, width: 218, height: 53)))
+        // On the strip's side the row's top-left would sit under the system area (the strip's column down to 190), so
+        // it goes to the other side's top edge.
+        XCTAssertEqual(side, .init(arrangement: .row, frame: CGRect(x: 678 - 8 - 218, y: 8, width: 218, height: 53)))
         // The password field sideways, the Mac's bottom resting on the keyboard: about 98 pt above it, centred.
         let field = CGRect(x: 339 - 79, y: 466 - 193 - 98 - 14, width: 158, height: 27)
         XCTAssertFalse(side.frame.intersects(field))

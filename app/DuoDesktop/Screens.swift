@@ -34,10 +34,9 @@ struct MacListScreen: View {
                         }
                     }
                 } else {
-                    // One list, no sections (project notes; the owner 2026-11-22: "I don't think we
-                    // need to separate Macs and terminals. They are just computers."), in the order added. Milestone
-                    // 3 and project notes (name-opens-default): one line each, the light, the name (its Opens In way), the
-                    // three way-in icons, then the (i) (`ComputerListRow`).
+                    // One list, no sections, in the order added. Milestone 3 and project notes (name-opens-default):
+                    // one line each, the light, the name (its Opens In way), the three way-in icons, then the (i)
+                    // (`ComputerListRow`).
                     Section {
                         ForEach(list.store.computers) { e in
                             ComputerListRow(entry: e, columns: WayIn.inThisBuild,
@@ -47,9 +46,8 @@ struct MacListScreen: View {
                                             settings: { settingsFor = e.id },
                                             open: { open(e, in: $0) },
                                             add: { addingWay = AddWayTarget(id: e.id, way: $0) })
-                            // Shorter rows (the owner: "these rows can be shorter"): the icons' own 44 pt touch targets give the
-                            // height, so the list's extra top and bottom padding goes; the last icon's target reaches
-                            // close to the edge.
+                            // Shorter rows: the icons' own 44 pt touch targets give the height, so the list's extra top
+                            // and bottom padding goes; the last icon's target reaches close to the edge.
                             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 8))
                             .swipeActions(edge: .trailing) {
                                 Button("Remove", role: .destructive) { removing = e }
@@ -79,9 +77,8 @@ struct MacListScreen: View {
                     }
                 }
 
-                // Touch ID clarity (the owner 2026-11-22: "Touch ID is sort of buried on the first page of settings,
-                // but it's pretty critical"): its own titled section right under the Macs, with what depends on it
-                // in the footer (HIG Lists and tables: group related settings under a header; footers explain).
+                // Touch ID clarity: its own titled section right under the Macs, with what depends on it in the footer
+                // (HIG Lists and tables: group related settings under a header; footers explain).
                 Section {
                     Toggle(isOn: Binding(get: { lock.required }, set: { on in
                         if !on, AutoUnlockRules.lockOffWarning(list.macs) != nil {
@@ -101,22 +98,8 @@ struct MacListScreen: View {
                 }
                 .id("security")
 
-                // List sync (the owner 2026-11-22: "CloudKit", "On"): one switch, its footer says what syncs and what not.
+                // List sync: one switch, its footer says what syncs and what not.
                 SyncSection(sync: ComputerSync.shared)
-
-                Section {
-                    LabeledContent("Key") {
-                        Text(model.viewerKeyString.isEmpty ? "None" : model.viewerKeyString)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("viewerKey")
-                    }
-                    // Two different stores (reviewer): the phone's own key, and the Macs' keys it has trusted.
-                    LabeledContent("Key kept in", value: model.viewerKeySource.isEmpty ? "—" : model.viewerKeySource)
-                    LabeledContent("Computers’ keys kept in", value: "The list, in this app")
-                } header: {
-                    Text("This iPhone")
-                }
 
                 Section {
                     TrackpadSidePicker(side: $trackpadSide, style: .segmented)
@@ -124,8 +107,7 @@ struct MacListScreen: View {
                     Text("Which side of the keys the trackpad is on, with the iPhone upright.")
                 }
 
-                // The shortcut reference lives here only (the owner 2026-11-21: "Those should go in the main menu. There
-                // should just be a link there to look up the shortcuts. It doesn't need to be on every screen.").
+                // The shortcut reference lives here only.
                 Section {
                     KeyboardShortcutsRow()
                 }
@@ -135,6 +117,21 @@ struct MacListScreen: View {
                         .accessibilityIdentifier("keyboardHaptics")
                 } footer: {
                     Text("A light tap when you press our keys, the click buttons or the trackpad.")
+                }
+
+                // This phone" information at the bottom."
+                Section {
+                    LabeledContent("Key") {
+                        Text(model.viewerKeyString.isEmpty ? "None" : model.viewerKeyString)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("viewerKey")
+                    }
+                    // Two different stores: the phone's own key, and the Macs' keys it has trusted.
+                    LabeledContent("Key kept in", value: model.viewerKeySource.isEmpty ? "—" : model.viewerKeySource)
+                    LabeledContent("Computers’ keys kept in", value: "The list, in this app")
+                } header: {
+                    Text("This iPhone")
                 }
 
             }
@@ -149,10 +146,9 @@ struct MacListScreen: View {
             }
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showAdd, onDismiss: probe) { AddComputerSheet(store: list.store, identity: model.identity) }
-            // A gray icon: that way in's Add sheet (the owner 2026-11-22: "If you tap them you go to their settings"), the
-            // same sheet as the settings page's "Add Terminal…" row.
+            // A gray icon: that way in's Add sheet, the same sheet as the settings page's "Add Terminal…" row.
             .sheet(item: $addingWay, onDismiss: probe) { t in
-                AddComputerSheet(store: list.store, identity: model.identity, existingID: t.id, fixedWay: t.way)
+                AddComputerSheet(store: list.store, identity: model.identity, existingID: t.id, fixedWay: AddWay(t.way))
             }
             .navigationDestination(item: $settingsFor) { id in
                 ComputerSettingsScreen(store: list.store, id: id, chosen: list.chosen[id], lock: lock,
@@ -190,7 +186,7 @@ struct MacListScreen: View {
                 // The notice's own words stay (a sign-in or identity failure is said plainly: review finding 3).
                 if let e = model.notice?.computerID.flatMap({ list.store.entry($0) }) {
                     ForEach(ComputerNav.others(e, than: .screenSharing)) { w in
-                        Button(w.insteadTitle) { model.notice = nil; ComputerNav.shared.open(e, in: w) }
+                        Button(e.insteadTitle(w)) { model.notice = nil; ComputerNav.shared.open(e, in: w) }
                     }
                 }
                 Button("OK", role: .cancel) {}
@@ -226,8 +222,7 @@ struct MacListScreen: View {
         ComputerNav.shared.open(e, in: way)
     }
 
-    /// ＋: Add Computer, one sheet (project notes, one computer with any connection M2: the Mac / Terminal Computer menu is gone;
-    /// the sheet's Start With chooses the way in). HIG Toolbars: a toolbar's ＋ adds an item.
+    /// ＋: Add Computer, one sheet. HIG Toolbars: a toolbar's ＋ adds an item.
     @ViewBuilder private func addMenu(prominent: Bool) -> some View {
         if prominent {
             Button("Add Computer") { showAdd = true }.buttonStyle(.borderedProminent)
@@ -240,8 +235,8 @@ struct MacListScreen: View {
 
 }
 
-/// The list's words that cover both kinds (project notes §1). Mac-only screens keep "Mac".
-/// The way in a gray icon adds, on which computer (the list's Add sheet).
+/// The list's words that cover both kinds. Mac-only screens keep "Mac". The way in a gray icon adds, on which computer
+/// (the list's Add sheet).
 struct AddWayTarget: Identifiable, Hashable {
     let id: String
     let way: WayIn
@@ -253,11 +248,12 @@ enum ListWords {
     static var emptyDescription: String {
         var ways = ["a Mac running Glass Act Host"]
         if WayIn.inThisBuild.contains(.terminal) { ways.append("a computer you reach over SSH") }
+        if RDPScreen.inThisBuild { ways.append("a Windows PC with Remote Desktop") }
         if WayIn.inThisBuild.contains(.jetkvm) { ways.append("a computer with a JetKVM") }
         let list = ways.count > 1 ? ways.dropLast().joined(separator: ", ") + ", or " + ways.last! : ways[0]
         return "Add \(list)."
     }
-    /// The footer says what the light, the name, the icons and the (i) do (project notes (name-opens-default)).
+    /// The footer says what the light, the name, the icons and the (i) do.
     static let footer = "Tap a name to open it in its Opens In choice, or an icon to open it that way; a gray icon adds "
         + "that way in. Tap ⓘ for its settings. Green: it answers. Yellow: it answers but needs you first (a sign-in, "
         + "or allowing it on the Mac). Red: it does not answer. An exclamation mark means that way in is not answering."
@@ -329,7 +325,7 @@ struct SignInSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if model.signInBusy { ProgressView() } else {
-                        // White on the orange confirm fill, forced (the owner 2026-11-21: "Let's do white first").
+                        // White on the orange confirm fill, forced.
                         Button(role: .confirm) { model.signIn() } label: {
                             Text("Sign In").foregroundStyle(.white)
                         }
@@ -402,7 +398,7 @@ struct SessionScreen: View {
         self.model = model
         self.grid = grid
         self.normalPhone = normalPhone
-        // A normal iPhone has one view, Follow Pointer (the owner: "The display on the Mac is square").
+        // A normal iPhone has one view, Follow Pointer.
         _view = State(initialValue: normalPhone ? .centred : model.openView)
         // Through the model's gate: open only while the picture is live (nothing queued while rejoining).
         let parts = SessionParts(sink: model.input)
@@ -449,8 +445,7 @@ struct SessionScreen: View {
 
     var body: some View {
         // The system navigation bar is the screen's top row: on the open Duo it shares the row with the clock and
-        // status icons, and its buttons are Liquid Glass (project notes rules 1-3). The Mac picture starts
-        // directly below it (the owner 2026-11-20: "Should mimic Claud app. Mac below").
+        // status icons, and its buttons are Liquid Glass. The Mac picture starts directly below it.
         NavigationStack {
             SessionGeometry { proxy, wide in
                 let insets = normalPhone && wide ? PhoneKind.sidewaysInsets() : (leading: 0, trailing: 0)
@@ -502,9 +497,9 @@ struct SessionScreen: View {
                         .frame(maxWidth: wide ? .infinity : nil, maxHeight: wide ? .infinity : nil)
                         // The black stops at the picture: it must not run up behind the top row.
                         .background(Color.black, ignoresSafeAreaEdges: [])
-                        // Terminal: the terminal in the picture's place, over the kept picture (Terminal.swift).
-                        // It also takes the band's height above the one row of terminal keys (the owner 2026-11-21:
-                        // "make it only one row"), reaching down past the picture's bottom edge.
+                        // Terminal: the terminal in the picture's place, over the kept picture (Terminal.swift). It
+                        // also takes the band's height above the one row of terminal keys, reaching down past the
+                        // picture's bottom edge.
                         .overlay(alignment: .top) {
                             #if DUO_TERMINAL
                             if !wide && view == .terminal {
@@ -526,9 +521,9 @@ struct SessionScreen: View {
                             }
                             #endif
                         }
-                        // The buttons float over the picture (or its black bar) and take no layout space.
-                        // Horizontal (project notes, round 4): the glass column and trackpad, and with the
-                        // Keyboard button on, our own keyboard and its key row, over the whole-screen picture.
+                        // The buttons float over the picture (or its black bar) and take no layout space. Horizontal:
+                        // the glass column and trackpad, and with the Keyboard button on, our own keyboard and its key
+                        // row, over the whole-screen picture.
                         .overlay(alignment: .topLeading) {
                             if wide {
                                 HorizontalControls(model: model, parts: parts, keyboard: touchKeyboard,
@@ -586,11 +581,9 @@ struct SessionScreen: View {
                             .zIndex(1)
                         Spacer(minLength: 0)
                     } else if !wide {
-                        // The owner 2026-11-20: "the middle part should be a trackpad. We can make the right part the
-                        // trackpad and the left part the special keys." The band fills from the picture to the
-                        // top of the system keyboard; the click buttons and keys fill its height.
-                        // The owner 2026-11-20: "It should be an option to flip the buttons and the trackpad": with the
-                        // trackpad on the left, the halves swap; the keys keep their order (`TrackpadSide`).
+                        //  The band fills from the picture to the top of the system keyboard; the click buttons and
+                        // keys fill its height.: with the trackpad on the left, the halves swap; the keys keep their
+                        // order (`TrackpadSide`).
                         Group { if view.isTerminal {
                             #if DUO_TERMINAL
                             TerminalKeysBand(session: terminal)
@@ -612,11 +605,9 @@ struct SessionScreen: View {
                         .allowsHitTesting(model.flow.acceptsInput || view.isJetKVM)
                         .opacity(model.flow.showsHeldPicture && !view.isJetKVM ? 0.5 : 1)
                         // The band sits on a panel the colour of the system keyboard's, running on down behind the
-                        // keyboard (the owner 2026-11-20: "the same flat gray look as the built in keyboard"), so band and
-                        // keyboard read as one keyboard. Square top corners, flush with the picture's bottom edge,
-                        // so no background shows at the corners (the owner 2026-11-21: "I think this needs to be fully in
-                        // without the rounded rectangle, because otherwise the background is just this boring
-                        // white."). The panel also runs behind the system keyboard's own rounded top corners.
+                        // keyboard, so band and keyboard read as one keyboard. Square top corners, flush with the
+                        // picture's bottom edge, so no background shows at the corners. The panel also runs behind the
+                        // system keyboard's own rounded top corners.
                         .padding(.top, upright.spacing.pad)
                         .frame(width: proxy.size.width, alignment: .top)
                         .background(alignment: .top) {
@@ -645,7 +636,7 @@ struct SessionScreen: View {
                             .accessibilityIdentifier("phoneKeyboard")
                     }
                 }
-                .background(wide ? Color.black : Color(.systemBackground))
+                .background(wide ? Color.black : SessionTopRow.behind.colour)
                 .ignoresSafeArea(edges: wide ? .all : [])
                 .statusBarHidden(wide)
                 .persistentSystemOverlays(wide ? .hidden : .automatic)
@@ -662,18 +653,14 @@ struct SessionScreen: View {
                                         leave: { model.disconnect() }, preview: SimulatorSwitches.topRowPreview,
                                         rowWidth: proxy.size.width,
                                         fixedChoices: normalPhone ? phoneChoices : nil,
-                                        nameMaxOverride: normalPhone
-                                            ? NormalPhoneTopRow.nameMax(rowWidth: proxy.size.width)
-                                            : nil,
                                         viewMenu: normalPhone))
-                // Turning the phone lets go of every held key and button (order item 3), and puts the keyboard
-                // away.
+                // Turning the phone lets go of every held key and button, and puts the keyboard away.
                 .onChange(of: wide) { _, _ in
                     typing = false
                     model.keyboardRulesReset()
                     if normalPhone {
-                        // A normal iPhone keeps its held modifiers across the turn (the owner 2026-11-22: turning keeps the
-                        // connection, the screen and held modifiers); the mouse buttons and touch still let go.
+                        // A normal iPhone keeps its held modifiers across the turn; the mouse buttons and touch still
+                        // let go.
                         parts.trackpad.releaseAll()
                         parts.touch.releaseAll()
                         parts.canvas?.layoutChanged()
@@ -769,8 +756,8 @@ struct SessionScreen: View {
             }
             // The keyboard layout guide: how much of the bottom the system keyboard covers (upright layout only).
             .background { KeyboardGuideReader { keyboardInset = $0 }.ignoresSafeArea() }
-            // Horizontal: the system keyboard overlaps the picture; the picture never moves or shrinks for it (the owner
-            // 2026-11-20). Upright lays out above the keyboard itself, from the keyboard layout guide.
+            // Horizontal: the system keyboard overlaps the picture; the picture never moves or shrinks for it. Upright
+            // lays out above the keyboard itself, from the keyboard layout guide.
             .ignoresSafeArea(.keyboard)
             .background(Color(.systemBackground))
         }
@@ -795,7 +782,7 @@ struct SessionScreen: View {
             p.trackpad.onPushPastEdge = { [weak model] x, y, w, h in
                 model?.pushPastEdge(x: x, y: y, width: w, height: h) ?? false
             }
-            // The crossing slide (the owner 2026-11-21: "It would be nice to have a bit of animation there").
+            // The crossing slide.
             model.onCrossingShown = { [weak p] dx, dy in p?.canvas?.crossingSlide(dx: CGFloat(dx), dy: CGFloat(dy)) }
             model.onSwitchEnded = { [weak p] point in
                 guard let p else { return }
@@ -836,12 +823,10 @@ struct SessionScreen: View {
     }
 }
 
-/// The session screen's geometry. The owner 2026-11-20: "When the duo is horizontal, it should just show the whole
-/// screen, and you use touch on the screen to simulate the mouse. When the duo is vertical, you have the keyboard
-/// and trackpad." Horizontal is decided from the scene's shape, never from a screen's numbers. Horizontal, the
-/// reader drops every safe area, so the picture is aspect-fitted to the FULL screen and centred (black bars only
-/// above and below); upright keeps the safe area below the top row. The shape gives the same answer either way,
-/// so the state settles after one pass.
+/// The session screen's geometry. Horizontal is decided from the scene's shape, never from a screen's numbers.
+/// Horizontal, the reader drops every safe area, so the picture is aspect-fitted to the FULL screen and centred (black
+/// bars only above and below); upright keeps the safe area below the top row. The shape gives the same answer either
+/// way, so the state settles after one pass.
 struct SessionGeometry<Content: View>: View {
     @ViewBuilder let content: (GeometryProxy, Bool) -> Content
     @State private var wideScene = false
@@ -864,10 +849,11 @@ struct SessionGeometry<Content: View>: View {
 /// them in Liquid Glass (DESIGN rules 1-5); nothing here draws a bar or a background. Horizontal hides the whole
 /// bar (rule 6): the picture is full screen and its own two glass buttons stay visible over it.
 ///
-/// No More (…) menu (the owner 2026-11-21: "We can get rid of this menu to save space."). Its items now live: About Duo
-/// Desktop (with the picture's rate) on the Mac list; Trackpad Left/Right on the Mac list; Disconnect is the back
-/// button.
+/// No More (…) menu. Its items now live: About Duo Desktop (with the picture's rate) on the Mac list; Trackpad
+/// Left/Right on the Mac list; Disconnect is the back button.
 struct SessionTopRow: ViewModifier {
+    /// Upright the session screen paints the system background behind the bar.
+    static let behind = BarBackdrop.app
     @Bindable var model: SessionModel
     let title: String
     let notice: String?
@@ -884,9 +870,8 @@ struct SessionTopRow: ViewModifier {
     var choicesForTest: [SessionView]? = nil
     /// A normal iPhone: only the views that work there (Follow Pointer).
     var fixedChoices: [SessionView]? = nil
-    /// A normal iPhone: the name bubble's widest size (`NormalPhoneTopRow`).
-    var nameMaxOverride: CGFloat? = nil
-    /// A normal iPhone: one view button that opens a menu (`ViewMenuButton`) in place of the switch.
+    /// A normal iPhone: the view control is one drop-down button (`ViewMenuButton`) in place of the Duo's four-across
+    /// switch. Everything else in the bar is the Duo's (`DuoTitleBar`).
     var viewMenu = false
 
     /// The screen's name on a multi-screen Mac, nil on a one-screen Mac (or an older Host).
@@ -896,256 +881,158 @@ struct SessionTopRow: ViewModifier {
         return model.showsOverview ? "All Screens" : model.shownScreen?.name ?? ""
     }
 
+    /// The Duo bar's second line: what is being shown. With no screen's name to show (a one-screen Mac, an older Host)
+    /// the line is the way in's name, "Screen Sharing", so the bar looks the same on every computer.
+    static func shownLine(view: SessionView, screen: String?) -> String {
+        #if DUO_TERMINAL
+        if view == .terminal { return "Terminal" }
+        #endif
+        #if DUO_JETKVM
+        if view == .jetkvm { return "JetKVM" }
+        #endif
+        if let screen, !screen.isEmpty { return screen }
+        return WayIn.screenSharing.label
+    }
+
     private var choices: [SessionView] {
         if let choicesForTest { return choicesForTest }
         if let fixedChoices { return fixedChoices }
         return SessionView.choices(terminal: model.terminalOffered, jetkvm: model.jetkvmOffered)
     }
 
-    /// The name bubble: the Mac's name, and on a multi-screen Mac the screen under it, as the screen menu. HIG
-    /// Pop-up buttons: "A pop-up button helps people make a choice that affects their content or the surrounding
-    /// view", and it "can update its content to indicate the current selection." The two lines follow the Claude
-    /// app's own title capsule (the owner's reference picture): a semibold first line, a smaller secondary second line.
-    /// The views as one menu button: a normal iPhone always; the Duo when the switch would not fit (fixes 7).
-    private var usesMenu: Bool { viewMenu || !fit.wide }
-
-    /// Project notes (session-top-bar-narrow-first) (2026-11-23): the bar starts narrow (back, the name, one view button) and
-    /// shows the full switch only once it has seen the wide form shown whole (`TopBarFit`).
-    /// Tests pass their own, to read the form.
-    @State var fit = TopBarFit()
-    /// Tests: room taken at the bar's right, standing in for the clock area's live activities (`TopBarStandIn`).
+    /// Tests and simulator only: room taken at the bar's right, standing in for the clock area's live activities
+    /// (`TopBarStandIn`).
     var standIn: CGFloat = SimulatorSwitches.topBarReserve ?? 0
-    /// Tests: try the wide form at any width (the real rule tries it only on the open Duo, `TopBarFit.canWiden`).
-    var widenAnyWidth = false
-
-    @ViewBuilder private var nameBubble: some View {
-        let maxWidth = nameMaxOverride ?? fit.nameMax
-        if screenName != nil {
-            Menu {
-                ScreenMenuItems(model: model)
-            } label: {
-                TopRowName(mac: preview?.mac ?? title, screen: screenName, notice: notice, interactive: true,
-                           maxWidth: maxWidth, report: report)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("screenMenu")
-        } else {
-            TopRowName(mac: preview?.mac ?? title, screen: nil, notice: notice, maxWidth: maxWidth, report: report)
-        }
-    }
 
     func body(content: Content) -> some View {
+        // Back, the computer's name as the bar's own title with the screens as its title menu, the views as one
+        // trailing item. The system sizes, shortens and moves them; nothing of ours watches the bar. The normal iPhone
+        // has the same bar; only its views control differs, one drop-down button (`ViewSwitch`).
         content
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .modifier(DuoTitleBar(title: preview?.mac ?? title,
+                                  subtitle: Self.shownLine(view: view, screen: screenName), notice: notice,
+                                  hidden: hidden, hasMenu: screenName != nil, behind: Self.behind, back: leave) {
+                ScreenMenuItems(model: model)
+            })
             .toolbar {
-                // Every part of the row is a `TopBarItem`: the bar draws its one glass shape, the part draws none.
-                TopBarItem {
-                    BackToMacsButton(action: leave)
-                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("back", $0) }
-                }
-                // Order, left to right (the owner 2026-11-21: "We should flip the order of the computer name and its
-                // screens and the four views. After all, the four views are all a subset of that computer."): back,
-                // the name bubble, the view switch; the clock's area stays the system's. No info button (the owner
-                // 2026-11-21: "It doesn't need to be on every screen."): Keyboard Shortcuts is a row on the Mac list.
-                // Back, the name and the switch are separate glass parts: the system's fixed spacers split them.
-                ToolbarSpacer(.fixed, placement: .topBarLeading)
-                TopBarItem { nameBubble }
-                // The name bubble is the title: the bar draws no second, centred title (and no glass for it).
-                ToolbarItem(placement: .principal) { Color.clear.frame(width: 0, height: 0) }
-                    .sharedBackgroundVisibility(.hidden)
-                ToolbarSpacer(.fixed, placement: .topBarLeading)
-                TopBarItem {
-                    ViewSwitch(view: $view, choices: choices, usesMenu: usesMenu)
+                TopBarViewsItem {
+                    ViewSwitch(view: $view, choices: choices, normalPhone: viewMenu)
                         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("selector", $0) }
                 }
                 TopBarStandIn(width: standIn)
             }
-            // Duo bar only; a normal iPhone's bar sits under the clock and keeps its own one-button form.
-            .modifier(NarrowFirstBar(fit: fit, rowWidth: rowWidth, parts: 3, hidden: hidden,
-                                     enabled: nameMaxOverride == nil && !viewMenu,
-                                     canWiden: widenAnyWidth || TopBarFit.canWiden(rowWidth: rowWidth)))
     }
 }
 
-/// Project notes (session-top-bar-narrow-first) (the owner 2026-11-23: "Ok on the bar fix"). On the open Duo the system folds the
-/// bar's leading parts (back, the name, the views) into its own "…" when they reach the clock area, and that area's
-/// width changes with what sits beside the clock (live activities, a Focus moon, a location arrow). No fixed number
-/// can know it, so the bar does not guess:
-/// 1. It starts NARROW: back, the name (at most `nameCap`), ONE view button (the menu).
-/// 2. Once the narrow form is laid out whole, it tries the WIDE form (the full switch) once. If the bar shows it
-///    whole, it stays wide. If the system folds it, the bar goes back to narrow and stays there.
-/// 3. If even the narrow form folds, the name drops to `nameFloor` (FLOOR).
-/// One try per appearance and per size (the `.task` restarts on a new width, a turn upright, a fold). While a try is
-/// being settled the bar is drawn see-through (its alpha 0), so nobody sees the "…" or the form change: the bar
-/// appears a moment later, already in its final form. After that a watch looks once a second; when something new
-/// beside the clock folds the bar (a live activity starting), it steps down (wide to narrow, narrow to floor) at
-/// once. It never steps up again until the next size change or appearance.
-@MainActor @Observable final class TopBarFit {
-    enum Form: Equatable { case narrow, wide, floor }
-    private(set) var form: Form = .narrow
-    /// The bar is taken away for a moment so it lays out afresh: a folded bar stays folded even when its parts
-    /// shrink (seen on the unfolded simulator, build 71).
-    private(set) var rebuilding = false
-    /// Tests: every form drawn and every look at the bar, in order ("narrow", "wide", "floor", "folded", "whole").
-    private(set) var log: [String] = []
-    /// True once the try is settled and the bar is shown.
-    private(set) var settled = false
+/// What a session screen paints behind its top bar, upright (the bar is hidden sideways). The one rule for the bar's
+/// colours: the bar follows what is truly behind it. Build 83 forced the dark look on Terminal, JetKVM and Remote
+/// Desktop alike, but only the Terminal screen is black there; JetKVM and Remote Desktop paint the system background,
+/// so in light mode their bar drew white on white.
+enum BarBackdrop {
+    /// The system background: white in light mode, black in dark. The bar keeps the app's own look.
+    case app
+    /// Always black (the Terminal screen): the bar takes the dark look in light mode too, so the caret, the title
+    /// and the second line draw light on the black (build 81 drew them dark on black).
+    case black
 
-    /// The name's widest size in the narrow and wide forms alike (only the views change between them, so the name
-    /// does not jump). 200: back, a 200 pt name and one view button end near x 376, inside the 413 pt where the "…"
-    /// ended on the owner's phone.
-    static let nameCap: CGFloat = 200
-    /// When even the narrow form folds: the narrowest name that still reads a few letters.
-    static let nameFloor: CGFloat = 80
-    var nameMax: CGFloat { form == .floor ? Self.nameFloor : Self.nameCap }
-    var wide: Bool { form == .wide }
-
-    /// The wide form is tried only on the open Duo (669 pt upright). The folded Duo (466 pt) keeps its one button,
-    /// as before; `--force-open-layout` (simulator only) lets a narrower screen try it, for tests.
-    static func canWiden(rowWidth: CGFloat) -> Bool { rowWidth >= 600 || SimulatorSwitches.forceOpenLayout }
-
-    /// The one rule, pure (for the tests): having seen the bar in `form`, folded or whole, what to draw next; nil
-    /// when nothing changes. `tried`: the wide form has had its one try at this size.
-    static func next(after form: Form, folded: Bool, tried: Bool) -> Form? {
-        switch (form, folded) {
-        case (.narrow, false): return tried ? nil : .wide
-        case (.narrow, true): return .floor
-        case (.wide, true): return .narrow
-        case (.wide, false), (.floor, _): return nil
-        }
-    }
-
-    /// One appearance at one size: settle the form while the bar is see-through, show it, then watch.
-    func run(rowWidth: CGFloat, parts: Int, canWiden: Bool) async {
-        form = .narrow
-        settled = false
-        log.append("narrow")
-        var tried = !canWiden
-        // The bar of this width (it may take a moment to exist while the screen is pushed in).
-        var bar: UINavigationBar?
-        for _ in 0..<20 where bar == nil && !Task.isCancelled {
-            bar = TopBarFold.bar(rowWidth: rowWidth)
-            if bar == nil { try? await Task.sleep(for: .milliseconds(25)) }
-        }
-        bar?.alpha = 0
-        defer { bar?.alpha = 1 }
-        // Settle: at most narrow -> wide -> narrow -> floor.
-        for _ in 0..<4 {
-            try? await Task.sleep(for: .milliseconds(120))
-            if Task.isCancelled { return }
-            let folded = TopBarFold.folded(rowWidth: rowWidth, parts: parts)
-            log.append(folded ? "folded" : "whole")
-            guard let n = Self.next(after: form, folded: folded, tried: tried) else { break }
-            if n == .wide { tried = true }
-            await step(to: n, rebuild: folded)
-        }
-        bar?.alpha = 1
-        settled = true
-        // Watch: something new beside the clock can fold the bar at any time; step down, never up.
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, TopBarFold.folded(rowWidth: rowWidth, parts: parts),
-                  let n = Self.next(after: form, folded: true, tried: true) else { continue }
-            log.append("folded")
-            await step(to: n, rebuild: true)
-        }
-    }
-
-    private func step(to n: Form, rebuild: Bool) async {
-        form = n
-        log.append(n == .wide ? "wide" : n == .narrow ? "narrow" : "floor")
-        guard rebuild else { return }
-        rebuilding = true
-        try? await Task.sleep(for: .milliseconds(50))
-        rebuilding = false
-    }
+    /// The scheme the bar's items take; nil keeps the app's.
+    var scheme: ColorScheme? { self == .black ? .dark : nil }
+    /// The colour the screen paints behind the bar.
+    var colour: Color { self == .black ? .black : Color(.systemBackground) }
 }
 
-/// The bar's narrow-first behaviour on a screen with a top bar (the session, the Terminal and the JetKVM screens).
-/// `parts`: how many glass parts the bar shows when whole (back, the name, the views, Hide Keyboard).
-struct NarrowFirstBar: ViewModifier {
-    let fit: TopBarFit
-    let rowWidth: CGFloat
-    let parts: Int
+/// The Duo's top bar on the session, Terminal and JetKVM screens, Apple's way. Back on the left; the computer's name is
+/// the bar's own title (`navigationTitle`), which the system sizes and shortens first when room is short; what the name
+/// opens (a multi-screen Mac's screens) is Apple's title menu (`toolbarTitleMenu`); the subtitle (Apple's second line)
+/// is what is shown (a screen's name, "Terminal", "JetKVM"), and a problem notice takes that line, in orange, while it
+/// lasts. Each screen adds its views switch (`TopBarViewsItem`) and any other parts as trailing items. HIG, Designing
+/// for iPhone Duo: "Use the system overflow menu." and "In general, don't override the default bar placement." No width
+/// of ours decides what shows.
+struct DuoTitleBar<Items: View>: ViewModifier {
+    let title: String
+    /// The second line: what is shown. nil: one line.
+    var subtitle: String? = nil
+    var notice: String? = nil
     let hidden: Bool
-    let enabled: Bool
-    let canWiden: Bool
+    /// Whether the title opens a menu (`items`); without one the title is plain.
+    var hasMenu = false
+    /// What the screen paints behind the bar (its own background there, not the picture below). The bar's
+    /// words, caret and selector follow it by the system's own scheme (`BarBackdrop.scheme`).
+    var behind: BarBackdrop = .app
+    let back: () -> Void
+    @ViewBuilder let items: () -> Items
 
     func body(content: Content) -> some View {
         content
-            .toolbar(hidden || fit.rebuilding ? .hidden : .visible, for: .navigationBar)
-            .task(id: "\(rowWidth) \(hidden) \(enabled) \(parts)") {
-                guard enabled, !hidden else { return }
-                await fit.run(rowWidth: rowWidth, parts: parts, canWiden: canWiden)
+            .navigationTitle(title)
+            // Apple: "On iOS and iPadOS, the subtitle is displayed with the navigation title in the navigation bar."
+            // A notice takes the line while it lasts (it matters more than the screen's name, which the title menu
+            // still ticks); the system sizes and shortens both lines.
+            .navigationSubtitle(Self.line(subtitle: subtitle, notice: notice))
+            .navigationBarTitleDisplayMode(.inline)
+            // Apple's title menu only when there is something to list: an attached menu draws its chevron even when
+            // empty. It hangs on a clear background, not on `content`, so a screen count arriving adds or removes the
+            // menu without rebuilding the session view.
+            .background { if hasMenu { Color.clear.toolbarTitleMenu { items() } } }
+            .toolbar {
+                // The back caret drawn bare, no glass of its own, so the bar's left is caret + title and its only
+                // bubble is the views switch on the right. This screen is the root of its own NavigationStack (swapped
+                // in, not pushed), so there is no system back button to restyle; this is our own standard Button, with
+                // Apple's toolbar item modifier `sharedBackgroundVisibility(.hidden)` (iOS 26). 44 pt tap target.
+                ToolbarItem(placement: .topBarLeading) {
+                    BackToMacsButton(action: back, label: "Back")
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
+            .toolbar(hidden ? .hidden : .visible, for: .navigationBar)
+            .toolbarColorScheme(behind.scheme, for: .navigationBar)
+    }
+
+    /// The second line's text: the notice in orange if there is one, else what is shown, else nothing.
+    static func line(subtitle: String?, notice: String?) -> Text {
+        if let notice { return Text(notice).foregroundStyle(.orange) }
+        return Text(subtitle ?? "")
+    }
+}
+
+/// The views switch as the Duo bar's one trailing item, kept in sight longest (`visibilityPriority(.high)`): when
+/// room is short the system shortens the title first, then moves this into its own "…" and brings it back when room
+/// returns. Apple, visibilityPriority(_:): "When toolbar space is limited, items with a lower priority move into the
+/// overflow menu before items with a higher priority."
+struct TopBarViewsItem<Content: View>: ToolbarContent {
+    @ViewBuilder let content: () -> Content
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) { content() }
+            .visibilityPriority(.high)
+            .sharedBackgroundVisibility(.visible)
     }
 }
 
 /// Simulator and tests only (`--top-bar-reserve N`): an empty, glassless part of N pt at the bar's right that takes
 /// room from the leading parts, standing in for live activities beside the clock (the simulator cannot draw them).
-/// N = 0 (every real phone): nothing.
+/// Pinned, so it truly takes room: a plain trailing item went into the system's "…" itself. N = 0 (every real phone):
+/// nothing.
 struct TopBarStandIn: ToolbarContent {
     let width: CGFloat
 
     var body: some ToolbarContent {
         if width > 0 {
-            ToolbarItem(placement: .topBarTrailing) { Color.clear.frame(width: width, height: 1) }
+            ToolbarItem(placement: .topBarPinnedTrailing) { Color.clear.frame(width: width, height: 1) }
                 .sharedBackgroundVisibility(.hidden)
         }
     }
 }
 
-/// Reads the system's navigation bar (read only; nothing in it is changed but its see-through while a try settles).
-/// Whole, the bar has one round glass platter per part, back first at x 20. Folded, our parts sit in the system's
-/// own "…": ONE platter (48 pt) where they were (seen in the view tree on the unfolded simulator, build 71).
-@MainActor enum TopBarFold {
-    /// The bar of the key window first (the screen in front); another window can hold a bar of the same width.
-    static func bar(rowWidth: CGFloat) -> UINavigationBar? {
-        for scene in UIApplication.shared.connectedScenes {
-            guard let scene = scene as? UIWindowScene else { continue }
-            let windows = scene.windows.filter { $0.isKeyWindow } + scene.windows.filter { !$0.isKeyWindow }
-            for window in windows where !window.isHidden {
-                if let bar = bars(in: window).first(where: { abs($0.bounds.width - rowWidth) < 1 && !$0.isHidden }) {
-                    return bar
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Whether the bar of that width has folded our parts into its "…": the platter count is short of `parts`, or
-    /// only the "…" is left.
-    static func folded(rowWidth: CGFloat, parts: Int) -> Bool {
-        guard let bar = bar(rowWidth: rowWidth) else { return false }
-        let platters = glass(in: bar).map { $0.convert($0.bounds, to: bar) }
-            .filter { $0.width > 0 && $0.minX >= 0 && $0.maxX <= bar.bounds.width }
-        if platters.count == 1, let f = platters.first, f.width < 60, f.minX > 100 { return true }
-        return platters.count < parts
-    }
-
-    private static func bars(in view: UIView) -> [UINavigationBar] {
-        if let bar = view as? UINavigationBar { return [bar] }
-        return view.subviews.flatMap(bars)
-    }
-
-    /// The bar's glass platters, one per part (the outermost glass view of each).
-    private static func glass(in view: UIView) -> [UIView] {
-        if !view.isHidden, view.alpha > 0, String(describing: type(of: view)).contains("GlassInteractionView") {
-            return [view]
-        }
-        return view.subviews.flatMap(glass)
-    }
-}
-
 /// One part of the session's top bar, the same for the open Duo and the normal iPhone (back, the name bubble, the
-/// views). The part takes the bar's own glass and draws none of its own. HIG Toolbars, Best practices: "Reduce the
-/// use of toolbar backgrounds and tinted controls. Any custom backgrounds and appearances you use might overlay or
-/// interfere with background effects that the system provides." HIG Materials, Liquid Glass: "Standard components
-/// from system frameworks pick up the appearance and behavior of this material automatically." A part that also
-/// drew a `glassEffect` showed a second shape inside the bar's (the owner 2026-11-21, the selector, and 2026-11-22 twice,
-/// the name pill: "The double bubble is back."). `TopRowTests.testTopBarHasNoGlassInsideGlass` fails if any part
-/// draws its own glass again.
+/// views). The part takes the bar's own glass and draws none of its own. HIG Toolbars, Best practices: "Reduce the use
+/// of toolbar backgrounds and tinted controls. Any custom backgrounds and appearances you use might overlay or
+/// interfere with background effects that the system provides." HIG Materials, Liquid Glass: "Standard components from
+/// system frameworks pick up the appearance and behavior of this material automatically." A part that also drew a
+/// `glassEffect` showed a second shape inside the bar's. `TopRowTests.testTopBarHasNoGlassInsideGlass` fails if any
+/// part draws its own glass again.
 struct TopBarItem<Content: View>: ToolbarContent {
     @ViewBuilder let content: () -> Content
 
@@ -1156,12 +1043,13 @@ struct TopBarItem<Content: View>: ToolbarContent {
 }
 
 /// The one button that leaves the Mac and goes back to the Mac list: the standard back chevron, upright (in the bar)
-/// and sideways (top-left corner) alike. The owner, 2026-11-22, on the sideways X: "That's really confusing. I keep hitting it
-/// to dismiss the keyboard. It should be a back caret like it is in the vertical view." HIG Toolbars: "the standard
-/// Back button lets them retrace their steps through a hierarchy of information, and the standard Close button
-/// closes a modal view." The symbol's 20 pt minimum frame keeps the sideways glass circle the size it was.
+/// and sideways (top-left corner) alike. HIG Toolbars: "the standard Back button lets them retrace their steps through
+/// a hierarchy of information, and the standard Close button closes a modal view." The symbol's 20 pt minimum frame
+/// keeps the sideways glass circle the size it was.
 struct BackToMacsButton: View {
     let action: () -> Void
+    /// What VoiceOver says. The Duo's bare caret says "Back".
+    var label: String = "Back to Macs"
 
     var body: some View {
         Button(action: action) {
@@ -1172,52 +1060,46 @@ struct BackToMacsButton: View {
             }
             .labelStyle(.iconOnly)
         }
-        .accessibilityLabel("Back to Macs")
+        .accessibilityLabel(label)
         .accessibilityIdentifier("backToMacs")
     }
 }
 
-/// The views control on the top bar, the ONE control for every view of a computer (project notes (view-selector-back), the owner on
-/// build 66: "The new Duo Desktop update removed the selector from within the view that let you change between
-/// screen sharing and terminal and whatnot. We should still have that there"): the Mac session, and the Terminal and
-/// JetKVM screens opened from the list's icons. The switch (`ViewSelector`) when it fits beside back and a readable
-/// name; otherwise, and always on a normal iPhone, one view button with the same choices as a menu (`ViewMenuButton`).
+/// The views control on the top bar, the ONE control for every view of a computer: the Mac session, and the Terminal
+/// and JetKVM screens opened from the list's icons. On the Duo always the switch (`ViewSelector`), which the system
+/// moves into its "…" when room is short; on a normal iPhone one view button with the same choices as a menu
+/// (`ViewMenuButton`).
 struct ViewSwitch: View {
     @Binding var view: SessionView
     let choices: [SessionView]
-    let usesMenu: Bool
+    let normalPhone: Bool
 
     var body: some View {
-        if usesMenu { ViewMenuButton(view: $view, choices: choices) }
+        if normalPhone { ViewMenuButton(view: $view, choices: choices) }
         else { ViewSelector(view: $view, choices: choices) }
     }
 }
 
-/// The views control on a Terminal or JetKVM screen opened from the list (project notes (view-selector-back)): the same
-/// `ViewSwitch` with the same choices that computer's Screen Sharing session shows (Whole Screen and Follow Pointer
-/// when it has Screen Sharing, then Terminal, then JetKVM), shown whenever it has more than one way in. The current
-/// view is this screen's. Choosing another lets go of this one (`leave`) and opens that: Whole Screen or Follow
-/// Pointer start the Screen Sharing session in that view; Terminal or JetKVM open their own screens. Milestone 3's
-/// rule stays: a list icon opens exactly its way in; this switch changes it from inside.
+/// The views control on a Terminal or JetKVM screen opened from the list: the same `ViewSwitch` with the same choices
+/// that computer's Screen Sharing session shows (Whole Screen and Follow Pointer when it has Screen Sharing, then
+/// Terminal, then JetKVM), shown whenever it has more than one way in. The current view is this screen's. Choosing
+/// another lets go of this one (`leave`) and opens that: Whole Screen or Follow Pointer start the Screen Sharing
+/// session in that view; Terminal or JetKVM open their own screens. Milestone 3's rule stays: a list icon opens exactly
+/// its way in; this switch changes it from inside.
 struct WayViewSwitch: View {
     let entry: MacEntry
     let current: SessionView
-    /// The bar's narrow-first state (`TopBarFit`): the full switch only once the wide form was seen whole.
-    let fit: TopBarFit
     let normalPhone: Bool
     let leave: () -> Void
 
     static func shows(_ e: MacEntry) -> Bool { e.waysInThisBuild.count > 1 }
 
     var choices: [SessionView] { SessionView.choices(for: entry, normalPhone: normalPhone) }
-    static func usesMenu(normalPhone: Bool, wide: Bool) -> Bool { normalPhone || !wide }
-    var usesMenu: Bool { Self.usesMenu(normalPhone: normalPhone, wide: fit.wide) }
-    /// The name bubble's widest size beside this switch (the session's rule on the Duo).
-    var nameMaxWidth: CGFloat { normalPhone ? 220 : fit.nameMax }
 
     var body: some View {
         if Self.shows(entry) {
-            ViewSwitch(view: Binding(get: { current }, set: { choose($0) }), choices: choices, usesMenu: usesMenu)
+            ViewSwitch(view: Binding(get: { current }, set: { choose($0) }), choices: choices,
+                       normalPhone: normalPhone)
         }
     }
 
@@ -1228,15 +1110,12 @@ struct WayViewSwitch: View {
     }
 }
 
-/// The view selector: Whole Screen and Follow Pointer, side by side in one glass capsule (the owner 2026-11-21: "The
-/// view selectors are still this weird double bubble." / "The upper left selector between the whole screen and
-/// zoom can be narrower I think"). Each choice is a 44 pt target (HIG Buttons: at least 44x44 pt) with no gap
-/// between them; the chosen one sits on the orange accent fill with a white symbol (the owner 2026-11-21: "Let's do
-/// white first and I will decide."). Was two toolbar toggles in one group: about 121 pt wide; now 88 pt.
+/// The view selector: Whole Screen and Follow Pointer, side by side in one glass capsule. Each choice is a 44 pt target
+/// (HIG Buttons: at least 44x44 pt) with no gap between them; the chosen one sits on the orange accent fill with a
+/// white symbol. Was two toolbar toggles in one group: about 121 pt wide; now 88 pt.
 struct ViewSelector: View {
     @Binding var view: SessionView
-    /// Each choice is as tall as the system's own toolbar buttons (`TopRow.height`) and as wide (the owner 2026-11-21:
-    /// "Why are these all different vertical heights?"; was 44, a little shorter than back and info).
+    /// Each choice is as tall as the system's own toolbar buttons (`TopRow.height`) and as wide.
     static let target: CGFloat = TopRow.height
     /// The chosen circle scales with the target (36 in 44 before).
     static let fill: CGFloat = (36 * TopRow.height / 44).rounded()
@@ -1251,13 +1130,20 @@ struct ViewSelector: View {
                 Button {
                     view = v
                 } label: {
-                    Image(systemName: v.systemImage)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(chosen ? Color.white : Color.primary)
-                        .frame(width: Self.fill, height: Self.fill)
-                        .background { if chosen { Circle().fill(Color.accentColor) } }
-                        .frame(width: Self.target, height: Self.target)
-                        .contentShape(Rectangle())
+                    // A title with each symbol (HIG, Designing for iPhone Duo: "Include a title even when an item
+                    // shows a symbol, because the system uses the title in overflow menus and expanded forms.").
+                    Label {
+                        Text(v.title)
+                    } icon: {
+                        Image(systemName: v.systemImage)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(chosen ? Color.white : Color.primary)
+                            .frame(width: Self.fill, height: Self.fill)
+                            .background { if chosen { Circle().fill(Color.accentColor) } }
+                            .frame(width: Self.target, height: Self.target)
+                            .contentShape(Rectangle())
+                    }
+                    .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(v.title)
@@ -1270,77 +1156,15 @@ struct ViewSelector: View {
     }
 }
 
-/// The top row's one height. The system draws its toolbar buttons (back, info) as round glass 48 pt tall on iOS 26
-/// and later (measured in the simulator: 144 px at 3x, the same as the Mac list's system button group); our own
-/// glass parts (the selector, the name) take the same height, so all four sit on one line, top and bottom (the owner
-/// 2026-11-21, build 27: "Why are these all different vertical heights?"; before: back 48, selector 44, name 32,
-/// info 48). HIG Toolbars: items in a toolbar share one consistent size.
+/// The top row's one height. The system draws its toolbar buttons (back, info) as round glass 48 pt tall on iOS 26 and
+/// later (measured in the simulator: 144 px at 3x, the same as the Mac list's system button group); our own glass parts
+/// (the selector, the name) take the same height, so all four sit on one line, top and bottom. HIG Toolbars: items in a
+/// toolbar share one consistent size.
 enum TopRow {
     static let height: CGFloat = 48
     /// A one-symbol part's content (the normal iPhone's view button): the system back button's own content size
     /// in the bar (measured 36 x 36); the bar adds its glass around it, so both draw the same circle.
     static let itemContent: CGFloat = 36
-}
-
-/// The name bubble in the top row (the owner 2026-11-21: "the text in the bubble should be much smaller. It can be much
-/// smaller to show the computer and then underneath it which screen. As an Example, look at what Claude Code does
-/// with the two lines of text."): line 1 the Mac's name (semibold, footnote), line 2 the screen's name (caption 2,
-/// secondary), both centred. One screen: the Mac's name alone, one line, centred in the 48 pt bubble. All Screens:
-/// line 2 says so. A problem on the Mac (`notice`) takes line 2 in orange, so it stays in sight. Each line gives up
-/// its own middle only when it must; the pop-up chevron stays on a multi-screen Mac. Text scaling is capped at
-/// xLarge so a large text size cannot push the row past its 48 pt height (the switch's symbols do not scale).
-struct TopRowName: View {
-    let mac: String
-    let screen: String?
-    let notice: String?
-    var interactive = false
-    /// The bubble's widest size (`SessionTopRow.nameMaxWidth`); narrower when the names are short.
-    var maxWidth: CGFloat = .infinity
-    var report: ((String, CGRect) -> Void)? = nil
-    static let padding: CGFloat = 14
-    /// The pop-up chevron and its gap.
-    static let chevron: CGFloat = 16
-
-    private var textMax: CGFloat {
-        maxWidth - 2 * Self.padding - (interactive && screen != nil ? Self.chevron : 0)
-    }
-
-    /// The second line, if any: the problem notice first, else the screen's name.
-    var secondLine: String? { notice ?? screen }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            VStack(spacing: 0) {
-                Text(mac)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1).truncationMode(.middle)
-                if let line = secondLine {
-                    Text(line)
-                        .font(.caption2)
-                        .foregroundStyle(notice != nil ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
-                        .lineLimit(1).truncationMode(.middle)
-                }
-            }
-            .multilineTextAlignment(.center)
-            // The bar offers its items only their ideal width (it squeezed a plain name to "T…"), so the lines
-            // take their own width up to the cap and give up their middles only beyond it.
-            .frame(maxWidth: textMax)
-            if interactive, screen != nil {
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-            }
-        }
-        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(.horizontal, Self.padding)
-        .frame(height: TopRow.height)
-        // No glass here: it is a `TopBarItem`, so the bar draws the one pill, plain name or screen menu alike.
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { report?("name", $0) }
-        .accessibilityElement(children: .combine)
-    }
 }
 
 enum SessionLayout {
@@ -1353,12 +1177,10 @@ enum SessionLayout {
     /// bottom; `keyboardInset` is how far the keyboard reaches above its bottom. Nothing is placed below
     /// `keyboardTop`.
     ///
-    /// The picture is ALWAYS the full width (the owner 2026-11-20: "The Mac screen needs to be max width."). The band
-    /// takes the height left above the keyboard, and its 4 rows of keys fill it (the owner 2026-11-20: "We can make our
-    /// keys smaller to get 4 rows?" / "Yes"): the keys grow or shrink with the band, down to `minKeyHeight`. At
-    /// that floor, as the space gets shorter still, the band's padding gives way (8 → 2), then the gap between rows
-    /// (6 → 4); below that the band sits over the picture's bottom edge (`overlapsPicture`) rather than shrink the
-    /// keys or the picture.
+    /// The picture is ALWAYS the full width. The band takes the height left above the keyboard, and its 4 rows of keys
+    /// fill it: the keys grow or shrink with the band, down to `minKeyHeight`. At that floor, as the space gets shorter
+    /// still, the band's padding gives way (8 → 2), then the gap between rows (6 → 4); below that the band sits over
+    /// the picture's bottom edge (`overlapsPicture`) rather than shrink the keys or the picture.
     ///
     /// On this Duo (835 pt below the top row, a 376 pt picture, so the room above the keyboard is 459 - keyboard):
     /// - the owner's phone (keyboard 293 pt): 166 pt of room, a 150 pt band, 33 pt keys with 6 pt gaps;
@@ -1382,9 +1204,8 @@ enum SessionLayout {
         let keyboardInset: CGFloat
         /// Right: keys left, trackpad right (the standard). Left: the halves swap. Sizes are the same either way.
         var side: TrackpadSide = .standard
-        /// The shape of the picture the Mac sends. 16:10 (the owner 2026-11-21: "a designed 16:10 view that where the Mac
-        /// screen continues to fill the full app horizontally"): the picture is full width and taller, and the band
-        /// has 3 rows (`SixteenTenKeysLayout`). 16:9 is today's layout, untouched.
+        /// The shape of the picture the Mac sends. 16:10: the picture is full width and taller, and the band has 3 rows
+        /// (`SixteenTenKeysLayout`). 16:9 is today's layout, untouched.
         var shape: PictureShape = .sixteenNine
 
         /// The band's rows: 4 for 16:9, 3 for 16:10.
@@ -1517,7 +1338,7 @@ struct NotLiveOverlay: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Button { model.retryRejoin() } label: {
-                        // White on the orange accent fill, forced (the owner 2026-11-21: "Let's do white first").
+                        // White on the orange accent fill, forced.
                         Text("Try Again").foregroundStyle(.white)
                     }
                         .buttonStyle(.glassProminent)
@@ -1589,8 +1410,8 @@ private struct CanvasHost: UIViewRepresentable {
     static func dismantleUIView(_ v: CanvasView, coordinator: Coordinator) { v.stopPresenting() }
 }
 
-/// The upright session's two views (the owner 2026-11-21): the regular one (whole Mac screen) and centred (a quarter of
-/// the screen following the pointer). Remembered per Mac. (The two-pad view was scrapped 2026-11-21.)
+/// The upright session's two views: the regular one (whole Mac screen) and centred (a quarter of the screen following
+/// the pointer). Remembered per Mac.
 enum SessionView: String, CaseIterable, Identifiable {
     case regular, centred
     #if DUO_TERMINAL
@@ -1623,8 +1444,8 @@ enum SessionView: String, CaseIterable, Identifiable {
         case .terminal: "apple.terminal"
         #endif
         #if DUO_JETKVM
-        // HIG SF Symbols: a display with a cable, the hardware look of a KVM (the Mac's own screen is "rectangle").
-        case .jetkvm: "cable.connector"
+        // The list's JetKVM symbol (one definition: `WayIn.symbol`, the HDMI stick).
+        case .jetkvm: WayIn.jetkvm.symbol
         #endif
         }
     }
@@ -1657,7 +1478,7 @@ enum SessionView: String, CaseIterable, Identifiable {
 
 /// The Trackpad selector: Left or Right, the system's two-choice control, a segmented control in the Mac list's
 /// settings (HIG Segmented controls: a small set of mutually exclusive choices). Its only place since the session's
-/// More menu went (the owner 2026-11-21): a setting changed now and then, not in the session's top row.
+/// More menu went: a setting changed now and then, not in the session's top row.
 struct TrackpadSidePicker: View {
     enum Style { case segmented }
     @Binding var side: TrackpadSide
@@ -1763,8 +1584,7 @@ struct ScreenOverview: View {
 
 // The view switch's choices; Terminal only in the DUO_TERMINAL build, for a Mac with Terminal on.
 extension SessionView {
-    /// The choices in the view switch for a Mac (the owner 2026-11-21: Terminal "is also going to be optional ... You'll
-    /// set that in the per Mac preferences").
+    /// The choices in the view switch for a Mac.
     static func choices(terminal: Bool, jetkvm: Bool = false) -> [SessionView] {
         var c: [SessionView] = [.regular, .centred]
         #if DUO_TERMINAL
@@ -1777,16 +1597,15 @@ extension SessionView {
         return c
     }
 
-    /// A normal iPhone's view button (normal iPhone terminal jetkvm (change), the owner 2026-11-22: "Yes, Terminal and JetKVM
-    /// should be available on a normal phone."): the Duo's choices, per Mac and by the same settings switches, less
-    /// Whole Screen (the normal iPhone's Mac view is Follow Pointer only: "The display on the Mac is square").
+    /// A normal iPhone's view button: the Duo's choices, per Mac and by the same settings switches, less Whole Screen
+    /// (the normal iPhone's Mac view is Follow Pointer only: "The display on the Mac is square").
     static func normalPhoneChoices(terminal: Bool, jetkvm: Bool = false) -> [SessionView] {
         choices(terminal: terminal, jetkvm: jetkvm).filter { $0 != .regular }
     }
 
-    /// A computer's views by its ways in, as its Screen Sharing session's switch shows them (order
-    /// view-selector-back): Whole Screen and Follow Pointer for Screen Sharing (a normal iPhone: Follow Pointer
-    /// only), then Terminal, then JetKVM, each only when the computer has that way in and this build shows it.
+    /// A computer's views by its ways in, as its Screen Sharing session's switch shows them: Whole Screen and Follow
+    /// Pointer for Screen Sharing (a normal iPhone: Follow Pointer only), then Terminal, then JetKVM, each only when
+    /// the computer has that way in and this build shows it.
     static func choices(for e: MacEntry, normalPhone: Bool) -> [SessionView] {
         var c: [SessionView] = []
         if e.opens(.screenSharing) { c += normalPhone ? [.centred] : [.regular, .centred] }

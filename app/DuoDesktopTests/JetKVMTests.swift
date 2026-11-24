@@ -5,7 +5,7 @@ import JetKVMClient
 import XCTest
 @testable import DuoDesktop
 
-/// The JetKVM view's rules (project notes). Made-up names only.
+/// The JetKVM view's rules. Made-up names only.
 @MainActor
 final class JetKVMTests: XCTestCase {
     final class MemoryPasswords: JetKVMPasswordStore {
@@ -99,9 +99,9 @@ final class JetKVMTests: XCTestCase {
                                  "kb 2 []", "kb 2 [4]", "kb 2 []", "kb 0 []", "wheel -2 0"])
     }
 
-    /// the owner 2026-11-22: a password typed through a JetKVM was refused. Claim: a capital or shifted symbol from our
-    /// keyboard (the plain key with Shift in its flags) presses Shift around the key: Shift alone, Shift + key,
-    /// Shift alone, nothing; the next unshifted key carries no Shift. Before the fix "A!" arrived as "a1".
+    /// The owner 2026-11-22: a password typed through a JetKVM was refused. Claim: a capital or shifted symbol from our
+    /// keyboard (the plain key with Shift in its flags) presses Shift around the key: Shift alone, Shift + key, Shift
+    /// alone, nothing; the next unshifted key carries no Shift. Before the fix "A!" arrived as "a1".
     @MainActor
     func testShiftedCharactersPressShift() {
         let input = JetKVMInput(), rec = Recorder()
@@ -174,7 +174,7 @@ final class JetKVMTests: XCTestCase {
 #endif
 
 #if DUO_JETKVM
-/// The owner 2026-11-21: the JetKVM's video "sometimes works and it sometimes doesn't". A video connection that does not
+/// The owner 2026-11-21: the JetKVM's video sometimes worked and sometimes did not. A video connection that does not
 /// form is torn down and tried again by itself, up to 3 attempts, then the reason with Try Again; a wrong password
 /// is not retried; the log has no password and no address beyond the host name.
 @MainActor
@@ -260,8 +260,8 @@ final class JetKVMRetryTests: XCTestCase {
         XCTAssertEqual(Array(HIDRPC.keyboardReport(modifiers: [], keys: []).dropFirst()), [0x00])
     }
 
-    /// Claim (project notes, 2026-11-22): turning the phone, where the new picture view appears before the old
-    /// one goes, keeps the connection; it ends when the last picture view goes.
+    /// Claim: turning the phone, where the new picture view appears before the old one goes, keeps the connection; it
+    /// ends when the last picture view goes.
     func testTurningKeepsTheConnection() async throws {
         let e = try entry("jetkvm-turn.example.ts.net")
         let link = JetKVMLink.for(mac: e.id)

@@ -1,11 +1,11 @@
 import notify
 import XCTest
 
-/// First-launch Face ID fix (project notes): the app lock's first minute on a Face ID iPhone, driven through the
-/// system's own Face ID alerts. The simulator's Face ID is worked from here with the simulator's BiometricKit
-/// notifications (posted from inside the simulator, where this runner lives): enrolled, matching face, non-matching
-/// face. Run by a private picture script on a fresh install; skipped unless DUO_FACEID_RUN is set. Pictures
-/// go to DUO_SHOTS as <device prefix>-<scenario>-<step>.png.
+/// First-launch Face ID fix: the app lock's first minute on a Face ID iPhone, driven through the system's own Face ID
+/// alerts. The simulator's Face ID is worked from here with the simulator's BiometricKit notifications (posted from
+/// inside the simulator, where this runner lives): enrolled, matching face, non-matching face. Run by a private picture
+/// script on a fresh install; skipped unless DUO_FACEID_RUN is set. Pictures go to DUO_SHOTS as <device
+/// prefix>-<scenario>-<step>.png.
 @MainActor
 final class FirstLaunchFaceIDUITests: XCTestCase {
     private var app: XCUIApplication!

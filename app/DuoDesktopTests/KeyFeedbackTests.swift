@@ -4,7 +4,7 @@ import GlassActSession
 import XCTest
 @testable import DuoDesktop
 
-/// Our keys give the system keyboard's feedback (project notes): one test per rule.
+/// Our keys give the system keyboard's feedback: one test per rule.
 @MainActor
 final class KeyFeedbackTests: XCTestCase {
     override func tearDown() {
@@ -155,9 +155,8 @@ final class KeyFeedbackTests: XCTestCase {
         XCTAssertEqual(KeyPopup.shift(keyMinX: mid.minX, keyWidth: mid.width, containerWidth: width), 0)
     }
 
-    /// The owner 2026-11-21, mute on: "no sound and no haptics, but I still want the pop-ups". With every feedback path
-    /// off (no click, haptic switch off, and the after-drawing feedback never run) the letter is drawn pressed:
-    /// the pop-up is in the picture of the keyboard.
+    ///  With every feedback path off (no click, haptic switch off, and the after-drawing feedback never run) the letter
+    /// is drawn pressed: the pop-up is in the picture of the keyboard.
     func testPopupShowsWithEveryFeedbackPathOff() throws {
         var clicks = 0, taps = 0
         KeyFeedback.playClick = { clicks += 1 }

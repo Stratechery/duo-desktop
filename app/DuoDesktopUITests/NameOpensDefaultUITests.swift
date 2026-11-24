@@ -23,7 +23,7 @@ final class NameOpensDefaultUITests: XCTestCase {
         let name = app.buttons["computerName.Default Test Mac"]
         XCTAssertTrue(name.waitForExistence(timeout: 10), "the row's name")
         name.tap()
-        XCTAssertTrue(app.buttons["hideKeyboard"].waitForExistence(timeout: 5), "the Terminal screen")
+        XCTAssertTrue(app.descendants(matching: .any)["terminal"].waitForExistence(timeout: 5), "the Terminal screen")
         XCTAssertFalse(app.buttons["Cancel"].exists, "no Glass Act connecting row")
     }
 

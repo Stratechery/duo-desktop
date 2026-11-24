@@ -35,16 +35,24 @@ public final class TerminalLink: @unchecked Sendable {
     public var mayConnect: @Sendable () -> Bool = { true }
     /// The server's sign-in banner, if it sends one (Tailscale check mode would send its link this way).
     public var onBanner: @Sendable (String) -> Void = { _ in }
+    /// The server's identification line, each time a connect gets it (before the sign-in finishes).
+    public var onServerLine: @Sendable (String) -> Void = { _ in }
+    /// When set, the first time a sign-in succeeds the link asks the computer what it is with `uname -s`, on a separate
+    /// exec channel of the same connection (no PTY), so the session on screen never sees it, and reports the output
+    /// here. Asked once per link; never on a Windows server (it has no `uname`).
+    public var onSystemAnswer: (@Sendable (String) -> Void)?
+    private var askedSystem = false
 
     /// Review fixes 2 (review finding 3): how one attempt connects. The real one is SSH; tests stub it to hold a
     /// connect in flight across a lock. It must honour `attempt` (cancelled = close and throw).
     public lazy var connector: @Sendable (Target, PhoneKey, HostKeyStore, SSHConnectAttempt) async throws
         -> TerminalLinkTransport = { [weak self] t, key, hostKeys, attempt in
             let banner = self?.onBanner
+            let serverLine = self?.onServerLine
             return try await SSHConnection.connect(host: t.host, port: t.port, user: t.user,
                                                    signIn: t.tailscale ? .tailscale : .key(key),
                                                    hostKeys: hostKeys, hostKeyID: t.hostKeyID, attempt: attempt,
-                                                   onBanner: { banner?($0) })
+                                                   onBanner: { banner?($0) }, onServerLine: { serverLine?($0) })
         }
 
     private let lock = NSLock()
@@ -170,14 +178,20 @@ public final class TerminalLink: @unchecked Sendable {
                 }
                 let sz = lock.withLock { size }
                 let out = onOutput
-                let sh = try await c.openShell(pty: sz, command: command, onData: { out($0) },
+                // 4: no tmux line ever goes to a Windows PC. Its server said so in its first line, so the PTY gets the
+                // PC's own shell (the SSH `shell` request), whatever was asked.
+                let cmd = SSHServerLine.isWindows(c.serverLine) ? nil : command
+                let sh = try await c.openShell(pty: sz, command: cmd, onData: { out($0) },
                                                proceed: { [weak self] in self?.mayProceed(g, a) ?? false })
                 let live = lock.withLock { () -> Bool in
                     guard connection === c, wanted, generation == g, !held else { return false }
                     shell = sh; attempt = 0; connects += 1; return true
                 }
                 // Locked while it was opening: close at once; the loop then parks.
-                if live && mayConnect() { onState(.connected) } else { c.closeTransport() }
+                if live && mayConnect() {
+                    onState(.connected)
+                    askSystem(c, g, a)
+                } else { c.closeTransport() }
                 await c.waitClosed()
                 lock.withLock { if connection === c { connection = nil; shell = nil } }
             } catch let e as HostKeyChanged {
@@ -207,13 +221,40 @@ public final class TerminalLink: @unchecked Sendable {
     }
 }
 
-/// Review fixes 2 (review finding 3): what `TerminalLink` needs of one connection, so a test can hold a connect or an
-/// open across a lock. `proceed` is asked before each step that reaches the Mac (channel, PTY, command).
+extension TerminalLink {
+    /// The one `uname -s` (see `onSystemAnswer`), in its own task so the session is not held up by it.
+    fileprivate func askSystem(_ c: TerminalLinkTransport, _ g: Int, _ a: SSHConnectAttempt) {
+        guard let report = onSystemAnswer, !SSHServerLine.isWindows(c.serverLine) else { return }
+        let first = lock.withLock { () -> Bool in defer { askedSystem = true }; return !askedSystem }
+        guard first else { return }
+        Task { [weak self] in
+            guard let out = try? await c.runQuietly("uname -s", proceed: { self?.mayProceed(g, a) ?? false }) else {
+                self?.lock.withLock { self?.askedSystem = false } // not answered: ask again at the next sign-in
+                return
+            }
+            report(out)
+        }
+    }
+}
+
+/// Review fixes 2: what `TerminalLink` needs of one connection, so a test can hold a connect or an open across a lock.
+/// `proceed` is asked before each step that reaches the Mac (channel, PTY, command).
 public protocol TerminalLinkTransport: AnyObject, Sendable {
     func openShell(pty: (cols: Int, rows: Int), command: String?, onData: @escaping @Sendable ([UInt8]) -> Void,
                    proceed: @escaping @Sendable () -> Bool) async throws -> TerminalLinkShell
     func closeTransport()
     func waitClosed() async
+    /// The server's identification line, when known (`SSHServerLine`).
+    var serverLine: String? { get }
+    /// Runs one command on its own exec channel (no PTY) and returns what it printed.
+    func runQuietly(_ command: String, proceed: @escaping @Sendable () -> Bool) async throws -> String
+}
+
+public extension TerminalLinkTransport {
+    var serverLine: String? { nil }
+    func runQuietly(_ command: String, proceed: @escaping @Sendable () -> Bool) async throws -> String {
+        throw CancellationError()
+    }
 }
 
 public protocol TerminalLinkShell: AnyObject, Sendable {
@@ -229,4 +270,10 @@ extension SSHConnection: TerminalLinkTransport {
         try await open(pty: pty, command: command, onData: onData, proceed: proceed)
     }
     public func waitClosed() async { try? await closed.get() }
+    public func runQuietly(_ command: String, proceed: @escaping @Sendable () -> Bool) async throws -> String {
+        let box = OutputBox()
+        let ch = try await open(pty: nil, command: command, onData: { box.add($0) }, proceed: proceed)
+        try await ch.closed.get()
+        return String(decoding: box.bytes, as: UTF8.self)
+    }
 }

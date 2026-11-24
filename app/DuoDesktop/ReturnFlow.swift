@@ -1,8 +1,7 @@
 import Foundation
 
-/// Leaving Duo Desktop for another app and coming back (the owner 2026-11-20: "Is there any way to persist the connection
-/// in the background so it doesn't have to reconnect every time I switch to it?"). The decisions only, as a value
-/// type the tests drive; `SessionModel` carries out the actions.
+/// Leaving Duo Desktop for another app and coming back. The decisions only, as a value type the tests drive;
+/// `SessionModel` carries out the actions.
 ///
 /// iOS gives a backgrounded app a short, unguaranteed time (Apple DTS: "On current systems you can expect about 30
 /// seconds"), then suspends it. So: keep the session while iOS lets the app run; once it has ended, keep the last
@@ -173,11 +172,10 @@ struct ReturnFlow: Equatable {
 /// 10 s liveness watchdog reads). The viewer has no ping of its own to send. So: alive once control bytes arrive
 /// after the return; dead if none arrive within the bound.
 ///
-/// - Bound: from the session's own measured spacing of control bytes (`LinkPace`): the longest gap seen while
-///   live, plus half a second, never under 1.5 s (the next 1 Hz ping plus half a second for the network, a fast
-///   link) and never over 4 s (a dead session is still caught quickly). A slow link whose pings arrive 1.8 s apart
-///   gets 2.3 s instead of being called dead at 1.5 s and rejoined (the owner 2026-11-20: "This needs to work on all
-///   connections").
+/// - Bound: from the session's own measured spacing of control bytes (`LinkPace`): the longest gap seen while live,
+/// plus half a second, never under 1.5 s (the next 1 Hz ping plus half a second for the network, a fast link) and never
+/// over 4 s (a dead session is still caught quickly). A slow link whose pings arrive 1.8 s apart gets 2.3 s instead of
+/// being called dead at 1.5 s and rejoined.
 /// - Grace 0.1 s: bytes read in the first moment after the return may be old ones iOS buffered while the app was
 ///   suspended, sent before the Host gave up; they do not count. A ping that lands in that moment costs one more
 ///   ping (about 1 s), still inside the bound.

@@ -2,11 +2,11 @@ import LocalAuthentication
 import XCTest
 @testable import DuoDesktop
 
-/// First-launch Face ID fix (project notes): the app lock's state machine around the system's own Face ID alerts.
-/// Those alerts (the first-use "Allow … to use Face ID?" question, "Face Not Recognized", the passcode pad) make the
-/// scene inactive and then active again. The app used to treat every active-after-inactive as a return: it asked
-/// again by itself, so cancelling or refusing put the request straight back up (reproduced in the simulator: two
-/// requests after one Cancel, the Unlock button dimmed).
+/// First-launch Face ID fix: the app lock's state machine around the system's own Face ID alerts. Those alerts (the
+/// first-use "Allow … to use Face ID?" question, "Face Not Recognized", the passcode pad) make the scene inactive and
+/// then active again. The app used to treat every active-after-inactive as a return: it asked again by itself, so
+/// cancelling or refusing put the request straight back up (reproduced in the simulator: two requests after one Cancel,
+/// the Unlock button dimmed).
 @MainActor
 final class FirstLaunchFaceIDTests: XCTestCase {
     private func defaults() -> UserDefaults {

@@ -1,7 +1,8 @@
-// A Windows PC's own Remote Desktop, view only (project notes, milestone 1). FreeRDP 3 runs on its
-// own thread: it asks Windows for the session in `RDPScreen` (default 1920 x 1080, text at 200%), checks the PC's
-// certificate with `RDPTrust` (trust on first use), and hands each finished picture to the screen. No pointer and no
-// keys reach the PC in this milestone (milestone 2). Linked only with the DUO_RDP switch.
+// A Windows PC's own Remote Desktop, view only. FreeRDP 3 runs on its own thread: it asks Windows for the session in
+// `RDPScreen` (default 1920 x 1080, text at 200%), checks the PC's certificate with `RDPTrust` (trust on first use; a
+// changed one is refused), and hands each finished picture to the screen. Milestone 2: the pointer and keys from
+// `RDPInput` go to the PC (`send`), and a pointer the PC moves itself is reported (`onPointerMoved`). Linked only with
+// the DUO_RDP switch.
 #if DUO_RDP
 import AVFoundation
 import CoreMedia
@@ -9,15 +10,17 @@ import CoreVideo
 import FreeRDP
 import Foundation
 
-final class RemoteDesktopSession: @unchecked Sendable {
+final class RemoteDesktopSession: RDPOutput, @unchecked Sendable {
     enum State: Equatable {
         case connecting
         case live
-        /// Ended, with the reason in plain words (nil: left on purpose).
-        case ended(String?)
+        /// Ended, with the reason in plain words (nil: left on purpose) and, for a failed connect, what kind it was.
+        case ended(String?, RDPFailure.Kind? = nil)
     }
 
     struct Target {
+        /// The PC's name, for the failure words.
+        var name: String = "The PC"
         var host: String
         var port: UInt16
         var user: String
@@ -27,6 +30,7 @@ final class RemoteDesktopSession: @unchecked Sendable {
         var savedCertificate: String?
     }
 
+
     /// Called on the main queue.
     var onState: (State) -> Void = { _ in }
     var onFrame: (CVPixelBuffer) -> Void = { _ in }
@@ -35,6 +39,9 @@ final class RemoteDesktopSession: @unchecked Sendable {
     var askTrust: (_ fingerprint: String) -> Bool = { _ in false }
     /// A first-use certificate the person trusted: the screen saves it to the PC's entry.
     var trusted: (_ fingerprint: String) -> Void = { _ in }
+    /// The PC moved the pointer itself (TS_POINTER_POSITION, e.g. an app warping it): on the main queue.
+    var onPointerMoved: (Int, Int) -> Void = { _, _ in }
+    private var live = false
 
     private let target: Target
     private var instance: UnsafeMutablePointer<freerdp>?
@@ -71,7 +78,23 @@ final class RemoteDesktopSession: @unchecked Sendable {
         }
     }
 
-    private func report(_ s: State) { DispatchQueue.main.async { self.onState(s) } }
+    private func report(_ s: State) {
+        lock.withLock { live = s == .live }
+        DispatchQueue.main.async { self.onState(s) }
+    }
+
+    /// One input event to the PC (`RDPInput`), only while the session is live. FreeRDP's input calls are made under
+    /// the session's lock, so the session thread cannot free the instance meanwhile.
+    func send(_ event: RDPEvent) {
+        lock.withLock {
+            guard live, !stopping, let input = instance?.pointee.context?.pointee.input else { return }
+            switch event {
+            case let .mouse(flags, x, y): _ = freerdp_input_send_mouse_event(input, flags, x, y)
+            case let .key(flags, code): _ = freerdp_input_send_keyboard_event(input, flags, code)
+            case let .unicode(flags, code): _ = freerdp_input_send_unicode_keyboard_event(input, flags, code)
+            }
+        }
+    }
 
     /// The settings for `screen`, as FreeRDP's own client sets them; split out so a test can check them without a PC.
     static func apply(_ t: Target, to settings: UnsafeMutablePointer<rdpSettings>?) -> Bool {
@@ -124,6 +147,12 @@ final class RemoteDesktopSession: @unchecked Sendable {
                 RemoteDesktopSession.session(c.pointee.instance)?.painted(c)
                 return true
             }
+            ctx.pointee.update.pointee.pointer.pointee.PointerPosition = { c, p in
+                guard let c, let p, let s = RemoteDesktopSession.session(c.pointee.instance) else { return true }
+                let x = Int(p.pointee.xPos), y = Int(p.pointee.yPos)
+                DispatchQueue.main.async { s.onPointerMoved(x, y) }
+                return true
+            }
             ctx.pointee.update.pointee.DesktopResize = { c in
                 guard let c, let gdi = c.pointee.gdi, let s = c.pointee.settings else { return false }
                 return ObjCBool(gdi_resize(gdi, freerdp_settings_get_uint32(s, FreeRDP_DesktopWidth),
@@ -155,8 +184,9 @@ final class RemoteDesktopSession: @unchecked Sendable {
         guard go else { report(.ended(nil)); return }
         report(.connecting)
         guard freerdp_connect(inst) else {
-            let why = lock.withLock { stopping } ? nil : failureWords(freerdp_get_last_error(ctx))
-            report(.ended(why))
+            if lock.withLock({ stopping }) { report(.ended(nil)); return }
+            let (kind, words) = failure(freerdp_get_last_error(ctx))
+            report(.ended(words, kind))
             return
         }
         report(.live)
@@ -167,7 +197,7 @@ final class RemoteDesktopSession: @unchecked Sendable {
             _ = WaitForMultipleObjects(n, &handles, false, 100)
             if !freerdp_check_event_handles(ctx) { break }
         }
-        let leftOnPurpose = lock.withLock { stopping }
+        let leftOnPurpose = lock.withLock { () -> Bool in live = false; return stopping }
         _ = freerdp_disconnect(inst)
         report(.ended(leftOnPurpose ? nil : "Lost the connection."))
     }
@@ -191,23 +221,15 @@ final class RemoteDesktopSession: @unchecked Sendable {
         }
     }
 
-    /// Plain words for why the connect failed (the full list is milestone 3).
-    private func failureWords(_ code: UInt32) -> String {
-        if lock.withLock({ refusedChange }) {
-            return "This PC's certificate is not the one you trusted before, so the app did not connect."
+    /// Why the connect failed, in plain words (milestone 3, `RDPFailure`). A transport failure asks the PC's port
+    /// once more (a short TCP connect, on this thread) to tell "Remote Desktop off" from "not reachable".
+    private func failure(_ code: UInt32) -> (RDPFailure.Kind, String) {
+        let changed = lock.withLock { refusedChange }
+        let kind = RDPFailure.kind(code: code, refusedChange: changed) {
+            RDPReach.probe(host: target.host, port: target.port)
         }
-        // FreeRDP's error.h: MAKE_FREERDP_ERROR(CONNECT, ERRCONNECT_*) = (2 << 16) | type (macros Swift cannot import).
-        let connect = { (type: UInt32) in (UInt32(2) << 16) | type }
-        switch code {
-        case connect(0x09), connect(0x14), connect(0x15): // authentication failed, logon failure, wrong password
-            return "Windows did not accept the user name or password."
-        case connect(0x16), connect(0x0A): // access denied, insufficient privileges
-            return "This account is not allowed to use Remote Desktop on this PC."
-        case connect(0x08), connect(0x0B): // TLS connect failed, cancelled (a refused certificate)
-            return "The PC's certificate was not trusted, so the app did not connect."
-        default:
-            return "Could not connect to the PC (\(String(cString: freerdp_get_last_error_string(code))))."
-        }
+        let detail = kind == .other ? String(cString: freerdp_get_last_error_string(code)) : ""
+        return (kind, RDPFailure.words(kind, name: target.name, port: target.port, detail: detail))
     }
 
     /// One finished paint: copy the desktop into a pixel buffer for the screen (only when the last one was shown).
@@ -246,6 +268,17 @@ final class RemoteDesktopSession: @unchecked Sendable {
             self.onFrame(pb)
             self.lock.withLock { self.framePending = false }
         }
+    }
+}
+#endif
+
+#if DUO_RDP
+extension RemoteDesktopSession.Target {
+    /// The connect request for a saved PC: its port, user name, Screen (Size and Text Size, read at each connect, so a
+    /// change in its ⓘ settings is used the next time) and saved certificate, with the password typed now.
+    init(_ e: MacEntry, host: String, password: String) {
+        self.init(name: e.name, host: host, port: e.rdpPortValue, user: e.rdpUser ?? "", password: password, screen: e.rdpScreen,
+                  savedCertificate: e.rdpCertificate)
     }
 }
 #endif

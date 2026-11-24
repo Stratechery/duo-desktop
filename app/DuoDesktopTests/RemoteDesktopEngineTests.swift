@@ -1,5 +1,5 @@
-// Remote Desktop milestone 0 (project notes): the FreeRDP engine is linked and runs in the DUO_RDP build,
-// and About names it with its licences. No PC is contacted.
+// Remote Desktop milestone 0: the FreeRDP engine is linked and runs in the DUO_RDP build, and About names it with its
+// licences. No PC is contacted.
 #if DUO_RDP
 import XCTest
 import FreeRDP

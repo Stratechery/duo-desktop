@@ -29,14 +29,14 @@ final class SessionModel {
         var title: String
         var text: String
         var offersForgetKey = false
-        /// The computer Screen Sharing did not open (project notes (computers-m3) 2): the alert offers its other ways in.
+        /// The computer Screen Sharing did not open: the alert offers its other ways in.
         var computerID: String? = nil
     }
 
     var phase: Phase = .idle {
         // "Last Mac" is stored by the session itself on every successful connect, whatever started it (list tap,
-        // redial, rejoin, the outer screen's cold connect): the outer screen's cold open then always goes to the
-        // Mac the phone was last on (the owner 2026-11-21, wrong-Mac defect).
+        // redial, rejoin, the outer screen's cold connect): the outer screen's cold open then always goes to the Mac
+        // the phone was last on.
         didSet { if phase == .inSession, oldValue != .inSession, let mac { LastMac.store(mac, in: lastMacDefaults) } }
     }
     /// Where "last Mac" is kept (tests pass their own).
@@ -115,7 +115,7 @@ final class SessionModel {
     /// The session screen's input goes through this; open only while live.
     let input = InputGate()
 
-    // MARK: Where typing goes (project notes)
+    // MARK: Where typing goes
 
     private var pictureSize: (Int, Int) { ((shownGrid ?? grid)?.width ?? 0, (shownGrid ?? grid)?.height ?? 0) }
 
@@ -134,7 +134,7 @@ final class SessionModel {
         }
     }
 
-    // MARK: Unlock automatically (project notes)
+    // MARK: Unlock automatically
 
     /// The Host can type the saved password (it said UNLOCK_STATE available on connect). An older Host never says.
     private(set) var hostCanUnlock = false
@@ -159,10 +159,9 @@ final class SessionModel {
                                         appUnlocked: autoUnlockContext() != nil)
     }
 
-    /// The outer screen's opening, in one place (project notes, "Outer screen opening"): on the password field with
-    /// the keyboard up only for a Mac that is locked and will NOT be unlocked automatically (setting off, an older
-    /// Host, or the one try failed), and for an older Host that does not say (nil: today's way). Otherwise the dialog
-    /// spot with the keyboard down.
+    /// The outer screen's opening, in one place: on the password field with the keyboard up only for a Mac that is
+    /// locked and will NOT be unlocked automatically (setting off, an older Host, or the one try failed), and for an
+    /// older Host that does not say (nil: today's way). Otherwise the dialog spot with the keyboard down.
     var outerOpensOnPassword: Bool {
         guard let locked = macLocked else { return true }
         return locked && !autoUnlockExpected
@@ -397,9 +396,8 @@ final class SessionModel {
             self.note("canvas \(w)x\(h)")
             self.fullCanvasWidth = max(self.fullCanvasWidth, grid.width)
             self.grid = grid
-            // The picture view draws from `shownGrid`: it must take the new size too, or it keeps the old one while
-            // the pointer engines take the new one (the Host's auto-scale to 960 x 540 on a slow link froze the
-            // picture and drew the pointer at half its real place; project notes).
+            // The picture view draws from `shownGrid`: it must take the new size too, or it keeps the old one while the
+            // pointer engines take the new one.
             if self.shownGrid != nil { self.shownGrid = grid }
             self.gridGeneration += 1
         }
@@ -560,10 +558,9 @@ final class SessionModel {
         note("trusted new host key \(key) for “\(mac.name)” (at \(dialHost):\(mac.port))")
     }
 
-    /// The open screen's view in THIS session. Every connect starts it at Whole Screen (the owner 2026-11-21: "When you
-    /// launch a new Mac with the Duo open, it should never start in zoomed in view. It should always start in the
-    /// full screen view."); a fold and unfold during the session brings it back as it was left. The outer screen
-    /// never reads or writes it (it keeps its own opening: vertical, on the password field, keyboard up).
+    /// The open screen's view in THIS session. Every connect starts it at Whole Screen; a fold and unfold during the
+    /// session brings it back as it was left. The outer screen never reads or writes it (it keeps its own opening:
+    /// vertical, on the password field, keyboard up).
     var openView: SessionView = .regular
 
     /// The view last used on this Mac (stored in its entry). Recorded only; it no longer picks the start
@@ -1024,7 +1021,7 @@ final class SessionModel {
     }
 
     /// Paste text from iPhone: the phone's clipboard text becomes the Mac's, ready for ⌘V.
-    // MARK: - Several screens (project notes, M4)
+    // MARK: - Several screens
 
     /// The Mac's screens from the Host's last list; empty for an older Host. One screen = nothing new shows.
     private(set) var screens: [MacScreen] = []
@@ -1037,9 +1034,8 @@ final class SessionModel {
     /// After a switch: the pointer the Host placed, in the new picture's pixels, for the trackpad to carry on from.
     @ObservationIgnored var onScreenSwitched: ((Int, Int) -> Void)?
     private var overviewTimer: Timer?
-    /// All Screens: a still of each screen from the Host (the owner 2026-11-21: "I need to see a snapshot of the screens
-    /// here so I know which one to go to."), by screen id. Empty until the first arrives, and always with an older
-    /// Host (the tile then shows as before).
+    /// All Screens: a still of each screen from the Host, by screen id. Empty until the first arrives, and always with
+    /// an older Host (the tile then shows as before).
     private(set) var screenSnapshots: [UInt32: UIImage] = [:]
     /// Bytes of the snapshots received since the last request (one refresh), for the log and the result.
     private(set) var snapshotBytesThisRound = 0
@@ -1115,7 +1111,7 @@ final class SessionModel {
         choosingScreenID = target.screen.id
         crossing = (target, Date())
         crossingDirection = EdgeCrossing.direction(px: x, py: y, width: width, height: height)
-        // The name appears with the slide, when the Mac answers (project notes, crossing animation).
+        // The name appears with the slide, when the Mac answers.
         note("edge crossing: \(shown.name) → \(target.screen.name) at \(target.x),\(target.y)")
         controller.selectDisplay(target.screen.id, pointerAt: (target.x, target.y))
         crossingTimeout?.invalidate()

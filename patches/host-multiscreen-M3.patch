@@ -307,8 +307,8 @@ index 51ee40a..13a7c9d 100644
              // changes only what they're sent.
              var mode = requested
 +            // Duo Screens build (multi-screen): this Host never changes a display's resolution or adds
-+            // a virtual display, whatever the viewer asks (the owner 2026-11-21: "not change the resolution
-+            // on the Mac"). Scale instead; the handshake still finishes (applyResize re-offers).
++            // a virtual display, whatever the viewer asks (the resolution on the Mac
++            // stays as it is). Scale instead; the handshake still finishes (applyResize re-offers).
 +            let allowed = DisplayChoice.allowedGeometryMode(mode)
 +            if allowed != mode {
 +                self.onStatus("geometry mode \(mode) refused by this Host (resolution / virtual display) — scale instead")

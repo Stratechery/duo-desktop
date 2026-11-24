@@ -1,7 +1,7 @@
 #!/bin/sh
-# Gets Glass Act at the pinned commit and applies the Host patches in order (patches/HOST_PATCHES).
-# Usage: host/prepare-host.sh [folder]     (default: vendor/glassact-host, next to app/)
-# Stops at the first patch that does not apply. Run it on an empty or missing folder.
+# Gets Glass Act at the pinned commit and applies the Host patches in order (patches/HOST_PATCHES). Usage:
+# host/prepare-host.sh [folder] (default: vendor/glassact-host, next to app/) Stops at the first patch that does not
+# apply. Run it on an empty or missing folder.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 dest=${1:-"$repo/vendor/glassact-host"}

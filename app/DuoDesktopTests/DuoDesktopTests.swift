@@ -115,7 +115,7 @@ final class KeyboardTests: XCTestCase {
         XCTAssertEqual(k.latch(of: .command), .off)
     }
 
-    /// No double-tap lock (the owner 2026-11-20): two quick taps leave the modifier released, and nothing is sent.
+    /// No double-tap lock: two quick taps leave the modifier released, and nothing is sent.
     func testTwoQuickTapsLetTheModifierGo() {
         let r = Recorder()
         let k = MacKeyboardEngine(sink: r)
@@ -305,7 +305,7 @@ final class TrackpadTests: XCTestCase {
         XCTAssertFalse(t.dragging)
     }
 
-    // MARK: Click buttons (the owner 2026-11-20: "There should be a button under the left thumb for click.")
+    // MARK: Click buttons
 
     /// Left click: down while the thumb is down, at the pointer; moves meanwhile are drags; up where it lifts.
     func testLeftClickButtonHeldWhileMovingDrags() {
@@ -387,7 +387,7 @@ final class TrackpadTests: XCTestCase {
         XCTAssertTrue(r.events.filter { $0.kind == 3 }.isEmpty)
     }
 
-    // MARK: Scroll button (the owner 2026-11-20: "If you press that button and scroll on the trackpad, then it scrolls.")
+    // MARK: Scroll button
 
     /// Held + one finger moving: scroll events at the pointer, the same as two fingers (content follows the finger),
     /// and the pointer stays put. Lifted: the finger moves the pointer again.
@@ -589,7 +589,7 @@ final class AppLockTests: XCTestCase {
         let d = defaults()
         XCTAssertNil(d.object(forKey: AppLock.settingKey), "fresh install: nothing stored")
         let lock = AppLock(defaults: d) { _ in .success(nil) }
-        XCTAssertTrue(lock.required, "on by default (the owner 2026-11-20)")
+        XCTAssertTrue(lock.required, "on by default")
         XCTAssertTrue(lock.locked, "asks when the app opens")
         await lock.unlock()
         XCTAssertFalse(lock.locked)
@@ -695,7 +695,7 @@ final class AboutTests: XCTestCase {
         XCTAssertFalse(notices.contains { $0.text.contains("FreeRDP") }, "no FreeRDP notice without DUO_RDP")
         #endif
         XCTAssertEqual(notices.count, expected)
-        // The plain version names neither (the owner 2026-11-21: two versions from one repository).
+        // The plain version names neither.
         #if !DUO_TERMINAL
         XCTAssertFalse(notices.contains { $0.text.contains("SwiftTerm") }, "no SwiftTerm notice in the plain build")
         #endif
@@ -860,7 +860,7 @@ final class HorizontalTouchTests: XCTestCase {
     }
 }
 
-// MARK: - Touch like Apple's touch-display MacBook (the owner 2026-11-20; table in project notes)
+// MARK: - Touch like Apple's touch-display MacBook
 
 @MainActor final class TouchLikeMacBookProTests: XCTestCase {
     private let ctl = Int(KeyMap.Modifier.control.eventFlags)
@@ -1092,7 +1092,7 @@ final class HorizontalTouchTests: XCTestCase {
     }
 }
 
-// MARK: - Keyboard at standard key sizes (the owner 2026-11-20: "The keyboard shouldn't be weirdly stretched.")
+// MARK: - Keyboard at standard key sizes
 
 final class KeySizeTests: XCTestCase {
     /// The Duo open, upright: 669 x 951 pt less the top row (the navigation bar in the clock's row ends at 82 pt,
@@ -1102,8 +1102,7 @@ final class KeySizeTests: XCTestCase {
     /// iPhone keyboard (291), with a suggestion bar (about 321), and taller ones, to make sure the layout gives way.
     let keyboardInsets: [CGFloat] = [0, 216, 273, 277, 285, 291, 292, 317, 321, 333, 336, 380, 450]
 
-    /// The owner 2026-11-20: "we should have a system standard keyboard on the bottom, and the middle part should be a
-    /// trackpad." The picture, the band, the special keys and the trackpad never reach into the keyboard's frame.
+    ///  The picture, the band, the special keys and the trackpad never reach into the keyboard's frame.
     func testPictureAndMiddleBandNeverOverlapTheKeyboard() {
         for inset in keyboardInsets {
             let u = SessionLayout.Upright(size: safeUpright, keyboardInset: inset)
@@ -1143,8 +1142,8 @@ final class KeySizeTests: XCTestCase {
         XCTAssertTrue(SessionLayout.Upright(size: safeUpright, keyboardInset: 326).overlapsPicture)
     }
 
-    /// The owner 2026-11-20: "We can make our keys smaller to get 4 rows?" / "Yes". On his phone (keyboard 293 pt, so
-    /// 166 pt of room and a 150 pt band): 4 rows of 33 pt keys with 6 pt gaps (132 + 18 = 150), 35 pt wide.
+    ///  / "Yes". On his phone (keyboard 293 pt, so 166 pt of room and a 150 pt band): 4 rows of 33 pt keys with 6 pt
+    /// gaps (132 + 18 = 150), 35 pt wide.
     func testBensPhoneGetsFourRowsOf33ptKeys() {
         let u = SessionLayout.Upright(size: safeUpright, keyboardInset: 293)
         XCTAssertEqual(u.keyboardTop - u.picture.maxY, 166)
@@ -1205,8 +1204,8 @@ final class KeySizeTests: XCTestCase {
         }
     }
 
-    /// The owner 2026-11-20: "The Mac screen needs to be max width." At every keyboard height, every step from none to
-    /// taller than any real keyboard, the picture is the screen's full width, 16:9, from the top row's bottom.
+    ///  At every keyboard height, every step from none to taller than any real keyboard, the picture is the screen's
+    /// full width, 16:9, from the top row's bottom.
     func testPictureIsAlwaysTheFullWidthAndStartsAtTheTopRowsBottom() {
         for inset in stride(from: CGFloat(0), through: 500, by: 1) {
             let u = SessionLayout.Upright(size: safeUpright, keyboardInset: inset)
@@ -1231,7 +1230,7 @@ final class KeySizeTests: XCTestCase {
         XCTAssertEqual(KeyMetrics.gap, 6)
     }
 
-    /// The 24 keys, and never fn (the owner 2026-11-20: "I think fn is the one to go?").
+    /// The 24 keys, and never fn.
     private let allIDs = Set(MacShortcut.all.map { "s-" + $0.id } + [
         "k-control", "k-option", "k-command", "k-shift", "k-left", "k-up", "k-down", "k-right",
         "k-escape", "k-tab", "k-forwarddelete", "k-fblock"])
@@ -1240,8 +1239,8 @@ final class KeySizeTests: XCTestCase {
         row.map { if case .gap = $0 { nil } else { $0.id } }
     }
 
-    /// The owner's table (mock-up, 2026-11-20: "Looks good. Build it"): 4 rows of 6 one-wide keys, no empty cell, no fn,
-    /// every one of the 24 keys once, the arrows together, ⌃ ⌥ ⌘ ⇧ together in the bottom row.
+    /// The owner's table: 4 rows of 6 one-wide keys, no empty cell, no fn, every one of the 24 keys once, the arrows
+    /// together, ⌃ ⌥ ⌘ ⇧ together in the bottom row.
     func testKeysAreFourRowsOfSixInBensOrder() {
         let rows = SpecialKeysLayout.rows(functionKeys: false)
         XCTAssertEqual(rows.map { $0.map(\.id) }, [
@@ -1264,8 +1263,7 @@ final class KeySizeTests: XCTestCase {
         }
         XCTAssertEqual(Set(rows.joined().map(\.id)), allIDs)
         XCTAssertNil(MacKeysBar.keys.first { $0.id == "fn" })
-        // The buttons (the owner 2026-11-20: "a 2x2 button that is the left click, a 1x2 button that is right click, and
-        // a 1x2 button that is scroll"): top to bottom Left 2 rows, Right 1, Scroll 1, all 2 wide; the grid's 4 rows.
+        // The buttons: top to bottom Left 2 rows, Right 1, Scroll 1, all 2 wide; the grid's 4 rows.
         XCTAssertEqual(ClickButtonsLayout.stack.map(\.button), [.right, .scroll, .left])
         XCTAssertEqual(ClickButtonsLayout.stack.map(\.rows), [1, 1, 2])
         XCTAssertEqual(ClickButtonsLayout.stack.map(\.rows).reduce(0, +), SpecialKeysLayout.rowCount)
@@ -1280,10 +1278,9 @@ final class KeySizeTests: XCTestCase {
         }
     }
 
-    // MARK: Trackpad on the left (the owner 2026-11-20: "It should be an option to flip the buttons and the trackpad")
+    // MARK: Trackpad on the left
 
-    /// The keys do not flip (the owner 2026-11-20: "All of our extra modifier keys should stay the same. They should not
-    /// flip."): one order, the table's, with and without "more", whichever side the trackpad is on.
+    /// The keys do not flip: one order, the table's, with and without "more", whichever side the trackpad is on.
     func testKeysKeepTheirOrderWithTheTrackpadOnTheLeft() {
         for more in [false, true] {
             let rows = SpecialKeysLayout.rows(functionKeys: more)
@@ -1342,7 +1339,7 @@ final class KeySizeTests: XCTestCase {
     func testKeysShowOneGlyphOrOneShortWord() {
         let labels = Dictionary(uniqueKeysWithValues: SpecialKeysLayout.rows(functionKeys: false).joined()
             .compactMap { if case let .key(k) = $0 { (k.id, k.label) } else { nil } })
-        // esc is the word, as on the horizontal row (the owner 2026-11-20), not the circular-arrow symbol.
+        // Esc is the word, as on the horizontal row, not the circular-arrow symbol.
         XCTAssertEqual(labels["escape"], "esc")
         XCTAssertEqual(KeyCap.face(MacKeyboardLayout.escape), .text("esc"))
         XCTAssertEqual(labels["tab"], "⇥")
@@ -1596,7 +1593,7 @@ final class HorizontalTypingTests: XCTestCase {
     }
 }
 
-// MARK: - The top row (the owner 2026-11-20: "Should mimic Claud app. Mac below")
+// MARK: - The top row
 
 final class TopRowTests: XCTestCase {
     /// On the app's own scene, upright, the session's real top row (`SessionTopRow` in a NavigationStack) over a
@@ -1692,13 +1689,11 @@ final class TopRowTests: XCTestCase {
         XCTAssertEqual(669 - picture.maxY, picture.minY, accuracy: 0.7, "equal bars above and below")
     }
 
-    /// The owner 2026-11-21: "We should flip the order of the computer name and its screens and the four views" and the
-    /// info button "doesn't need to be on every screen"; after build 46 brought it back and a long name truncated:
-    /// "No, no truncation. Cut it again". Upright, 669 wide, on the app's scene, with long names, two and four views:
-    /// the order is back, the name bubble, the view switch; no control right of the switch (no info, no More); all
-    /// 48 pt tall on one line; nothing overlaps; the switch ends left of the clock's area.
-    /// RULE: with "My Mac mini" / "Studio Display (2)" and four views, neither line of the bubble truncates
-    /// (the bubble in the row is at least as wide as the same bubble with no cap at all).
+    ///  and the info button "doesn't need to be on every screen"; after build 46 brought it back and a long name
+    /// truncated: "No, no truncation. Cut it again". Upright, 669 wide, on the app's scene, with long names, two and
+    /// four views: the order is back, the name bubble, the view switch; no control right of the switch (no info, no
+    /// More); all 48 pt tall on one line; nothing overlaps; the switch ends left of the clock's area. RULE: the name is
+    /// the bar's own title, not a pill of ours.
     @MainActor
     func testRowOrderBackNameSwitchNoInfoAndNothingOverlaps() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -1721,7 +1716,7 @@ final class TopRowTests: XCTestCase {
                 window.rootViewController = host
                 window.makeKeyAndVisible()
                 try await Task.sleep(for: .seconds(1))
-                let name = try XCTUnwrap(parts.frames["name"]), sel = try XCTUnwrap(parts.frames["selector"])
+                let sel = try XCTUnwrap(parts.frames["selector"])
                 let nav = try XCTUnwrap(Self.find(UINavigationBar.self, in: host.view))
                 let controls = Self.all(UIControl.self, in: nav).map { $0.convert($0.bounds, to: nil) }
                     .filter { $0.width >= 40 }
@@ -1729,36 +1724,26 @@ final class TopRowTests: XCTestCase {
                 let labels = Self.all(UIView.self, in: nav).compactMap(\.accessibilityLabel)
                 let selW = ViewSelector.target * CGFloat(choices.count)
                 print("DUO-TEST top row \(choices.count) views '\(mac)' / '\(screen ?? "-")': back \(back), "
-                      + "name \(name), selector \(sel), controls \(controls), labels \(labels)")
+                      + "selector \(sel), title \(nav.topItem?.title ?? "-"), controls \(controls)")
+                // Back, the name as the bar's own title, the switch trailing.
+                XCTAssertEqual(nav.topItem?.title, mac, "the title is the computer's name")
+                XCTAssertNil(parts.frames["name"], "no name pill of ours")
                 XCTAssertEqual(sel.width, selW, accuracy: 0.5, "selector width")
                 XCTAssertEqual(sel.height, TopRow.height, accuracy: 0.5, "selector height")
-                XCTAssertEqual(name.height, TopRow.height, accuracy: 0.5, "name height")
-                XCTAssertEqual(name.midY, sel.midY, accuracy: 0.5, "name and selector on one line")
                 XCTAssertFalse(labels.contains("More"), "the More menu is gone")
                 XCTAssertFalse(labels.contains("Key Info"), "the info button is gone")
-                XCTAssertGreaterThanOrEqual(name.minX, back.maxX + 4, "name right of back")
-                XCTAssertLessThanOrEqual(name.maxX + 4, sel.minX, "switch right of the name")
-                XCTAssertLessThanOrEqual(name.width, TopBarFit.nameCap + 4)
-                XCTAssertTrue(controls.filter { $0.minX > sel.maxX }.isEmpty, "nothing right of the switch")
-                if mac == "My Mac mini", screen == "Studio Display (2)" {
-                    let free = UIHostingController(rootView: TopRowName(mac: mac, screen: screen, notice: nil,
-                                                                       interactive: true))
-                    let natural = free.sizeThatFits(in: CGSize(width: 2000, height: 200))
-                    print("DUO-TEST no truncation \(choices.count) views: bubble \(name.width), uncapped \(natural.width)")
-                    XCTAssertGreaterThanOrEqual(name.width, natural.width - 0.5,
-                                                "\(choices.count) views: neither line of the bubble truncates")
-                }
+                XCTAssertLessThanOrEqual(back.maxX + 4, sel.minX, "switch right of back")
                 window.isHidden = true
             }
         }
     }
 
-    /// No bubble in a bubble (the owner 2026-11-21 and 2026-11-22, twice: "The double bubble is back."): the session's
-    /// real top bar, both layouts (the Duo's switch, the normal iPhone's view button with one view and with several),
-    /// one-line and two-line names, short and long. The bar draws one glass platter per part (`barGlass`); a part
-    /// that draws its own `glassEffect` adds a second glass layer inside it (`ownGlass`). Build 55 had exactly that at
-    /// the one-line name pill and the view switch, so this test fails on build 55 and passes on 56. It also checks
-    /// that back, the name and the views stay on the row (not folded into the bar's "•••").
+    /// No bubble in a bubble: the session's real top bar, both layouts (the Duo's switch, the normal iPhone's view
+    /// button with one view and with several), one-line and two-line names, short and long. The bar draws one glass
+    /// platter per part (`barGlass`); a part that draws its own `glassEffect` adds a second glass layer inside it
+    /// (`ownGlass`). Build 55 had exactly that at the one-line name pill and the view switch, so this test fails on
+    /// build 55 and passes on 56. It also checks that back, the name and the views stay on the row (not folded into the
+    /// bar's "•••").
     @MainActor
     func testTopBarHasNoGlassInsideGlass() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -1798,7 +1783,8 @@ final class TopRowTests: XCTestCase {
                 let nav = try XCTUnwrap(Self.find(UINavigationBar.self, in: host.view))
                 let own = Self.ownGlass(in: nav), bar = Self.barGlass(in: nav)
                 print("DUO-TEST glass \(label) '\(mac)' / '\(screen ?? "-")': bar \(bar), own \(own)")
-                XCTAssertGreaterThanOrEqual(bar.count, 3, "\(label): back, name and views each on the bar's glass")
+                // Back and the views (the name is the bar's title, no glass), the Duo and a normal iPhone alike.
+                XCTAssertGreaterThanOrEqual(bar.count, 1, "\(label): the views on the bar's glass")
                 XCTAssertEqual(own, [], "\(label) '\(mac)' / '\(screen ?? "-")': a top-bar part draws its own glass "
                                + "on the bar's (a bubble in a bubble)")
                 window.isHidden = true
@@ -1828,12 +1814,11 @@ final class TopRowTests: XCTestCase {
         return width <= w + 1 && width >= w - 70
     }
 
-    /// Project notes 7 (the owner: "I added a key. The next time I launched Robin, the top menu bar was gone": a
-    /// computer that started JetKVM-only, then got Screen Sharing and Terminal, showed only "•••"). For every mix of
-    /// ways in, on the Duo folded (the session layout on the outer screen, 466 pt), the Duo open (669 pt), a regular
-    /// iPhone (402 pt) and the widths of those held sideways (when the bar shows): back and the name are always on
-    /// the row, each on the bar's glass and inside the window, and the views are there too, as the switch when it
-    /// fits and otherwise as one view button. Before the fix, four views at 466 pt dropped back off the row.
+    /// Project notes 7. For every mix of ways in, on the Duo folded (the session layout on the outer screen, 466 pt),
+    /// the Duo open (669 pt), a regular iPhone (402 pt) and the widths of those held sideways (when the bar shows):
+    /// back and the name are always on the row, each on the bar's glass and inside the window, and the views are there
+    /// too, as the switch when it fits and otherwise as one view button. Before the fix, four views at 466 pt dropped
+    /// back off the row.
     @MainActor
     func testTopBarKeepsBackAndNameForEveryMixOfWaysIn() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -1882,22 +1867,18 @@ final class TopRowTests: XCTestCase {
                     let nav = try XCTUnwrap(Self.find(UINavigationBar.self, in: host.view))
                     let bar = Self.barGlass(in: nav).filter { $0.minY < 140 }
                     print("DUO-TEST mix \(what): bar \(bar) parts \(parts.frames)")
-                    // Folded into "•••", the bar shows ONE platter; back, the name and the views are three.
-                    XCTAssertGreaterThanOrEqual(bar.count, 3, "\(what): back, name and views each on the bar's glass (not folded into •••)")
+                    // The Duo and a normal iPhone alike: the bare back caret has no glass; the views are one bubble;
+                    // the name is the bar's title.
+                    XCTAssertGreaterThanOrEqual(bar.count, 1, "\(what): the views on the bar's glass")
                     for f in bar { XCTAssertTrue(f.minX >= 0 && f.maxX <= width + 0.5, "\(what): a part is off the row: \(f)") }
                     let sorted = bar.sorted { $0.minX < $1.minX }
-                    if sorted.count >= 3 {
-                        // Back is the first, round part; the name the second, and wide enough to read.
-                        XCTAssertLessThan(sorted[0].width, 60, "\(what): back is first")
-                        XCTAssertGreaterThanOrEqual(sorted[1].width, 70, "\(what): the name is readable")
-                    }
+                    _ = sorted
+                    XCTAssertEqual(nav.topItem?.title, mac, "\(what): the title is the name")
                     window.isHidden = true
                 }
             }
         }
         XCTAssertGreaterThan(ran, 0, "no width matched this simulator")
-        XCTAssertFalse(TopBarFit.canWiden(rowWidth: 466) && !SimulatorSwitches.forceOpenLayout, "folded: one button")
-        XCTAssertTrue(TopBarFit.canWiden(rowWidth: 669), "open: the wide form is tried")
     }
 
     /// Glass a bar item draws itself, in window points: SwiftUI's `glassEffect` renders through a view whose
@@ -1917,18 +1898,6 @@ final class TopRowTests: XCTestCase {
             .filter { !$0.isHidden && $0.bounds.width > 4 && String(describing: type(of: $0)).contains("NavigationBarPlatter") }
             .map { $0.convert($0.bounds, to: nil).integral }
             .filter { $0.width < view.bounds.width - 1 }   // the bar's own full-width background
-    }
-
-    /// The bubble's two lines (the owner 2026-11-21, the Claude app's two-line title): one screen, the Mac's name alone
-    /// (no empty second line); several screens, the screen under it; All Screens says so; a problem on the Mac
-    /// takes line 2.
-    func testNameBubbleLines() {
-        XCTAssertNil(TopRowName(mac: "My Mac mini", screen: nil, notice: nil).secondLine)
-        XCTAssertEqual(TopRowName(mac: "My Mac mini", screen: "Studio Display (2)", notice: nil).secondLine,
-                       "Studio Display (2)")
-        XCTAssertEqual(TopRowName(mac: "M", screen: "All Screens", notice: nil).secondLine, "All Screens")
-        XCTAssertEqual(TopRowName(mac: "M", screen: "S", notice: "This Mac switched to another user.").secondLine,
-                       "This Mac switched to another user.")
     }
 
     @MainActor static func all<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
@@ -1974,7 +1943,7 @@ private struct TopRowProbe: View {
     var preview: (mac: String, screen: String?)? = nil
     var parts: TopRowParts? = nil
     var choices: [SessionView]? = nil
-    /// The normal iPhone's top row (`ViewMenuButton`, its own name cap) instead of the Duo's.
+    /// The normal iPhone's views control (`ViewMenuButton`) instead of the Duo's switch.
     var viewMenu = false
     var rowWidth: CGFloat = 669
 
@@ -1990,7 +1959,6 @@ private struct TopRowProbe: View {
                                             view: .constant(.regular), leave: {}, preview: preview,
                                             report: { name, f in parts?.frames[name] = f },
                                             rowWidth: rowWidth, choicesForTest: choices,
-                                            nameMaxOverride: viewMenu ? NormalPhoneTopRow.nameMax(rowWidth: rowWidth) : nil,
                                             viewMenu: viewMenu))
             }
         }
@@ -2046,7 +2014,7 @@ final class ClipboardTests: XCTestCase {
 
 // MARK: - Key info bubble
 
-/// The owner 2026-11-20: "For the duo extra keys, add an info bubble control explaining what each key does".
+/// 
 final class KeyInfoTests: XCTestCase {
     private func nonGap(_ rows: [[MacKeyboardLayout.Cell]]) -> [MacKeyboardLayout.Cell] {
         rows.joined().filter { if case .gap = $0 { false } else { true } }
@@ -2093,14 +2061,13 @@ final class KeyInfoTests: XCTestCase {
     }
 
 
-    /// The owner 2026-11-20: "Dump the info button. We can put it in the Mac selection screen." The session screen has
-    /// no info control in either layout: the horizontal row is its 9 keys alone.
+    ///  The session screen has no info control in either layout: the horizontal row is its 9 keys alone.
     func testNoInfoControlInTheSession() {
         XCTAssertEqual(MacKeysBar.keys.count, 9)
         XCTAssertEqual(Set(SpecialKeysLayout.rows(functionKeys: false).joined().map(\.id)).count, 24)
     }
 
-    // The owner 2026-11-20: "'i' with a circle" / "dramatically more condensed".
+    //  / "dramatically more condensed".
 
     /// Every key, including those behind "more", and the two click buttons are on a line of the reference.
     func testPopUpLinesCoverEveryKeyAndBothClicks() {
@@ -2124,10 +2091,10 @@ final class KeyInfoTests: XCTestCase {
     }
 
     /// The reference is a sheet (HIG Sheets) in three sections: the two click buttons, the keys, the keys behind
-    /// "more". Together they cover every line, in order (the clipped popover, 2026-11-20).
+    /// "more". Together they cover every line, in order.
     func testKeySheetSectionsCoverEveryLine() {
         let groups = KeyInfoSheet.groups()
-        // project notes: one plain line about Unlock Automatically, last.
+        // Project notes: one plain line about Unlock Automatically, last.
         XCTAssertEqual(groups.map(\.title), ["Buttons", "Keys", "After More (⋯)", "Locked Mac"])
         let sections = KeyInfo.uprightSections()
         XCTAssertEqual(groups.dropLast().flatMap(\.lines).map(\.id), KeyInfo.lines(sections, clicks: true).map(\.id))
@@ -2135,8 +2102,8 @@ final class KeyInfoTests: XCTestCase {
         XCTAssertEqual(groups[2].lines.last?.id, "k-end")
     }
 
-    /// Two columns (the owner 2026-11-21): every item in order, left column then right, about even, never a title at the
-    /// bottom of the left column; one column keeps them all.
+    /// Two columns: every item in order, left column then right, about even, never a title at the bottom of the left
+    /// column; one column keeps them all.
     func testKeySheetTwoColumnsKeepEveryItemInOrder() {
         let one = KeyInfoSheet.columns(1), two = KeyInfoSheet.columns(2)
         XCTAssertEqual(one.count, 1)
@@ -2148,7 +2115,7 @@ final class KeyInfoTests: XCTestCase {
 
 }
 
-// MARK: - Modifiers: one rule, combos, the held look (the owner 2026-11-20)
+// MARK: - Modifiers: one rule, combos, the held look
 
 final class ModifierRuleTests: XCTestCase {
     private let all: [KeyMap.Modifier] = [.control, .option, .command, .shift]
@@ -2266,9 +2233,8 @@ final class ModifierRuleTests: XCTestCase {
         XCTAssertTrue(MacKeysBar.keys.contains(MacKeyboardLayout.commandKey))
     }
 
-    /// The keys take the iOS 27 system keyboard's flat look (the owner 2026-11-20): at rest the system key colour
-    /// (#FFFFFF light, #444444 dark), pressed a different grey, held the accent fill. One proof per state, both
-    /// appearances.
+    /// The keys take the iOS 27 system keyboard's flat look: at rest the system key colour (#FFFFFF light, #444444
+    /// dark), pressed a different grey, held the accent fill. One proof per state, both appearances.
     @MainActor
     func testKeyFillsMatchTheSystemKeyboard() throws {
         func pixel(lit: Bool, pressed: Bool = false, scheme: ColorScheme) throws -> (r: Int, g: Int, b: Int, a: Int) {
@@ -2296,8 +2262,8 @@ final class ModifierRuleTests: XCTestCase {
         }
     }
 
-    /// The pop-up only names what a key is or does (the owner 2026-11-20: "You don't need to say they are combinable");
-    /// nothing about combining or holding. The four modifiers' VoiceOver hints use the same words.
+    /// The pop-up only names what a key is or does; nothing about combining or holding. The four modifiers' VoiceOver
+    /// hints use the same words.
     func testPopUpNamesSymbolsOnly() {
         for sections in [KeyInfo.uprightSections(), KeyInfo.horizontalSections] {
             let lines = KeyInfo.lines(sections)
@@ -2329,7 +2295,7 @@ final class ModifierRuleTests: XCTestCase {
     }
 }
 
-// MARK: - Apps key: the Mac's app switcher stays open (the owner 2026-11-20)
+// MARK: - Apps key: the Mac's app switcher stays open
 
 final class AppSwitcherTests: XCTestCase {
     private func e(_ kind: UInt8, _ code: Int, _ flags: Int) -> InputEvent {
@@ -2496,7 +2462,7 @@ final class AppSwitcherTests: XCTestCase {
     }
 }
 
-// MARK: - Release on connect (host key release order, 2026-11-20)
+// MARK: - Release on connect
 
 final class ConnectReleaseTests: XCTestCase {
     /// Every modifier's key goes up once, flags 0, and nothing goes down.
@@ -2517,7 +2483,7 @@ final class ConnectReleaseTests: XCTestCase {
     }
 }
 
-// MARK: - Coming back from another app (ReturnFlow, project notes (2026-11-20) "return without reconnect")
+// MARK: - Coming back from another app
 
 final class ReturnFlowTests: XCTestCase {
     private func live() -> ReturnFlow {
@@ -2642,7 +2608,7 @@ final class ReturnFlowTests: XCTestCase {
     }
 }
 
-// MARK: - Checking the session is alive on return (project notes (2026-11-20) "check live on return", the owner: "Go ahead")
+// MARK: - Checking the session is alive on return
 
 final class ReturnCheckTests: XCTestCase {
     private let back: UInt64 = 50_000_000 // the return, in the engine's microseconds
@@ -2773,7 +2739,7 @@ final class InputGateTests: XCTestCase {
     }
 }
 
-// MARK: - Every picture size the Host can send (project notes)
+// MARK: - Every picture size the Host can send
 
 /// The Host's input mapping (`HostController.injectInput` / `mappingScale` at the pinned commit): a picture pixel
 /// is a Mac point at `pixel / (pictureWidth / screenWidth)`. The Mac screen here is 1920 x 1080 points.
@@ -2810,8 +2776,7 @@ final class PictureSizeTests: XCTestCase {
         }
     }
 
-    /// 960 x 540 against a 1920 x 1080 screen (the owner's slow link): the pad's far right is the Mac's far right, and a
-    /// tap clicks there.
+    /// 960 x 540 against a 1920 x 1080 screen: the pad's far right is the Mac's far right, and a tap clicks there.
     func testHalfSizePictureReachesTheRightEdgeAndClicksThere() {
         let r = Recorder()
         let t = TrackpadEngine(sink: r)
@@ -2909,8 +2874,7 @@ final class PictureSizeTests: XCTestCase {
     }
 }
 
-/// The slow-link leftovers (project notes; the owner 2026-11-20: "This needs to work on all
-/// connections"). Full picture sizes paired with the Host's halved rung, and one in-between size.
+/// The slow-link leftovers. Full picture sizes paired with the Host's halved rung, and one in-between size.
 final class SlowLinkTests: XCTestCase {
     static let pairs: [(full: (Int, Int), shrunk: (Int, Int))] = [
         ((1920, 1080), (960, 540)), ((1728, 1080), (864, 540)), ((1600, 1000), (800, 500)), ((1920, 1080), (1366, 767)),
@@ -2978,8 +2942,7 @@ final class SlowLinkTests: XCTestCase {
     }
 
     /// Item 3: at every size the pad's bottom edge lands in the Mac's last two rows and the top edge at row 0, and
-    /// never past the picture (one past landed off screen on my-mac; a hidden Dock showed at Mac rows 1078
-    /// and 1079, not at 1080; measured 2026-11-20, project notes).
+    /// never past the picture.
     func testEdgesReachTheMacsLastTwoRowsAndNeverPast() {
         let screen = (w: 1920.0, h: 1080.0)
         for (w, h) in [(1920, 1080), (960, 540), (1366, 767)] {

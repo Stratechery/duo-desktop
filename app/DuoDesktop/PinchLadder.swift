@@ -1,14 +1,12 @@
 import CoreGraphics
 
-/// The pinch steps between the views (the owner 2026-11-21: "Pinching in on the zoom view should change the view to the
-/// whole screen. Same thing where pinching out on the regular view should go into zoom view." / "For a Mac that has
-/// multiple screens, a pinch in on the screen that is displayed should go back to showing all of the screens."):
+/// The pinch steps between the views:
 ///
 ///     Follow Pointer --pinch in--> Whole Screen --pinch in--> All Screens (more than one screen only)
 ///     Whole Screen --pinch out--> Follow Pointer
 ///
-/// No pinch in All Screens (the owner: "You just tap to select a screen."). One step per pinch. This replaces the regular
-/// view's free pinch-to-zoom: Follow Pointer is the zoomed view.
+/// No pinch in All Screens. One step per pinch. This replaces the regular view's free pinch-to-zoom: Follow Pointer is
+/// the zoomed view.
 enum PinchStep: Equatable { case pinchIn, pinchOut }
 
 enum PinchLadder {

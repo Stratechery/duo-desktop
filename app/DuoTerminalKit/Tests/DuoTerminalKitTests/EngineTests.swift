@@ -53,7 +53,7 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(SSHFailureKind.of(CancellationError()), .notReachable)
     }
 
-    /// A made-up user name against this Mac's own sshd is a refused sign-in (what the owner saw as "no indication").
+    /// A made-up user name against this Mac's own sshd is a refused sign-in.
     func testMadeUpUserIsSignInRefusedLive() async throws {
         guard ProcessInfo.processInfo.environment["DUO_LIVE_SSH"] == "1" else { throw XCTSkip("live only") }
         let key = try PhoneKey.file(FileManager.default.temporaryDirectory.appendingPathComponent("duo-user-\(UUID())"))

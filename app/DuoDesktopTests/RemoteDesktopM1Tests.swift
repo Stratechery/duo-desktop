@@ -16,8 +16,8 @@ final class RemoteDesktopM1Tests: XCTestCase {
         return e
     }
 
-    /// Claim: the default session is 1920 x 1080 with text at 200% (the owner 2026-11-23: "yes 1080p at 200%"); 150% is
-    /// still a choice; the device scale sent with 200% is the spec's 180 step.
+    /// Claim: the default session is 1920 x 1080 with text at 200%; 150% is still a choice; the device scale sent with
+    /// 200% is the spec's 180 step.
     func testDefaultSessionIs1080pAt200() {
         let s = pc().rdpScreen
         XCTAssertEqual([s.width, s.height, s.desktopScale, s.deviceScale], [1920, 1080, 200, 180])

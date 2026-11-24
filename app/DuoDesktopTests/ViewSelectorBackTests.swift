@@ -1,9 +1,8 @@
 import XCTest
 @testable import DuoDesktop
 
-/// Project notes (view-selector-back) (the owner on build 66: "The new Duo Desktop update removed the selector from within the view
-/// that let you change between screen sharing and terminal and whatnot. We should still have that there"). The Terminal
-/// and JetKVM screens opened from the list carry the session's own views control with the session's own choices.
+/// Project notes (view-selector-back). The Terminal and JetKVM screens opened from the list carry the session's own
+/// views control with the session's own choices.
 @MainActor
 final class ViewSelectorBackTests: XCTestCase {
     private func computer(_ ways: Set<WayIn>) -> MacEntry {
@@ -39,14 +38,6 @@ final class ViewSelectorBackTests: XCTestCase {
             XCTAssertEqual(ways, Set(e.waysInThisBuild), "\(mix)")
             XCTAssertEqual(WayViewSwitch.shows(e), e.waysInThisBuild.count > 1, "\(mix): shown with more than one way in")
         }
-    }
-
-    /// Project notes (session-top-bar-narrow-first): the Terminal and JetKVM screens' views control is the one button until
-    /// the bar has seen the wide form whole; a normal iPhone always uses the one button.
-    func testSwitchOnlyWhenTheWideFormWasSeenWhole() {
-        XCTAssertTrue(WayViewSwitch.usesMenu(normalPhone: false, wide: false), "Duo, narrow: one button")
-        XCTAssertFalse(WayViewSwitch.usesMenu(normalPhone: false, wide: true), "Duo, wide: the switch")
-        XCTAssertTrue(WayViewSwitch.usesMenu(normalPhone: true, wide: true), "iPhone: one button")
     }
 
     /// Choosing a view opens its way in: Whole Screen and Follow Pointer start Screen Sharing in that view; Terminal

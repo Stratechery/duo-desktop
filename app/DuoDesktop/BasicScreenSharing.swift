@@ -1,6 +1,6 @@
-// Basic Screen Sharing: a Mac's own Screen Sharing, for Macs without Glass Act Host (project notes,
-// milestone 0). Linked only with the DUO_VNC switch: our copy of RoyalVNCKit (../royalvnc, MIT) and CryptoSwift.
-// Milestone 0 only links the library and names it in About; nothing here connects to any computer.
+// Basic Screen Sharing: a Mac's own Screen Sharing, for Macs without Glass Act Host. Linked only with the DUO_VNC
+// switch: our copy of RoyalVNCKit (../royalvnc, MIT) and CryptoSwift. Milestone 0 only links the library and names it
+// in About; nothing here connects to any computer.
 #if DUO_VNC
 import RoyalVNCKit
 

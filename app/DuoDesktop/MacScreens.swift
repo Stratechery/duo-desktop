@@ -1,9 +1,5 @@
-// A Mac with several screens (project notes, M4). The owner 2026-11-21: "I think there should be a
-// view that shows the entire layout with all of the screens, but then you can cycle through individual screens.
-// Maybe there is a drop-down menu that's a selector to do this. I think that maybe the overall view that shows all
-// the screens, if you touch one of the screens, it then zooms into that screen."
-// Pure parts here (the screens as the phone keeps them, the overview's layout, the per-Mac memory); the session
-// model asks the Host, the views draw.
+// A Mac with several screens. Pure parts here (the screens as the phone keeps them, the overview's layout, the per-Mac
+// memory); the session model asks the Host, the views draw.
 import CoreGraphics
 import Foundation
 import GlassActWire
@@ -122,8 +118,7 @@ struct RememberedScreen: Codable, Equatable {
     }
 }
 
-/// Crossing an edge with the trackpad (plan item 13, M5). The owner 2026-11-21: "going all the way to the edge should go
-/// to the next screen as if you were at the Mac itself." Pure: where a push past the shown screen's edge goes.
+/// Crossing an edge with the trackpad (plan item 13, M5). Pure: where a push past the shown screen's edge goes.
 enum EdgeCrossing {
     /// Which way a push past the edge went, -1/0/1 on each axis (left/up negative). The crossing slide moves the
     /// content the other way: push right → content moves left.

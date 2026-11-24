@@ -1,7 +1,6 @@
-// Adapted from Glass Act Apps/iPad/CanvasView.swift at 486f11518da42d3ff7fac840a7bb9881d1425ca9.
-// Glass Act is MIT licensed, Copyright (c) Brian Lopez; see Acknowledgements. Trimmed to presentation and the
-// pointer, plus touch on the picture in both layouts (`directTouch`), mapped the way Apple maps touch on a MacBook
-// Pro's touch display (`DirectTouchEngine`; the table is in project notes).
+// Adapted from Glass Act Apps/iPad/CanvasView.swift at 486f11518da42d3ff7fac840a7bb9881d1425ca9. Glass Act is MIT
+// licensed, Copyright (c) Brian Lopez; see Acknowledgements. Trimmed to presentation and the pointer, plus touch on the
+// picture in both layouts (`directTouch`), mapped the way Apple maps touch on a MacBook Pro's touch display.
 import GlassActCore
 import GlassActSession
 import GlassActTransport
@@ -13,7 +12,7 @@ import UIKit
 final class CanvasView: UIView, UIGestureRecognizerDelegate {
     /// The old picture while a crossing slide runs (`crossingSlide`).
     private weak var slideSnapshot: UIView?
-    /// How long the crossing slide takes (the owner 2026-11-21: "a bit of animation there"; ~0.25 s, ease-in-out).
+    /// How long the crossing slide takes.
     static let crossingSlideDuration: TimeInterval = 0.25
 
     /// An edge crossing's new screen is shown: the old picture slides out and the new one slides in, in the direction
@@ -87,18 +86,18 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         stopGlide()
         resetZoom()
     }
-    /// The centred view (upright only; the owner 2026-11-21): the picture shows a quarter of the Mac screen and follows
-    /// the pointer so it stays in the centre; at the screen's edges the view stops and the pointer leaves the
-    /// centre. The view moves here on the phone as the pointer is put, never waiting for the stream. A pinch steps views.
+    /// The centred view: the picture shows a quarter of the Mac screen and follows the pointer so it stays in the
+    /// centre; at the screen's edges the view stops and the pointer leaves the centre. The view moves here on the phone
+    /// as the pointer is put, never waiting for the stream. A pinch steps views.
     var followPointer = false {
         didSet {
             guard followPointer != oldValue else { return }
             resetZoom()
         }
     }
-    /// The horizontal view with our keyboard up (project notes, State 2): the height of the picture's space
-    /// above the key row. The picture keeps the full-screen scale and moves only up and down so the pointer stays
-    /// in the middle of that space (`TypingFollow`); nil = the whole screen.
+    /// The horizontal view with our keyboard up: the height of the picture's space above the key row. The picture keeps
+    /// the full-screen scale and moves only up and down so the pointer stays in the middle of that space
+    /// (`TypingFollow`); nil = the whole screen.
     var typingVisibleHeight: CGFloat? {
         didSet {
             guard typingVisibleHeight != oldValue else { return }
@@ -459,7 +458,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         cursorLayer.isHidden = false
         #if targetEnvironment(simulator)
         // UI tests only (compiled out of device builds): the picture's size and where the pointer is drawn, as a
-        // fraction of the picture (project notes).
+        // fraction of the picture.
         let tip = CGPoint(x: x * k, y: y * k)
         accessibilityValue = String(format: "picture %dx%d; pointer %.3f,%.3f", grid.width, grid.height,
                                     tip.x / contentLayer.bounds.width, tip.y / contentLayer.bounds.height)
@@ -735,7 +734,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
     }
 
     /// Two fingers: two fingers moving together scroll the Mac as a trackpad does; a pinch steps between the views
-    /// (`PinchLadder`, the owner 2026-11-21) instead of zooming freely. Decided once per gesture (`PinchTracker`).
+    /// instead of zooming freely. Decided once per gesture (`PinchTracker`).
     @objc private func twoFingerPanned(_ g: UIPanGestureRecognizer) {
         guard directTouch else { return }
         let t = g.translation(in: self)

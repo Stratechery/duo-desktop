@@ -1,13 +1,11 @@
 import XCTest
 
-/// Project notes (view-selector-back) (the owner on build 66: "The new Duo Desktop update removed the selector from within the view
-/// that let you change between screen sharing and terminal and whatnot. We should still have that there"). One test
-/// per view: it finds the views control and switches with it. a private test script seeds one made-up
-/// computer, "Test Mac", with all three ways in: Screen Sharing at Glass Act's test host on this Mac, a Terminal at a
-/// closed port, a JetKVM at a documentation address (nothing signs in to a real computer, nothing reaches a JetKVM).
-/// The control is the session's own: the switch (`sessionView.<view>`) where it fits, else its one-button menu form
-/// (`viewMenu`), as the session decides by width. Extra launch arguments come from DUO_VS_ARGS (e.g.
-/// "--force-open-layout" on the folded Duo). The open Duo's width (669 pt) cannot be had headless: the simulator
+/// Project notes (view-selector-back). One test per view: it finds the views control and switches with it. a private
+/// test script seeds one made-up computer, "Test Mac", with all three ways in: Screen Sharing at Glass Act's test host
+/// on this Mac, a Terminal at a closed port, a JetKVM at a documentation address (nothing signs in to a real computer,
+/// nothing reaches a JetKVM). The control is the session's own: the switch (`sessionView.<view>`) where it fits, else
+/// its one-button menu form (`viewMenu`), as the session decides by width. Extra launch arguments come from DUO_VS_ARGS
+/// (e.g. "--force-open-layout" on the folded Duo). The open Duo's width (669 pt) cannot be had headless: the simulator
 /// cannot unfold, and an iPad runs this iPhone app in a phone-sized window.
 @MainActor
 final class ViewSelectorBackUITests: XCTestCase {
@@ -93,11 +91,11 @@ final class ViewSelectorBackUITests: XCTestCase {
         let isSwitch = control("terminal")
         XCTAssertTrue(shows("terminal", "Terminal", timeout: 2), "Terminal is the chosen view")
         XCTAssertTrue(app.buttons["backToMacs"].firstMatch.exists, "back stays")
-        XCTAssertTrue(app.buttons["hideKeyboard"].exists, "the Terminal screen")
+        XCTAssertTrue(app.descendants(matching: .any)["terminal"].exists, "the Terminal screen")
         shot("terminal")
         choose("jetkvm", "JetKVM", isSwitch: isSwitch)
         XCTAssertTrue(shows("jetkvm", "JetKVM"), "the JetKVM screen, its view chosen")
-        XCTAssertFalse(app.buttons["hideKeyboard"].exists, "the Terminal screen has gone")
+        XCTAssertFalse(app.descendants(matching: .any)["terminal"].exists, "the Terminal screen has gone")
         shot("terminal-to-jetkvm")
     }
 

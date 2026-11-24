@@ -2,7 +2,7 @@ import GlassActTransport
 import XCTest
 @testable import DuoDesktop
 
-/// The owner 2026-11-21: "The outside screen should be connected to the same Mac as the inside screen."
+/// 
 @MainActor
 final class WrongMacTests: XCTestCase {
     private var dir: URL!

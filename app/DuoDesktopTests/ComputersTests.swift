@@ -6,7 +6,7 @@ import LocalAuthentication
 import XCTest
 @testable import DuoDesktop
 
-/// project notes, one computer with any connection, milestone 1: one entry with optional ways in. One test per claim;
+/// Project notes, one computer with any connection, milestone 1: one entry with optional ways in. One test per claim;
 /// made-up names only. Entries are written as earlier builds wrote them (raw JSON), then read by today's store.
 @MainActor
 final class ComputersTests: XCTestCase {

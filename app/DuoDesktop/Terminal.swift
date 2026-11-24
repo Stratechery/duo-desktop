@@ -1,6 +1,5 @@
 #if DUO_TERMINAL
-// The whole terminal sits behind DUO_TERMINAL (the owner 2026-11-21: the terminal and KVM are the "super version",
-// separate from the plain Glass Act version), as do its few hooks in shared files.
+// The whole terminal sits behind DUO_TERMINAL, as do its few hooks in shared files.
 import DuoTerminalKit
 import GlassActSession
 import GlassActWire
@@ -8,9 +7,9 @@ import SwiftTerm
 import SwiftUI
 import UIKit
 
-// The Terminal view, milestone M1 (project notes): SwiftTerm draws the terminal in the picture's
-// place; the system keyboard and the band's terminal keys type into it. No network yet: what is typed is fed back
-// to the terminal (a local echo, a drawing test only). M2 replaces `TerminalSession.deliver` with the SSH channel.
+// The Terminal view, milestone M1: SwiftTerm draws the terminal in the picture's place; the system keyboard and the
+// band's terminal keys type into it. No network yet: what is typed is fed back to the terminal (a local echo, a drawing
+// test only). M2 replaces `TerminalSession.deliver` with the SSH channel.
 
 // MARK: - The rule: Terminal is offered only for a Mac whose Terminal switch is on
 
@@ -96,9 +95,8 @@ enum TerminalKey: String, CaseIterable, Identifiable {
         }
     }
 
-    /// One row (the owner 2026-11-21: "I think the terminal shortcut keys are too big. Let's pick the most important ones
-    /// and make it only one row"). Dropped: | ~ / - ` (the system keyboard's 123 page), ⌃D (ctrl then d) and Copy
-    /// (selecting text in the terminal shows the system's Copy).
+    /// One row. Dropped: | ~ / - ` (the system keyboard's 123 page), ⌃D (ctrl then d) and Copy (selecting text in the
+    /// terminal shows the system's Copy).
     static let row: [TerminalKey] = [.esc, .tab, .ctrl, .left, .up, .down, .right, .ctrlC, .paste]
 }
 
@@ -210,8 +208,8 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
             let l = TerminalLink(target: .init(host: host, user: user, hostKeyID: sshHostKeyID(mac: entry.id)),
                                  key: key, hostKeys: TerminalKeys.hostKeys)
             l.onOutput = { [weak self] b in DispatchQueue.main.async { self?.view.feed(byteArray: b[...]) } }
-            // Touch ID clarity B (the owner: "I typed the wrong name, but I never got any indication it wouldn't
-            // work"): each failure is told in plain words, also on the Mac's settings line (`TerminalProblems`).
+            // Touch ID clarity B: each failure is told in plain words, also on the Mac's settings line
+            // (`TerminalProblems`).
             let macID = entry.id
             l.onAttemptFailed = { [weak self] error in
                 let kind = SSHFailureKind.of(error)
@@ -249,20 +247,30 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
         }
     }
 
-    /// A terminal-only computer (project notes, terminal-only computers, M2): no Glass Act Host behind it, so no key request;
-    /// signs in with Tailscale (`none`) or this iPhone's key, and opens tmux `duo` (or a login shell with a notice
-    /// when the computer has no tmux), or the login shell itself. Reconnects and rejoins as a Mac's terminal does.
-    func connectComputer(_ entry: MacEntry) {
+    /// A terminal-only computer: no Glass Act Host behind it, so no key request; signs in with Tailscale (`none`) or
+    /// this iPhone's key, and opens tmux `duo` (or a login shell with a notice when the computer has no tmux), or the
+    /// login shell itself. Reconnects and rejoins as a Mac's terminal does. `learned`: the server's first line said
+    /// what the computer is; the screen remembers it on the entry. A Windows server never gets a tmux line either way
+    /// (`TerminalLink`). `answered`: what the computer said to `uname
+    /// -s` after the sign-in, asked once on a separate exec channel only while its system is not known
+    /// (`MacEntry.asksSystem`).
+    func connectComputer(_ entry: MacEntry, learned: (@MainActor (TerminalSystem) -> Void)? = nil,
+                         answered: (@MainActor (ComputerSystem) -> Void)? = nil) {
         guard let user = entry.sshUser, !user.isEmpty else {
             status = "Set the user name in \(entry.name)’s settings."; problem = nil; return
         }
         guard let host = entry.address(.tailscale) ?? entry.address(.home) else {
             status = "\(entry.name) has no address."; return
         }
+        if let p = TerminalComputerProblem.fake(user: user) {
+            status = p.text; TerminalComputerProblems.shared.set(p, for: entry.id); return
+        }
         let tailscale = entry.signIn == .tailscale
         let k = "\(user)@\(host):\(entry.sshPortValue):\(tailscale):\(entry.opens.rawValue)"
         guard linkKey != k else { return }
-        guard AppAccess.isOpen else { whenOpen = { [weak self] in self?.connectComputer(entry) }; return }
+        guard AppAccess.isOpen else {
+            whenOpen = { [weak self] in self?.connectComputer(entry, learned: learned, answered: answered) }; return
+        }
         link?.stop()
         do {
             let key = try TerminalKeys.phoneKey()
@@ -271,6 +279,18 @@ final class TerminalSession: NSObject, TerminalViewDelegate {
                                                tailscale: tailscale),
                                  key: key, hostKeys: TerminalKeys.hostKeys, command: entry.opens.command)
             l.onOutput = { [weak self] b in DispatchQueue.main.async { self?.view.feed(byteArray: b[...]) } }
+            if let learned {
+                l.onServerLine = { line in
+                    let s = TerminalComputerCheck.system(line)
+                    DispatchQueue.main.async { MainActor.assumeIsolated { learned(s) } }
+                }
+            }
+            if let answered, entry.asksSystem {
+                l.onSystemAnswer = { out in
+                    guard let sys = ComputerSystem.fromUname(out) else { return }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { answered(sys) } }
+                }
+            }
             let id = entry.id, name = entry.name
             l.onBanner = { text in
                 // M2 proof: Tailscale sends no banner in accept mode; anything it does send is shown in the
@@ -557,7 +577,7 @@ struct TerminalSettingsSection: View {
     }
 }
 
-// MARK: - The Host adds the phone's key (the owner 2026-11-21: "Yes re terminal key install.")
+// MARK: - The Host adds the phone's key
 
 /// Carries the request to the Host and its answer back: the Glass Act session (ViewerController).
 @MainActor protocol TerminalKeyChannel: AnyObject {
@@ -914,9 +934,8 @@ final class DefaultsHostKeyStore: HostKeyStore, @unchecked Sendable {
     func setHostKey(_ key: String, for id: String) { UserDefaults.standard.set(key, forKey: "terminalHostKey.\(id)") }
 }
 
-/// Adds the phone's key to the Mac by signing in once with the Mac's password (the owner 2026-11-21: "signing in with
-/// your Mac username and password is reasonable"). The password lives only in this sheet's state and is cleared
-/// as soon as the sign-in is done; it is never stored or logged.
+/// Adds the phone's key to the Mac by signing in once with the Mac's password. The password lives only in this sheet's
+/// state and is cleared as soon as the sign-in is done; it is never stored or logged.
 struct TerminalKeyInstallSheet: View {
     let entry: MacEntry
     @Environment(\.dismiss) private var dismiss

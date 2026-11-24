@@ -1,9 +1,8 @@
-# The Terminal view (the owner 2026-11-21: "a choice at build to incorporate either the JetKVM or the terminal or both").
-# Included by project.yml only when xcodegen runs with DUO_TERMINAL=YES in its environment:
-#   DUO_TERMINAL=YES xcodegen generate   → Terminal in, SwiftTerm and the SSH engine (SwiftNIO) linked
-#   xcodegen generate                    → no terminal code, no SwiftTerm, no SwiftNIO
+# The Terminal view. Included by project.yml only when xcodegen runs with DUO_TERMINAL=YES in its environment:
+# DUO_TERMINAL=YES xcodegen generate → Terminal in, SwiftTerm and the SSH engine (SwiftNIO) linked xcodegen generate →
+# no terminal code, no SwiftTerm, no SwiftNIO
 packages:
-  # project notes; MIT. One exact release, as the plan says (2.0 preview line).
+  # Project notes; MIT. One exact release, as the plan says (2.0 preview line).
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: 1.99.3

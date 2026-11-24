@@ -2,12 +2,10 @@ import GlassActSession
 import SwiftUI
 import UIKit
 
-/// Typing on the iOS system keyboard, in both layouts (the owner 2026-11-20: "The horizontal keyboard should be a
-/// system standard keyboard." and, upright, "we should have a system standard keyboard on the bottom").
-/// Horizontal: the keyboard comes up OVER the bottom of the picture on request; the picture does not move.
-/// Upright: the keyboard is up for the whole session, under the picture and the middle band. Typed characters
-/// become US ANSI key presses through the same engine as the special keys, so a held modifier applies to them
-/// (command held + "c" = ⌘C).
+/// Typing on the iOS system keyboard, in both layouts. Horizontal: the keyboard comes up OVER the bottom of the picture
+/// on request; the picture does not move. Upright: the keyboard is up for the whole session, under the picture and the
+/// middle band. Typed characters become US ANSI key presses through the same engine as the special keys, so a held
+/// modifier applies to them (command held + "c" = ⌘C).
 enum MacTyping {
     /// Character → the key that types it on a US Mac layout (letters, digits, punctuation, shifted symbols).
     static let keys: [Character: MacKey] = {
@@ -29,7 +27,12 @@ enum MacTyping {
     /// viewer library has no public text-input call for the app to use.
     @discardableResult
     static func type(_ c: Character, into engine: MacKeyboardEngine) -> Bool {
-        guard let key = keys[c] else { return false }
+        guard let key = keys[c] else {
+            // A Remote Desktop PC takes any character as Unicode (`RDPInput.type`); a Mac's session has no hook.
+            guard let text = engine.typeText else { return false }
+            text(c)
+            return true
+        }
         engine.keyDown(key)
         engine.keyUp(key)
         return true
@@ -130,8 +133,8 @@ struct MacKeysBar: View {
 
     var body: some View {
         // The system keyboard's look (KeyLook): flat keys on a panel the colour of the keyboard's, with its large
-        // rounded top edge, so the row reads as the keyboard's own top row (the owner 2026-11-20). The panel runs on
-        // below the row, behind the keyboard's own rounded top corners, so no picture shows between the two.
+        // rounded top edge, so the row reads as the keyboard's own top row. The panel runs on below the row, behind the
+        // keyboard's own rounded top corners, so no picture shows between the two.
         HStack(spacing: KeyMetrics.gap) {
             ForEach(Self.keys) { key in
                 KeyCap(state: state, key: key).frame(width: 52, height: KeyMetrics.height)

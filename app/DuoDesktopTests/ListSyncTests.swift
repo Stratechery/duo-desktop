@@ -1,13 +1,14 @@
+import CloudKit
 import GlassActTransport
 import LocalAuthentication
 import Security
 import XCTest
 @testable import DuoDesktop
 
-/// The computer list syncing through iCloud (project notes; plan Part A and its §A9). One test per claim.
-/// Two iPhones are two lists with their own sync state; iCloud is `PretendCloud`, which behaves as CloudKit does for
-/// this app: a save over a record changed since this iPhone last saw it is refused and hands back iCloud's copy
-/// (`serverRecordChanged`). Real iCloud between two phones cannot run in the simulator (see the result).
+/// The computer list syncing through iCloud. One test per claim. Two iPhones are two lists with their own sync state;
+/// iCloud is `PretendCloud`, which behaves as CloudKit does for this app: a save over a record changed since this
+/// iPhone last saw it is refused and hands back iCloud's copy (`serverRecordChanged`). Real iCloud between two phones
+/// cannot run in the simulator (see the result).
 @MainActor
 final class ListSyncTests: XCTestCase {
     private var dir: URL!
@@ -128,9 +129,9 @@ final class ListSyncTests: XCTestCase {
 
     // MARK: Claim 1: newest change wins, per computer
 
-    /// The owner: "Newest wins". Two iPhones change the same computer while apart: the later change is kept whole, on both.
-    /// Only synced fields are edits: this iPhone's last used, view and Unlock Automatically never make an old copy win,
-    /// and they are kept when the other iPhone's copy arrives.
+    ///  Two iPhones change the same computer while apart: the later change is kept whole, on both. Only synced fields
+    /// are edits: this iPhone's last used, view and Unlock Automatically never make an old copy win, and they are kept
+    /// when the other iPhone's copy arrives.
     func testNewestChangeWins() {
         let cloud = PretendCloud(), a = phone("A"), b = phone("B")
         a.store.add(mac("Studio"))
@@ -256,7 +257,7 @@ final class ListSyncTests: XCTestCase {
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record.computer)) as? [String: Any])
         let allowed: Set = ["name", "home", "tailscale", "port", "key", "screenSharing", "terminal", "sshUser", "sshPort",
                             "terminalSignIn", "terminalOpens", "jetkvm", "jetkvmAddress", "jetkvmPassword", "opensIn",
-                            "layout"]
+                            "layout", "remoteDesktop"]
         XCTAssertTrue(Set(fields.keys).isSubset(of: allowed), "only the allow-list: \(Set(fields.keys).subtracting(allowed))")
         for own in ["lastUsed", "lastAddress", "view", "autoUnlock", "id", "syncID"] {
             XCTAssertNil(fields[own], "\(own) stays on this iPhone")
@@ -368,5 +369,187 @@ final class ListSyncTests: XCTestCase {
         XCTAssertTrue(b1.secrets.jetkvm.contains(onB.id))
         XCTAssertEqual(Set(a1.store.entries.map(\.name)), ["Studio", "Other Mac"])
         XCTAssertEqual(cloud.records.count, 2, "one record per computer, none twice")
+    }
+
+    // MARK: a PC's Remote Desktop fields
+
+    /// A made-up PC with every Remote Desktop field set, including the two this-device-only ones.
+    private func pc(_ name: String) -> MacEntry {
+        var f = RDPForm()
+        f.name = name
+        f.address = "\(name.lowercased())-pc"
+        f.port = "3390"
+        f.user = "someone"
+        f.size = .qhd1440
+        f.textSize = .p150
+        var e = f.newEntry()
+        e.rdpSkipTakeover = true
+        e.rdpCertificate = "AB12CD"
+        return e
+    }
+
+    /// Claim: address, port, user name, size and text size round-trip through sync, both ways; "Don't Ask Again" and
+    /// the trusted certificate never leave the iPhone (and the password is never in the entry at all).
+    func testRemoteDesktopFieldsSyncButNotDeviceOnlyOnes() throws {
+        let cloud = PretendCloud(), a = phone("A"), b = phone("B")
+        let e = pc("Office")
+        a.store.add(e)
+        let record = try XCTUnwrap(a.sync.record(for: e.id))
+        let fields = try XCTUnwrap(CloudComputerSync.fields(record))
+        let all = fields.values.map { String(decoding: $0, as: UTF8.self) }.joined()
+        for never in ["AB12CD", "rdpCertificate", "rdpSkipTakeover", "skip", "certificate"] {
+            XCTAssertFalse(all.contains(never), "\(never) is this iPhone's own")
+        }
+
+        cloud.sync(a, b)
+        let onB = try XCTUnwrap(b.named("Office"))
+        XCTAssertTrue(onB.hasRemoteDesktop)
+        XCTAssertEqual(onB.tailscale, "office-pc")
+        XCTAssertEqual(onB.rdpPortValue, 3390)
+        XCTAssertEqual(onB.rdpUser, "someone")
+        XCTAssertEqual(onB.rdpScreen, RDPScreen(size: .qhd1440, textSize: .p150))
+        XCTAssertNil(onB.rdpSkipTakeover, "Don't Ask Again is A's own")
+        XCTAssertNil(onB.rdpCertificate, "B trusts the PC on its own first connect")
+
+        // B changes the text size: an edit, which reaches A; A keeps its own two values.
+        tick(); b.store.update(onB.id) { $0.rdpTextSize = .p100; $0.rdpUser = "other" }
+        cloud.sync(a, b)
+        let onA = try XCTUnwrap(a.store.entry(e.id))
+        XCTAssertEqual(onA.rdpTextSize, .p100)
+        XCTAssertEqual(onA.rdpUser, "other")
+        XCTAssertEqual(onA.rdpSkipTakeover, true)
+        XCTAssertEqual(onA.rdpCertificate, "AB12CD")
+        // Only Don't Ask Again changed on B: not an edit, nothing is sent.
+        let before = b.store.entry(onB.id)?.editedAt
+        tick(); b.store.update(onB.id) { $0.rdpSkipTakeover = true }
+        XCTAssertEqual(b.store.entry(onB.id)?.editedAt, before)
+    }
+
+    /// Claim: an older build (which knows only `payload`) does not lose or damage the Remote Desktop fields. They are
+    /// never in `payload`, but in a field of their own; CloudKit saves only the fields a save sets, so the older
+    /// build's save (a rename here) leaves that field as it was. A record only an older build ever wrote (no Remote
+    /// Desktop field) leaves this iPhone's own values alone.
+    func testOlderBuildKeepsRemoteDesktopFields() throws {
+        let a = phone("A"), b = phone("B")
+        let e = pc("Office")
+        a.store.add(e)
+        // iCloud's record: its encrypted fields, as this build saves them.
+        var server = try XCTUnwrap(CloudComputerSync.fields(try XCTUnwrap(a.sync.record(for: e.id))))
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: server[CloudComputerSync.payloadField]!) as? [String: Any])
+        let computer = try XCTUnwrap(payload["computer"] as? [String: Any])
+        XCTAssertNil(computer["remoteDesktop"], "nothing of Remote Desktop in what an older build reads and writes back")
+
+        // The older build: reads payload into what it knows (here: the JSON as a dictionary, dropping nothing it
+        // knows), renames, and saves payload only.
+        var older = payload
+        var c = computer
+        c["name"] = "Office PC"
+        older["computer"] = c
+        older["editedAt"] = (payload["editedAt"] as? Double ?? 0) + 600
+        server[CloudComputerSync.payloadField] = try JSONSerialization.data(withJSONObject: older)
+
+        let back = try XCTUnwrap(CloudComputerSync.decode(server.mapValues { Optional($0) }))
+        XCTAssertEqual(back.computer?.name, "Office PC", "the older build's rename")
+        XCTAssertEqual(back.computer?.remoteDesktop, SyncedRemoteDesktop(e), "the Remote Desktop fields, untouched")
+        b.sync.received(e.id, back)
+        let onB = try XCTUnwrap(b.store.entry(e.id))
+        XCTAssertEqual(onB.name, "Office PC")
+        XCTAssertTrue(onB.hasRemoteDesktop)
+        XCTAssertEqual(onB.rdpUser, "someone")
+        XCTAssertEqual(onB.rdpScreen, RDPScreen(size: .qhd1440, textSize: .p150))
+
+        // A record with no Remote Desktop field (only older builds saved it): A's own values stay.
+        server[CloudComputerSync.remoteDesktopField] = nil
+        var noRD = try XCTUnwrap(CloudComputerSync.decode(server.mapValues { Optional($0) }))
+        XCTAssertNil(noRD.computer?.remoteDesktop)
+        noRD.editedAt = noRD.editedAt.addingTimeInterval(60)
+        a.sync.received(e.id, noRD)
+        let onA = try XCTUnwrap(a.store.entry(e.id))
+        XCTAssertEqual(onA.name, "Office PC")
+        XCTAssertTrue(onA.hasRemoteDesktop)
+        XCTAssertEqual(onA.rdpPortValue, 3390)
+        XCTAssertEqual(onA.rdpTextSize, .p150)
+    }
+
+    // MARK: refused saves go again by themselves
+
+    /// CKSyncEngine's own queue of records to send, as the real engine keeps it: `ComputerSync.onUnsent` adds to it,
+    /// and a send takes each record off it whatever the outcome. A refusal that is not a network blip (here: a field
+    /// the Production schema does not have) is not put back by the engine; only the app can put it back.
+    final class EngineQueue {
+        var pending: Set<String> = []
+        @MainActor init(_ phone: Phone) { phone.sync.onUnsent = { [unowned self] ids in self.pending.formUnion(ids) } }
+    }
+
+    /// The record fields iCloud's Production schema refuses.
+    private var refusedFields: Set<String> = []
+
+    /// The engine sends its queue: each record's real fields (`CloudComputerSync.fields`) are checked against the
+    /// schema, as CloudKit does; a record with an unknown field is refused whole and taken off the queue.
+    private func engineSend(_ phone: Phone, _ engine: EngineQueue, _ cloud: PretendCloud) {
+        for id in engine.pending.sorted() {
+            engine.pending.remove(id)
+            guard let mine = phone.sync.record(for: id), let fields = CloudComputerSync.fields(mine) else { continue }
+            if !refusedFields.isDisjoint(with: fields.keys) {
+                phone.sync.refused(id, CloudComputerSync.plain(CKError(.invalidArguments)))
+                continue
+            }
+            cloud.records[id] = (Int.random(in: 1_000...1_000_000), mine)
+            phone.seen[id] = cloud.records[id]!.tag
+            phone.sync.sent(id, mine)
+        }
+    }
+
+    /// Opening the app again (back in the foreground), as `CloudComputerSync.fetchNow` does it.
+    private func openApp(_ phone: Phone, _ engine: EngineQueue, _ cloud: PretendCloud) {
+        phone.sync.retryUnsent()
+        cloud.fetch(phone)
+        phone.sync.fetched()
+        engineSend(phone, engine, cloud)
+    }
+
+    ///  Phone A has a Mac with Screen Sharing and Terminal and a PC with Remote Desktop and Terminal; iCloud refuses
+    /// the three new fields; A tries to send; then iCloud takes them. Without anyone editing anything on A, B ends with
+    /// the PC and both Terminals, after A is only opened again.
+    func testRefusedSavesGoAgainByThemselves() throws {
+        let cloud = PretendCloud(), a = phone("A"), b = phone("B")
+        let engineA = EngineQueue(a)
+        var m = mac("MacBook Air")
+        m.terminalSystem = .other
+        m.unameSystem = .mac
+        a.store.add(m)
+        var p = pc("Tower PC")
+        p.terminal = true
+        p.sshUser = "guest"
+        p.terminalSystem = .windows
+        p.unameSystem = .windows
+        a.store.add(p)
+
+        refusedFields = [CloudComputerSync.remoteDesktopField, CloudComputerSync.terminalSystemField,
+                         CloudComputerSync.unameSystemField]
+        cloud.fetch(a)
+        a.sync.fetched()
+        engineSend(a, engineA, cloud)
+        XCTAssertTrue(cloud.records.isEmpty, "every save carried a refused field (even a Mac: remoteDesktop is always set)")
+        XCTAssertEqual(a.sync.state.unsent.count, 2, "both still waiting on A")
+        XCTAssertEqual(a.sync.state.refused.count, 2)
+        XCTAssertTrue(engineA.pending.isEmpty, "the engine dropped them")
+
+        // The owner deploys the schema. Nobody edits anything on A; A is opened again.
+        tick(); refusedFields = []
+        openApp(a, engineA, cloud)
+        cloud.fetch(b)
+
+        XCTAssertTrue(a.sync.state.unsent.isEmpty, "A sent both")
+        XCTAssertTrue(a.sync.state.refused.isEmpty, "no error left on A")
+        let pcOnB = try XCTUnwrap(b.named("Tower PC"), "the PC reached B")
+        XCTAssertTrue(pcOnB.hasRemoteDesktop)
+        XCTAssertTrue(pcOnB.hasTerminal)
+        XCTAssertEqual(pcOnB.terminalSystem, .windows)
+        let macOnB = try XCTUnwrap(b.named("MacBook Air"))
+        XCTAssertTrue(macOnB.hasScreenSharing)
+        XCTAssertTrue(macOnB.hasTerminal, "the Mac's Terminal reached B")
+        XCTAssertEqual(macOnB.sshUser, "me")
+        XCTAssertEqual(macOnB.unameSystem, .mac)
     }
 }

@@ -13,16 +13,16 @@ final class ComputersM2FixesTests: XCTestCase {
     /// refusal keeps today's words.
     func testOrdinarySSHIsNotCalledATailscaleRefusal() {
         let p = TerminalComputerProblem.diagnose(SSHNotTailscale(offersPassword: true, offersKey: true),
-                                                 user: "alex", host: "alexs-mac", port: 22, tailscale: true)
-        XCTAssertEqual(p, .ordinarySSH(user: "alex", offersPassword: true))
-        XCTAssertTrue(p.text.contains("ordinary SSH"), p.text)
-        XCTAssertFalse(p.text.contains("Tailscale refused"), p.text)
+                                                 user: "guest", host: "guests-mac", port: 22, tailscale: true)
+        XCTAssertEqual(p, .ordinarySSH(user: "guest", offersPassword: true))
+        XCTAssertTrue(p.text.hasPrefix("This computer does not use Tailscale SSH."), p.text)
+        XCTAssertFalse(p.text.contains("Tailscale did not let"), p.text)
         let noPw = TerminalComputerProblem.diagnose(SSHNotTailscale(offersPassword: false, offersKey: true),
-                                                    user: "alex", host: "h", port: 22, tailscale: true)
-        XCTAssertTrue(noPw.text.contains("does not take passwords"), noPw.text)
+                                                    user: "guest", host: "h", port: 22, tailscale: true)
+        XCTAssertTrue(noPw.text(.addSheet).contains("does not take passwords"), noPw.text(.addSheet))
         let ts = TerminalComputerProblem.diagnose(SSHSignInRefused(reason: "tailscale: tailnet policy does not permit you to SSH as user \"root\""),
                                                   user: "root", host: "h", port: 22, tailscale: true)
-        XCTAssertTrue(ts.text.hasPrefix("Tailscale refused “root”"), ts.text)
+        XCTAssertTrue(ts.text.hasPrefix("Tailscale did not let this iPhone sign in as “root”"), ts.text)
     }
 
     /// Item 5: each outcome of the one-time password sign-in in plain words; the key to copy only when the server
@@ -30,13 +30,14 @@ final class ComputersM2FixesTests: XCTestCase {
     func testPasswordSignInOutcomes() {
         let o = { (r: KeyInstallByPassword.Outcome) in TerminalKeyByPassword.outcome(r, user: "alex", name: "Alex’s Mac") }
         XCTAssertTrue(o(.added(alreadyThere: false)).ok)
-        XCTAssertTrue(o(.wrongPassword).text.contains("refused that password"))
+        XCTAssertTrue(o(.wrongPassword).text.contains("did not accept that password"))
         XCTAssertFalse(o(.wrongPassword).keyByHandOnly)
         XCTAssertTrue(o(.passwordNotAllowed).keyByHandOnly)
-        XCTAssertTrue(o(.cannotWrite(detail: "Permission denied")).text.contains("could not write ~/.ssh/authorized_keys"))
-        XCTAssertFalse(o(.cannotWrite(detail: "x")).keyByHandOnly)
-        XCTAssertTrue(o(.windows).text.contains("not handled yet"))
-        XCTAssertFalse(o(.windows).keyByHandOnly)
+        // Every case the app cannot finish shows the key to copy and says so.
+        XCTAssertTrue(o(.cannotWrite(detail: "Permission denied")).text.contains("could not save the key"))
+        XCTAssertTrue(o(.cannotWrite(detail: "x")).keyByHandOnly)
+        XCTAssertTrue(o(.windows).text.contains("Windows PC"))
+        XCTAssertTrue(o(.windows).keyByHandOnly)
     }
 
     /// Item 6: what the Host said, step by step, in place; nothing about Tailscale.

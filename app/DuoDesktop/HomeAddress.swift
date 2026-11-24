@@ -4,11 +4,10 @@ import Security
 import SwiftUI
 import UIKit
 
-// Touch ID clarity A. The owner, 2026-11-22: "How do you set your home network?" and "Shouldn't I be able to just
-// select a Mac that is broadcasting instead of typing a name?" Choosing is the main way: the Macs broadcasting Glass
-// Act Host on this network right now (the same Bonjour browse as Add Mac), each checked for its key; the one whose
-// key matches this entry is marked "This Mac" and listed first. Typing stays as "Enter Address" for a Mac that is
-// not broadcasting. A Mac with a different key is never saved here.
+// Touch ID clarity A. Choosing is the main way: the Macs broadcasting Glass Act Host on this network right now (the
+// same Bonjour browse as Add Mac), each checked for its key; the one whose key matches this entry is marked "This Mac"
+// and listed first. Typing stays as "Enter Address" for a Mac that is not broadcasting. A Mac with a different key is
+// never saved here.
 
 /// The rules, pure (tests).
 @MainActor enum HomeAddressRules {

@@ -3,8 +3,7 @@ import GlassActTransport
 import XCTest
 @testable import DuoDesktop
 
-/// The owner 2026-11-21: "When you launch a new Mac with the Duo open, it should never start in zoomed in view. It should
-/// always start in the full screen view. You need to distinguish between Duo open and Duo closed in this regard."
+/// 
 @MainActor
 final class OpenStartTests: XCTestCase {
     private var dir: URL!

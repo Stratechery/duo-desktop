@@ -4,15 +4,14 @@
 import CoreGraphics
 import Foundation
 
-/// Touch on the Mac's picture, in both layouts, the way Apple maps touch on a touch-display MacBook
-/// (the owner 2026-11-20: "we should use the way that Apple has implemented touch on the new [touch-display MacBook]"). The table and
-/// its sources are in project notes (Touch on the Mac picture). In short: tap = click where
-/// you touch (quick taps are a double or triple click); one finger moving at once = scroll, content following the
-/// finger, with a glide after a quick swipe; touch and hold, then move = drag with the button held; touch and hold,
-/// then lift without moving = right click; pinch = step between the phone's views (`PinchLadder`; the Mac can't be sent a magnify);
-/// three-finger swipes = the Mac's default Mission Control / App Exposé / Spaces shortcuts; a swipe in from the
-/// picture's top or bottom edge = the pointer to that edge (shows a hidden menu bar or Dock).
-/// Positions are canvas pixels, from the negotiated canvas (`setCanvas`). Main thread.
+/// Touch on the Mac's picture, in both layouts, the way Apple maps touch on a touch-display MacBook. The table and its
+/// sources are in project notes (Touch on the Mac picture). In short: tap = click where you touch (quick taps are a
+/// double or triple click); one finger moving at once = scroll, content following the finger, with a glide after a
+/// quick swipe; touch and hold, then move = drag with the button held; touch and hold, then lift without moving = right
+/// click; pinch = step between the phone's views (`PinchLadder`; the Mac can't be sent a magnify); three-finger swipes
+/// = the Mac's default Mission Control / App Exposé / Spaces shortcuts; a swipe in from the picture's top or bottom
+/// edge = the pointer to that edge (shows a hidden menu bar or Dock). Positions are canvas pixels, from the negotiated
+/// canvas (`setCanvas`). Main thread.
 final class DirectTouchEngine {
     let sink: any InputSink
     /// The pointer moved here (canvas px): drawn at once, ahead of the Host's report.

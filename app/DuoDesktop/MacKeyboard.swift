@@ -46,9 +46,8 @@ enum MacKeyFlags {
     static let arrow = function | numericPad
 }
 
-/// The US ANSI key table, as the two layers of the first upright keyboard (plan §4). No longer drawn: the iOS
-/// system keyboard does the typing now (the owner 2026-11-20), and `MacTyping` turns each typed character into the key
-/// listed here.
+/// The US ANSI key table, as the two layers of the first upright keyboard (plan §4). No longer drawn: the iOS system
+/// keyboard does the typing now, and `MacTyping` turns each typed character into the key listed here.
 enum MacKeyboardLayout {
     private static func letter(_ c: String, _ code: UInt16) -> MacKey { MacKey(c, code, repeats: true) }
     private static func shifted(_ c: String, _ code: UInt16) -> MacKey {
@@ -137,17 +136,12 @@ enum MacKeyboardLayout {
 
 }
 
-/// The upright layout's special keys (the owner 2026-11-20: "we should have a system standard keyboard on the bottom,
-/// and the middle part should be a trackpad. We can make the right part the trackpad and the left part the
-/// special keys."). The iOS system keyboard does the typing; these are the Mac keys it lacks.
+/// The upright layout's special keys. The iOS system keyboard does the typing; these are the Mac keys it lacks.
 ///
-/// One grid of 8 equal columns by 4 rows (the owner 2026-11-20: "We can make our keys smaller to get 4 rows?" / "Yes").
-/// The two outer columns hold the buttons (`ClickButtonsLayout`): Left click rows 1-2, Right click row 3, Scroll row 4
-/// (the owner: "There should be a button under the left thumb for click"; "3 tall by 2 wide", "1 tall"). The other
-/// 6 columns hold the 24 keys, as `table` lists them (the owner, on the mock-up: "Looks good. Build it"). No fn key
-/// (the owner 2026-11-20: "I think fn is the one to go?"). The "more" key swaps the 12 shortcut cells for F1-F12 and
-/// the four arrows for home, page up, page down and end (the Mac's own fn+arrow meanings: fn+← home,
-/// fn+↑ page up, fn+↓ page down, fn+→ end), in the same places; the rest stays.
+/// One grid of 8 equal columns by 4 rows. The two outer columns hold the buttons (`ClickButtonsLayout`): Left click
+/// rows 1-2, Right click row 3, Scroll row 4. The other 6 columns hold the 24 keys, as `table` lists them. No fn key.
+/// The "more" key swaps the 12 shortcut cells for F1-F12 and the four arrows for home, page up, page down and end (the
+/// Mac's own fn+arrow meanings: fn+← home, fn+↑ page up, fn+↓ page down, fn+→ end), in the same places; the rest stays.
 enum SpecialKeysLayout {
     typealias Cell = MacKeyboardLayout.Cell
     /// The keys' columns (right of the click buttons) and rows.
@@ -157,8 +151,8 @@ enum SpecialKeysLayout {
     static let gridColumns = ClickButtonsLayout.columns + columns
     static let units = Double(gridColumns)
 
-    /// THE arrangement: one row per line, left to right, by key id (a shortcut's id or a key's id). Moving a key
-    /// is a change to this table only (the owner 2026-11-20, mock-up `mockup-click-buttons-6x4-2026-11-20.png`).
+    /// THE arrangement: one row per line, left to right, by key id (a shortcut's id or a key's id). Moving a key is a
+    /// change to this table only.
     static let table: [[String]] = [
         ["copy", "paste", "cut", "undo", "redo", "selectall"],
         ["save", "find", "switchapp", "spotlight", "close", "quit"],
@@ -189,18 +183,30 @@ enum SpecialKeysLayout {
         return m
     }()
 
-    static func cell(_ id: String, functionKeys: Bool) -> Cell {
+    /// A PC's Print Screen (the Mac's F13 position, key code 105; `RDPKeys` sends it as E0 37).
+    static let printScreen = MacKey("PrtSc", 105, id: "printscreen", flags: MacKeyFlags.function)
+    /// On a PC the "…" page also has Print Screen and Task View (⊞+Tab), in esc's and tab's places (plan §2 "Keys":
+    /// "adds Delete, Print Screen and ⊞+Tab"; ⌦ is already the PC's Delete).
+    static func windowsMore(_ id: String) -> Cell? {
+        switch id {
+        case "escape": .key(printScreen.widened(1))
+        case "tab": .shortcut(.windowsTaskView)
+        default: nil
+        }
+    }
+
+    static func cell(_ id: String, functionKeys: Bool, windows: Bool = false) -> Cell {
+        if functionKeys, windows, let c = windowsMore(id) { return c }
         if functionKeys, let k = moreSwap[id] { return .key(k.widened(1)) }
         if let s = MacShortcut.all.first(where: { $0.id == id }) { return .shortcut(s) }
         guard let k = keysByID[id] else { preconditionFailure("SpecialKeysLayout.table: no key \(id)") }
         return .key(k)
     }
 
-    /// The keys' 4 rows of 6, left to right on screen. `functionKeys`: the "more" block is showing. The order is
-    /// the same with the trackpad on either side (the owner 2026-11-20: "All of our extra modifier keys should stay the
-    /// same. They should not flip.").
-    static func rows(functionKeys: Bool) -> [[Cell]] {
-        table.map { row in row.map { cell($0, functionKeys: functionKeys) } }
+    /// The keys' 4 rows of 6, left to right on screen. `functionKeys`: the "more" block is showing. The order is the
+    /// same with the trackpad on either side.
+    static func rows(functionKeys: Bool, windows: Bool = false) -> [[Cell]] {
+        table.map { row in row.map { cell($0, functionKeys: functionKeys, windows: windows) } }
     }
 }
 
@@ -216,16 +222,15 @@ extension SpecialKeysLayout {
     }
 }
 
-/// The shape of the picture the Mac sends (the negotiated canvas). 16:10 gets its own upright layout (the owner
-/// 2026-11-21: "we should have a designed 16:10 view that where the Mac screen continues to fill the full app
-/// horizontally"); everything else keeps today's 16:9 layout.
+/// The shape of the picture the Mac sends (the negotiated canvas). 16:10 gets its own upright layout; everything else
+/// keeps today's 16:9 layout.
 enum PictureShape: Equatable {
     case sixteenNine, sixteenTen
 
-    /// The layout that shows the Mac's screen largest (the owner 2026-11-21: "change the rule to show the largest possible
-    /// picture"): the screen fitted into each upright layout's picture box (same width; heights 10/16 and 9/16 of
-    /// it), the larger area wins, a tie goes to 16:9. In effect every screen narrower than 16:9 gets 16:10, and
-    /// 16:9 or wider ties (the picture is width-bound in both) and gets 16:9. The Mac's resolution is never changed.
+    /// The layout that shows the Mac's screen largest: the screen fitted into each upright layout's picture box (same
+    /// width; heights 10/16 and 9/16 of it), the larger area wins, a tie goes to 16:9. In effect every screen narrower
+    /// than 16:9 gets 16:10, and 16:9 or wider ties (the picture is width-bound in both) and gets 16:9. The Mac's
+    /// resolution is never changed.
     static func of(width: Int, height: Int) -> PictureShape {
         guard width > 0, height > 0 else { return .sixteenNine }
         let ten = fittedArea(width: width, height: height, box: Self.sixteenTen.heightOverWidth)
@@ -245,11 +250,10 @@ enum PictureShape: Equatable {
     var label: String { self == .sixteenTen ? "16:10" : "16:9" }
 }
 
-/// The layout's shape, decided ONCE for the screen being shown and then held (the owner 2026-11-21: "the size test to see
-/// if it should be 1610 or 16:9 needs to run once, not multiple times"). Decided at the session's first picture and
-/// when the shown screen changes (the user's choice, an edge crossing, or opening on the remembered screen). Nothing
-/// else runs `PictureShape.of` again: not a new picture size, rotation, the keyboard, a rejoin to the same screen,
-/// the overview, Follow Pointer. The session model owns it; the views only read `shape`.
+/// The layout's shape, decided ONCE for the screen being shown and then held. Decided at the session's first picture
+/// and when the shown screen changes (the user's choice, an edge crossing, or opening on the remembered screen).
+/// Nothing else runs `PictureShape.of` again: not a new picture size, rotation, the keyboard, a rejoin to the same
+/// screen, the overview, Follow Pointer. The session model owns it; the views only read `shape`.
 struct LayoutShapeDecision: Equatable {
     enum Reason: String {
         case firstPicture = "first picture"
@@ -298,13 +302,10 @@ struct LayoutShapeDecision: Equatable {
     }
 }
 
-/// The upright band's keys for a 16:10 picture: 3 rows instead of 4 (the owner 2026-11-21: "we can give up the shortcut
-/// key row and keep the standard copy paste plus arrows plus function keys"; mock-up
-/// `screenshots/view-16x10-v2-normal-2026-11-21.png`). The click column stays at the outer edge: Left click two rows
-/// tall, Right click and Scroll side by side in the third row (`ClickButtonsLayout`'s 2 columns).
-/// "More" (the owner: "expand the area taken by the custom keys to also cover the click area"; mock-up
-/// `view-16x10-v2-more-2026-11-21.png`) shows 3 rows of 10 narrower keys over the click column and the keys; the
-/// trackpad stays. It stays open until … is tapped again, as in 16:9.
+/// The upright band's keys for a 16:10 picture: 3 rows instead of 4. The click column stays at the outer edge: Left
+/// click two rows tall, Right click and Scroll side by side in the third row (`ClickButtonsLayout`'s 2 columns). "More"
+/// shows 3 rows of 10 narrower keys over the click column and the keys; the trackpad stays. It stays open until … is
+/// tapped again, as in 16:9.
 enum SixteenTenKeysLayout {
     typealias Cell = MacKeyboardLayout.Cell
     static let rowCount = 3
@@ -335,24 +336,22 @@ enum SixteenTenKeysLayout {
     }
 }
 
-/// The three buttons at the band's outer edge, under the thumb (the owner 2026-11-20: "a 2x2 button that is the left
-/// click, a 1x2 button that is right click, and a 1x2 button that is scroll"), top to bottom: Left click 2 rows
-/// tall, Right click 1 row, Scroll 1 row; all 2 keys wide.
+/// The three buttons at the band's outer edge, under the thumb, top to bottom: Left click 2 rows tall, Right click 1
+/// row, Scroll 1 row; all 2 keys wide.
 enum ClickButtonsLayout {
     static let columns = 2
     /// Rows each button spans, top to bottom.
     static let leftRows = 2
     static let rightRows = 1
     static let scrollRows = 1
-    /// The buttons top to bottom, with the rows each spans: Right click, Scroll, then the big Left click at the
-    /// bottom, as the horizontal view's column (the owner 2026-11-21, build 27: "The left click should be at the bottom,
-    /// then scroll, then right click above that.").
+    /// The buttons top to bottom, with the rows each spans: Right click, Scroll, then the big Left click at the bottom,
+    /// as the horizontal view's column.
     static let stack: [(button: BandButton, rows: Int)] = [(.right, rightRows), (.scroll, scrollRows),
                                                            (.left, leftRows)]
 
-    /// The 16:10 band's key-sized row (on top since build 29, the two-row Left click under it), left to right: Scroll at the screen's outer edge, Right click inside it (the owner
-    /// 2026-11-21: "The scroll button is more important and should be on the outside."). Trackpad Right puts the
-    /// column at the far left, so Scroll is leftmost; Trackpad Left puts it at the far right, so Scroll is rightmost.
+    /// The 16:10 band's key-sized row (on top since build 29, the two-row Left click under it), left to right: Scroll
+    /// at the screen's outer edge, Right click inside it. Trackpad Right puts the column at the far left, so Scroll is
+    /// leftmost; Trackpad Left puts it at the far right, so Scroll is rightmost.
     static func sixteenTenThirdRow(side: TrackpadSide) -> [BandButton] {
         side == .right ? [.scroll, .right] : [.right, .scroll]
     }
@@ -363,11 +362,9 @@ enum BandButton: CaseIterable {
     case left, right, scroll
 }
 
-/// Which side of the upright band the trackpad is on (the owner 2026-11-20: "It should be an option to flip the buttons
-/// and the trackpad so you can use whichever way you want to." / "The setting is a selector: left or right").
-/// Right is today's layout: buttons at the far left, the keys, then the trackpad. Left: the trackpad, the keys in
-/// exactly the same order (they do not flip: the owner 2026-11-20 "All of our extra modifier keys should stay the same.
-/// They should not flip."), then the buttons at the far right. Remembered across launches in the app's defaults.
+/// Which side of the upright band the trackpad is on. Right is today's layout: buttons at the far left, the keys, then
+/// the trackpad. Left: the trackpad, the keys in exactly the same order, then the buttons at the far right. Remembered
+/// across launches in the app's defaults.
 enum TrackpadSide: String, CaseIterable, Identifiable {
     case left, right
 
@@ -396,7 +393,7 @@ extension MacKey {
     }
 }
 
-/// A one-press Mac shortcut (the owner 2026-11-20: "Also copy and paste keys and things like that").
+/// A one-press Mac shortcut.
 struct MacShortcut: Identifiable, Equatable {
     let id: String
     /// The name: the accessibility label, and the key's face when `symbol` is nil.
@@ -449,10 +446,72 @@ struct MacShortcut: Identifiable, Equatable {
                                      closeWindow, quit]
 }
 
+/// Who the keys are for. A Remote Desktop PC reads ⌃ ⌥ ⌘ as Ctrl, Alt and ⊞ (`RDPKeys.modifiers`), so the band's
+/// shortcut keys send Windows' own shortcuts there, not the Mac's; a Mac's session is unchanged.
+enum KeyTarget: Equatable { case mac, windows }
+
+/// The two forms Ctrl Alt Del can take over Remote Desktop (plan §2: "Milestone 4 proves which of the two ways
+/// Windows accepts"). `ctrlAltDelete`: Ctrl, Alt and Delete as scan codes, what Windows' own client sends to the PC
+/// for the secure attention sequence. `ctrlAltEnd`: Ctrl, Alt and End, the keys Windows' client asks a person to
+/// press for it. The tap sends the remembered form; touch and hold the key picks the other, which is remembered.
+enum CtrlAltDelForm: String, CaseIterable {
+    case ctrlAltDelete, ctrlAltEnd
+
+    static let defaultsKey = "rdpCtrlAltDelForm"
+    static var remembered: CtrlAltDelForm {
+        get { UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .ctrlAltDelete }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+    var title: String { self == .ctrlAltDelete ? "Send Ctrl Alt Delete" : "Send Ctrl Alt End" }
+    /// The third key, as a Mac key code: ⌦ (117, the PC's Delete, E0 53) or End (119, E0 4F).
+    var keyCode: UInt16 { self == .ctrlAltDelete ? 117 : 119 }
+}
+
+extension MacShortcut {
+    /// The Windows shortcut in each band key's place, written with the Mac modifiers `RDPInput` turns into PC keys
+    /// (⌃ = Ctrl, ⌥ = Alt, ⌘ = ⊞) and US Mac key codes. Same ids and places. Apps is the app switcher held with Alt
+    /// (`MacKeyboardEngine.switcherModifier`); the power key's place is Ctrl Alt Del (`ctrlAltDelID`), an action.
+    static let windowsCopy = MacShortcut(id: "copy", title: "Copy", symbol: "doc.on.doc", code: 8, modifiers: .control)
+    static let windowsPaste = MacShortcut(id: "paste", title: "Paste", symbol: "clipboard", code: 9,
+                                          modifiers: .control)
+    static let windowsCut = MacShortcut(id: "cut", title: "Cut", symbol: "scissors", code: 7, modifiers: .control)
+    static let windowsUndo = MacShortcut(id: "undo", title: "Undo", symbol: "arrow.uturn.backward", code: 6,
+                                         modifiers: .control)
+    /// Redo is Ctrl+Y on Windows (Y = Mac key 16).
+    static let windowsRedo = MacShortcut(id: "redo", title: "Redo", symbol: "arrow.uturn.forward", code: 16,
+                                         modifiers: .control)
+    static let windowsSelectAll = MacShortcut(id: "selectall", title: "Select All", symbol: nil, code: 0,
+                                              modifiers: .control)
+    static let windowsSave = MacShortcut(id: "save", title: "Save", symbol: "square.and.arrow.down", code: 1,
+                                         modifiers: .control)
+    static let windowsFind = MacShortcut(id: "find", title: "Find", symbol: nil, code: 3, modifiers: .control)
+    /// Search: ⊞+S.
+    static let windowsSearch = MacShortcut(id: "spotlight", title: "Search", symbol: "magnifyingglass", code: 1,
+                                           modifiers: .command)
+    /// Close: Alt+F4 (F4 = Mac key 118).
+    static let windowsClose = MacShortcut(id: "close", title: "Close", symbol: "xmark", code: 118,
+                                          modifiers: .option, keyFlags: MacKeyFlags.function)
+    /// Task View on the PC's "…" page: ⊞+Tab.
+    static let windowsTaskView = MacShortcut(id: "taskview", title: "Task View", symbol: "rectangle.split.3x1",
+                                             code: 48, modifiers: .command)
+    /// The id of the power key's place, which is Ctrl Alt Del on a PC.
+    static let ctrlAltDelID = "quit"
+
+    static let windowsByID: [String: MacShortcut] = Dictionary(uniqueKeysWithValues: [
+        windowsCopy, windowsPaste, windowsCut, windowsUndo, windowsRedo, windowsSelectAll, windowsSave, windowsFind,
+        windowsSearch, windowsClose, windowsTaskView,
+    ].map { ($0.id, $0) })
+
+    /// This key's shortcut for `target`: itself on a Mac, the Windows one in its place on a PC.
+    func `for`(_ target: KeyTarget) -> MacShortcut {
+        target == .windows ? Self.windowsByID[id] ?? self : self
+    }
+}
+
 /// The keyboard's behaviour, apart from any view: latching modifiers, held keys, repeat, and the INPUT
 /// messages they make. Main thread.
 final class MacKeyboardEngine {
-    /// No double-tap lock (the owner 2026-11-20: "I think no on double tap to lock"): a modifier is off or held once.
+    /// No double-tap lock: a modifier is off or held once.
     enum Latch: Equatable { case off, once }
 
     /// Hold a repeating key this long before it repeats, then repeat this often (key downs only, as macOS).
@@ -461,14 +520,19 @@ final class MacKeyboardEngine {
 
     let sink: any InputSink
     private(set) var latches: [KeyMap.Modifier: Latch] = [:]
-    /// The Apps key has opened the Mac's app switcher: Command is down on the Mac until it is picked or let go
-    /// (the owner 2026-11-20: "a command tab that is held down so that the app switcher is on the screen").
+    /// The Apps key has opened the Mac's app switcher: Command is down on the Mac until it is picked or let go.
     private(set) var switcherOpen = false
     /// Keys down now (key id → code and the flags sent with its down).
     private(set) var held: [String: (code: UInt16, flags: UInt32)] = [:]
     /// Modifier keys pressed for latches during the current key or click.
     private var modifiersDown: [KeyMap.Modifier] = []
     var onChange: (() -> Void)?
+    /// Typing a character no US key types (é, emoji): set only where the far end takes text (a Remote Desktop PC).
+    var typeText: ((Character) -> Void)?
+    /// A Mac, or a Remote Desktop PC (Windows shortcuts on the band keys). Set by the PC's screen.
+    var target: KeyTarget = .mac
+    /// The modifier the Apps key holds down for the app switcher: ⌘ (⌘Tab) on a Mac, ⌥ (Alt+Tab) on a PC.
+    var switcherModifier: KeyMap.Modifier { target == .windows ? .option : .command }
 
     init(sink: any InputSink) { self.sink = sink }
 
@@ -484,7 +548,7 @@ final class MacKeyboardEngine {
     /// or click; any number can be held together, and they all let go after that key or click); once, tapped
     /// again → off, however quickly. While the app switcher is open, a tap on Command lets Command go (picks).
     func tapModifier(_ m: KeyMap.Modifier) {
-        if switcherOpen, m == .command {
+        if switcherOpen, m == switcherModifier {
             closeAppSwitcher()
             return
         }
@@ -493,14 +557,14 @@ final class MacKeyboardEngine {
     }
 
     /// Flags that are down on the Mac apart from the latches: Command while the app switcher is open.
-    private var baseFlags: UInt32 { switcherOpen ? KeyMap.Modifier.command.eventFlags : 0 }
+    private var baseFlags: UInt32 { switcherOpen ? switcherModifier.eventFlags : 0 }
 
     /// The Apps key. Closed: Command down, Tab down and up, Command kept down, so the Mac's app switcher stays on
     /// screen. Open: Command up, which switches to the highlighted app. One-shot latches are used up on opening.
     func tapAppSwitcher() {
         if switcherOpen { closeAppSwitcher(); return }
-        guard held.isEmpty, modifiersDown.isEmpty, let cmd = KeyMap.Modifier.command.keyCode else { return }
-        let flags = KeyMap.Modifier.command.eventFlags
+        guard held.isEmpty, modifiersDown.isEmpty, let cmd = switcherModifier.keyCode else { return }
+        let flags = switcherModifier.eventFlags
         send(InputKind.keyDown, code: cmd, flags: flags)
         send(InputKind.keyDown, code: MacKeyboardLayout.tab.code, flags: flags)
         send(InputKind.keyUp, code: MacKeyboardLayout.tab.code, flags: flags)
@@ -511,7 +575,7 @@ final class MacKeyboardEngine {
 
     /// Lets Command go: the Mac switches to the highlighted app (or, after Escape, has already cancelled).
     func closeAppSwitcher() {
-        guard switcherOpen, let cmd = KeyMap.Modifier.command.keyCode else { return }
+        guard switcherOpen, let cmd = switcherModifier.keyCode else { return }
         switcherOpen = false
         send(InputKind.keyUp, code: cmd, flags: 0)
         onChange?()
@@ -523,7 +587,7 @@ final class MacKeyboardEngine {
         let mods = activeModifiers
         var flags: UInt32 = baseFlags
         for m in KeyMap.Modifier.order where mods.contains(m) {
-            if switcherOpen, m == .command { continue }
+            if switcherOpen, m == switcherModifier { continue }
             guard let code = m.keyCode else { continue }
             flags |= m.eventFlags
             send(InputKind.keyDown, code: code, flags: flags)
@@ -580,9 +644,11 @@ final class MacKeyboardEngine {
     /// Latched modifiers are added (⌥ latched + Copy sends ⌥⌘C) and a one-shot latch is used up, as a key is.
     /// The Apps key opens and picks in the app switcher instead (`tapAppSwitcher`). While the switcher is open the
     /// other shortcut keys send nothing: Quit (⌘Q) would quit the highlighted app, and it sits two keys from Apps.
-    func sendShortcut(_ s: MacShortcut) {
-        if s == .switchApp { tapAppSwitcher(); return }
+    /// On a PC the key's Windows shortcut goes instead (`MacShortcut.for`): copy is Ctrl+C there, not ⊞C.
+    func sendShortcut(_ shortcut: MacShortcut) {
+        if shortcut.id == MacShortcut.switchApp.id { tapAppSwitcher(); return }
         guard held.isEmpty, !switcherOpen else { return }
+        let s = shortcut.for(target)
         let all = s.modifiers.union(activeModifiers)
         var flags: UInt32 = 0
         var pressed: [KeyMap.Modifier] = []
@@ -604,6 +670,24 @@ final class MacKeyboardEngine {
             changed = true
         }
         if changed { onChange?() }
+    }
+
+    /// Ctrl Alt Del on a PC, as one action: Ctrl down, Alt down, Delete (or End, `form`) down and up, Alt up, Ctrl
+    /// up. Latches are not added (a held ⊞ would change it); one-shot latches are used up, as a shortcut's are.
+    func sendCtrlAltDel(_ form: CtrlAltDelForm) {
+        guard target == .windows, held.isEmpty, !switcherOpen,
+              let ctrl = KeyMap.Modifier.control.keyCode, let alt = KeyMap.Modifier.option.keyCode else { return }
+        let c = KeyMap.Modifier.control.eventFlags, a = KeyMap.Modifier.option.eventFlags
+        send(InputKind.keyDown, code: ctrl, flags: c)
+        send(InputKind.keyDown, code: alt, flags: c | a)
+        send(InputKind.keyDown, code: form.keyCode, flags: c | a | MacKeyFlags.function)
+        send(InputKind.keyUp, code: form.keyCode, flags: c | a | MacKeyFlags.function)
+        send(InputKind.keyUp, code: alt, flags: c)
+        send(InputKind.keyUp, code: ctrl, flags: 0)
+        if latches.values.contains(.once) {
+            for (m, l) in latches where l == .once { latches[m] = .off }
+            onChange?()
+        }
     }
 
     /// A trackpad click with the latched modifiers held around it (Command-click, Control-click). While the app

@@ -1,10 +1,9 @@
 #if DUO_JETKVM
-// The JetKVM view (the owner 2026-11-21: "Native view for JetKVM."). Everything here is compiled only with DUO_JETKVM;
-// the WebRTC framework is linked only then (project-jetkvm.yml). The engine is jetkvm-client (JetKVMClient).
+// The JetKVM view. Everything here is compiled only with DUO_JETKVM; the WebRTC framework is linked only then
+// (project-jetkvm.yml). The engine is jetkvm-client (JetKVMClient).
 //
-// Pointer: RELATIVE moves only. A Mac can map the JetKVM's absolute pointer to a different display than the one
-// the JetKVM captures (project notes: absolute moves landed on the second display), so
-// our trackpad sends deltas and clicks happen wherever the Mac's pointer is.
+// Pointer: RELATIVE moves only. A Mac can map the JetKVM's absolute pointer to a different display than the one the
+// JetKVM captures, so our trackpad sends deltas and clicks happen wherever the Mac's pointer is.
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -285,9 +284,9 @@ final class JetKVMInput: InputSink {
             let sy = Int(scroll.y / Self.pointsPerStep), sx = Int(scroll.x / Self.pointsPerStep)
             guard sx != 0 || sy != 0 else { return }
             scroll.x -= Double(sx) * Self.pointsPerStep; scroll.y -= Double(sy) * Self.pointsPerStep
-            // Our points follow the fingers (the Mac view posts them as they are). A USB wheel is flipped by the
-            // Mac when natural scrolling is on, the macOS default, so the steps go the other way to match the Mac
-            // view there (measured live 2026-11-21: unflipped, fingers down moved the content up).
+            // Our points follow the fingers (the Mac view posts them as they are). A USB wheel is flipped by the Mac
+            // when natural scrolling is on, the macOS default, so the steps go the other way to match the Mac view
+            // there.
             output?.sendScroll(dy: max(-127, min(127, -sy)), dx: max(-127, min(127, -sx)))
         case InputKind.keyDown, InputKind.keyUp:
             key(code: UInt16(truncatingIfNeeded: x), down: kind == InputKind.keyDown,
@@ -305,11 +304,11 @@ final class JetKVMInput: InputSink {
         output?.sendPointerDelta(dx: dx, dy: dy, buttons: nil)
     }
 
-    /// the owner 2026-11-22: a password typed through the JetKVM was refused. Our keyboard sends a capital or a shifted
+    /// The owner 2026-11-22: a password typed through the JetKVM was refused. Our keyboard sends a capital or a shifted
     /// symbol as the plain key with Shift in its flags (a Mac host applies the flags), and the JetKVM is a USB
-    /// keyboard, which has only keys: the flag was dropped, so "A" arrived as "a" and "!" as "1". A key's own
-    /// modifier flags are now pressed as modifier keys around it: the modifier alone first, then the key, then the
-    /// key up, then the modifier up (as a person types it, and never in the same report as a key change).
+    /// keyboard, which has only keys: the flag was dropped, so "A" arrived as "a" and "!" as "1". A key's own modifier
+    /// flags are now pressed as modifier keys around it: the modifier alone first, then the key, then the key up, then
+    /// the modifier up (as a person types it, and never in the same report as a key change).
     private func key(code: UInt16, down: Bool, flags: UInt32) {
         if let m = JetKVMKeys.modifier[code] {
             if down { modifiers.insert(m) } else { modifiers.remove(m) }
@@ -378,13 +377,12 @@ final class JetKVMLink {
         case waking
     }
 
-    // MARK: Waking the display (project notes 3)
+    // MARK: Waking the display
 
-    /// the owner: "You need to hit a key to wake up the screen so that JetKVM can hold on to it. You should automate this.
-    /// Hit Shift or something." When connected with no first frame: Left Shift alone (types nothing) after
-    /// `wakeAfter`, or at once when the JetKVM says "no_signal" (its `videoInputState` event, jetkvm/kvm 0.5.10
-    /// `internal/native/video.go`), then again every `wakeEvery` while no picture comes, at most `wakesPerAttempt`
-    /// times in an attempt and `wakesInAll` in a connect.
+    ///  When connected with no first frame: Left Shift alone (types nothing) after `wakeAfter`, or at once when the
+    /// JetKVM says "no_signal" (its `videoInputState` event, jetkvm/kvm 0.5.10 `internal/native/video.go`), then again
+    /// every `wakeEvery` while no picture comes, at most `wakesPerAttempt` times in an attempt and `wakesInAll` in a
+    /// connect.
     static var wakeAfter: Duration = .seconds(2)
     static var wakeEvery: Duration = .seconds(3)
     static let wakesPerAttempt = 3
@@ -449,7 +447,7 @@ final class JetKVMLink {
         return t
     }
 
-    /// The owner 2026-11-21: the JetKVM's video "sometimes works and it sometimes doesn't", in its own web page too. When
+    /// The owner 2026-11-21: the JetKVM's video sometimes worked and sometimes did not, in its own web page too. When
     /// the video connection does not form (ICE failed, or no picture by the deadline), the attempt is torn down
     /// and the next starts by itself: up to `attempts`, `retryDelay` apart, each held to `attemptTimeout`.
     static let attempts = 3
@@ -720,9 +718,8 @@ final class JetKVMLink {
         watch?.cancel(); task?.cancel()
     }
 
-    /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the
-    /// new one before the old one goes; the old one's disconnect must not end the new one's connection (live-check
-    /// project notes (2026-11-22): sideways stuck on "Connecting to the JetKVM…").
+    /// Picture views showing this link. Turning the phone swaps one picture view for another, and SwiftUI shows the new
+    /// one before the old one goes; the old one's disconnect must not end the new one's connection.
     private(set) var panelsShown = 0
     func panelAppeared(entry: MacEntry?) {
         panelsShown += 1
@@ -788,11 +785,11 @@ final class JetKVMLink {
         }
     }
 
-    /// `--jetkvm-check typefile --jetkvm-type-file PATH [--jetkvm-type-gap S] [--jetkvm-type-start S]`
-    /// (keys proof 2026-11-22). Types the file's test text (never a password) through our own keyboard exactly as a
-    /// finger does: the page key for a character on another page, ⇧ before a capital, then the key's lift. Marks:
-    /// "⇪" double-taps ⇧ (caps lock), "⇧" taps ⇧ once, "⌫" taps delete, a newline is return. Each character is
-    /// `gap` seconds after the last (0 = all at once).
+    /// `--jetkvm-check typefile --jetkvm-type-file PATH [--jetkvm-type-gap S] [--jetkvm-type-start S]`. Types the
+    /// file's test text (never a password) through our own keyboard exactly as a finger does: the page key for a
+    /// character on another page, ⇧ before a capital, then the key's lift. Marks: "⇪" double-taps ⇧ (caps lock), "⇧"
+    /// taps ⇧ once, "⌫" taps delete, a newline is return. Each character is `gap` seconds after the last (0 = all at
+    /// once).
     private func typeFile(engine: MacKeyboardEngine, at: (Double, String, @escaping () -> Void) -> Void) {
         let args = CommandLine.arguments
         func value(_ name: String) -> String? {
@@ -884,10 +881,9 @@ final class JetKVMLink {
 
 // MARK: - The picture
 
-/// The JetKVM's picture: our own view, an `AVSampleBufferDisplayLayer` fed with WebRTC's decoded frames
-/// (VideoToolbox pixel buffers), aspect-fitted. WebRTC's own `RTCMTLVideoView` stayed black in the live runs even
-/// with the track attached to a view of real size and frames arriving (2026-11-21, simulator); this path does not
-/// depend on WebRTC's Metal renderer.
+/// The JetKVM's picture: our own view, an `AVSampleBufferDisplayLayer` fed with WebRTC's decoded frames (VideoToolbox
+/// pixel buffers), aspect-fitted. WebRTC's own `RTCMTLVideoView` stayed black in the live runs even with the track
+/// attached to a view of real size and frames arriving; this path does not depend on WebRTC's Metal renderer.
 final class JetKVMPictureView: UIView, RTCVideoRenderer {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
     private var display: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }

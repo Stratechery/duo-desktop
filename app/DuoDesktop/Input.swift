@@ -34,11 +34,11 @@ final class InputRelay: InputSink {
     }
 }
 
-/// Belt and braces at the start of every session (the owner 2026-11-20, "yes, check that"): before anything else, a key
-/// up for each modifier (⌃ ⌥ ⇧ ⌘ fn), flags 0. If a crash or a killed app left one down on a Mac whose Host did not
-/// let it go, the new session lifts it. Glass Act's own Host already releases what a session held when it ends
-/// (`HostController.releaseHeldInput`, pinned commit); this covers any Host that does not. A stray key up is
-/// harmless on the Mac. Mouse buttons are not sent: an up needs a point, and the Host's own release covers them.
+/// Belt and braces at the start of every session: before anything else, a key up for each modifier (⌃ ⌥ ⇧ ⌘ fn), flags
+/// 0. If a crash or a killed app left one down on a Mac whose Host did not let it go, the new session lifts it. Glass
+/// Act's own Host already releases what a session held when it ends (`HostController.releaseHeldInput`, pinned commit);
+/// this covers any Host that does not. A stray key up is harmless on the Mac. Mouse buttons are not sent: an up needs a
+/// point, and the Host's own release covers them.
 enum ConnectRelease {
     static func send(to sink: any InputSink) {
         for m in KeyMap.Modifier.order {

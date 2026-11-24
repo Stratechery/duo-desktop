@@ -16,6 +16,13 @@ final class CloudComputerSync: CKSyncEngineDelegate {
     static let zoneName = "Computers"
     static let recordType = "Computer"
     static let payloadField = "payload"
+    /// The Remote Desktop fields (`SyncedRemoteDesktop`), encrypted, in a field of their own: an older build saves
+    /// only `payload`, and CloudKit saves only the fields a save sets, so it leaves this one as it was.
+    static let remoteDesktopField = "remoteDesktop"
+    /// What the computer's Terminal is (`TerminalSystem`), in a field of its own for the same reason.
+    static let terminalSystemField = "terminalSystem"
+    /// What the computer answered to `uname -s` (`MacEntry.unameSystem`), in a field of its own the same way.
+    static let unameSystemField = "unameSystem"
 
     static let shared = CloudComputerSync(core: .shared)
 
@@ -52,6 +59,7 @@ final class CloudComputerSync: CKSyncEngineDelegate {
         guard Self.inThisBuild else {
             #if targetEnvironment(simulator)
             core.status = .simulator
+            if let demo = SimulatorSwitches.syncDemo { core.showDemo(demo) }
             #else
             core.status = .notInThisBuild
             #endif
@@ -98,10 +106,15 @@ final class CloudComputerSync: CKSyncEngineDelegate {
         Task { await start() }
     }
 
-    /// Back in the foreground: look for changes now.
+    /// Back in the foreground: look for changes now. Back in the foreground: look for changes now, and send again what
+    /// iCloud has not taken, refused ones included.
     func fetchNow() {
         guard let engine else { Task { await start() }; return }
-        Task { try? await engine.fetchChanges() }
+        core.retryUnsent()
+        Task {
+            try? await engine.fetchChanges()
+            try? await engine.sendChanges()
+        }
     }
 
     private func stop() {
@@ -184,6 +197,8 @@ final class CloudComputerSync: CKSyncEngineDelegate {
                 core.sent(id, sending.removeValue(forKey: id))
                 if core.state.unsent.contains(id) { enqueue([id]) }
             }
+            // A save went through: an earlier refusal's "not ready" no longer holds once none is left.
+            if !s.savedRecords.isEmpty, core.state.refused.isEmpty, case .notNow = core.status { core.status = .on }
             for f in s.failedRecordSaves {
                 let id = f.record.recordID.recordName
                 sending[id] = nil
@@ -208,11 +223,15 @@ final class CloudComputerSync: CKSyncEngineDelegate {
                      .notAuthenticated, .accountTemporarilyUnavailable:
                     break // the engine tries again by itself
                 default:
-                    core.status = .notNow(Self.plain(f.error))
+                    // Not tried again by the engine: kept unsent, sent again each time the app opens (`fetchNow`, and
+                    // `makeEngine` at launch). Shown in the footer; the status stays as it is, since other computers
+                    // still sync.
+                    core.refused(id, Self.plain(f.error))
                     SessionModel.log.error("iCloud refused a computer: \(f.error.code.rawValue)")
                 }
             }
         case .didFetchChanges:
+            core.fetched()
             if !core.state.joined { core.joinDone() }
             if core.status == .checking, engine != nil { core.status = .on }
         case .willFetchChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges, .willSendChanges,
@@ -236,16 +255,46 @@ final class CloudComputerSync: CKSyncEngineDelegate {
 
     private func record(_ id: CKRecord.ID) -> CKRecord? {
         let name = id.recordName
-        guard let c = core.record(for: name), let data = try? JSONEncoder().encode(c) else { return nil }
+        guard let c = core.record(for: name), let fields = Self.fields(c) else { return nil }
         let r = core.state.tags[name].flatMap(Self.untag) ?? CKRecord(recordType: Self.recordType, recordID: id)
-        r.encryptedValues[Self.payloadField] = data
+        for (key, data) in fields { r.encryptedValues[key] = data }
         sending[name] = c
         return r
     }
 
     static func decode(_ r: CKRecord) -> CloudComputer? {
-        guard let data = r.encryptedValues[payloadField] as? Data else { return nil }
-        return try? JSONDecoder().decode(CloudComputer.self, from: data)
+        decode([payloadField: r.encryptedValues[payloadField] as? Data,
+                remoteDesktopField: r.encryptedValues[remoteDesktopField] as? Data,
+                terminalSystemField: r.encryptedValues[terminalSystemField] as? Data,
+                unameSystemField: r.encryptedValues[unameSystemField] as? Data])
+    }
+
+    /// The record's encrypted fields for `c`: `payload` without the Remote Desktop fields, and those on their own
+    /// (none for a removal mark). Pure, for the tests.
+    static func fields(_ c: CloudComputer) -> [String: Data]? {
+        var p = c
+        p.computer?.remoteDesktop = nil
+        p.computer?.terminalSystem = nil
+        p.computer?.unameSystem = nil
+        guard let payload = try? JSONEncoder().encode(p) else { return nil }
+        var out = [payloadField: payload]
+        if let rd = c.computer?.remoteDesktop, let data = try? JSONEncoder().encode(rd) { out[remoteDesktopField] = data }
+        if let ts = c.computer?.terminalSystem { out[terminalSystemField] = Data(ts.utf8) }
+        if let us = c.computer?.unameSystem { out[unameSystemField] = Data(us.utf8) }
+        return out
+    }
+
+    /// A record from its encrypted fields. No Remote Desktop field (a record only older builds have saved): nil, so
+    /// this iPhone's own Remote Desktop values are kept.
+    static func decode(_ fields: [String: Data?]) -> CloudComputer? {
+        guard let data = fields[payloadField] ?? nil,
+              var c = try? JSONDecoder().decode(CloudComputer.self, from: data) else { return nil }
+        if let rd = fields[remoteDesktopField] ?? nil {
+            c.computer?.remoteDesktop = try? JSONDecoder().decode(SyncedRemoteDesktop.self, from: rd)
+        }
+        if let ts = fields[terminalSystemField] ?? nil { c.computer?.terminalSystem = String(decoding: ts, as: UTF8.self) }
+        if let us = fields[unameSystemField] ?? nil { c.computer?.unameSystem = String(decoding: us, as: UTF8.self) }
+        return c
     }
 
     /// The record's change tag and identity (its system fields), to save over it next time.
@@ -303,6 +352,9 @@ struct SyncSection: View {
                 Text(ComputerSync.footer)
                 Text(sync.enabled ? sync.status.words : ComputerSync.Status.off.words)
                     .accessibilityIdentifier("syncStatus")
+                if sync.enabled && sync.status != .simulator {
+                    ForEach(sync.detailLines, id: \.self) { Text($0) }
+                }
                 if sync.hiddenCount > 0 {
                     Text(sync.hiddenCount == 1 ? "1 computer is removed from this iPhone only. Add it again to bring it back."
                          : "\(sync.hiddenCount) computers are removed from this iPhone only. Add one again to bring it back.")

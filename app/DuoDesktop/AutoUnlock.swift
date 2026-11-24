@@ -4,9 +4,8 @@ import Security
 import SwiftUI
 import UIKit
 
-// Unlock a locked Mac automatically (project notes). The owner: "Given that we're already connected to the
-// Mac, why do we see a login screen? Shouldn't we log in automatically?" — "Yes, let's do that." One Touch ID (the owner,
-// decided): "a single touch ID unlocks all of the Macs", so the app's own lock (`AppLock`) is the only gate.
+// Unlock a locked Mac automatically. — "Yes, let's do that." One Touch ID: "a single touch ID unlocks all of the Macs",
+// so the app's own lock (`AppLock`) is the only gate.
 //
 // The Mac's password lives only in this iPhone's Keychain: one item per Mac, this device only, never synchronized,
 // protected by access control (user presence) and read only with the LAContext the app lock just evaluated, so no
@@ -120,9 +119,8 @@ enum AutoUnlockRules {
         return nil
     }
 
-    /// The section's footer, saying the dependency before it matters (the owner 2026-11-22: "it should clarify that you
-    /// have to set Touch ID if you want your Mac to unlock automatically").
-    /// The words name this phone's own method (`UnlockMethod`, Face ID wording change).
+    /// The section's footer, saying the dependency before it matters. The words name this phone's own method
+    /// (`UnlockMethod`, Face ID wording change).
     static var footer: String { UnlockMethod.current.autoUnlockFooter }
     static var noPasscodeText: String { UnlockMethod.noPasscodeText(hardware: UnlockMethod.hardware) }
     static var appLockOffText: String { UnlockMethod.current.settingOffText }
@@ -182,6 +180,8 @@ enum AutoUnlockSetting {
         for mac in store.macs where mac.autoUnlock == true {
             turnOff(macID: mac.id, store: store, keychain: keychain, defaults: defaults)
         }
+        // The PCs' Remote Desktop passwords are kept only behind the app lock too (milestone 3).
+        store.rdpPasswords.deleteAll()
     }
 }
 
@@ -207,12 +207,11 @@ struct UnlockNoticeBanner: View {
     }
 }
 
-/// The Mac's "Unlock Automatically" row (project notes). HIG Toggles: a switch for an on/off setting; HIG Text
-/// fields: a secure field for a password, with a clear label. Turning it on shows the secure field; the switch is on
-/// only once a password is saved. Turning it off deletes the password at once.
-/// Touch ID clarity: the footer says it needs Require Touch ID; when that is off, a button right here turns it
-/// on (HIG Buttons in a list: an action row; the system's Touch ID check runs, `AppLock.setRequired`); when the
-/// phone has no passcode, a button opens Settings.
+/// The Mac's "Unlock Automatically" row. HIG Toggles: a switch for an on/off setting; HIG Text fields: a secure field
+/// for a password, with a clear label. Turning it on shows the secure field; the switch is on only once a password is
+/// saved. Turning it off deletes the password at once. Touch ID clarity: the footer says it needs Require Touch ID;
+/// when that is off, a button right here turns it on (HIG Buttons in a list: an action row; the system's Touch ID check
+/// runs, `AppLock.setRequired`); when the phone has no passcode, a button opens Settings.
 struct AutoUnlockSection: View {
     let store: MacStore
     let id: String

@@ -94,9 +94,8 @@ struct AboutList: View {
                 } header: {
                     Text("Clipboard")
                 } footer: {
-                    // The owner 2026-11-21 on the old text: "This refers to a setting that doesn't exist." iOS shows the
-                    // Paste from Other Apps row only after the app has once read a copy from another app and iOS
-                    // has asked; the app reads only with this on, after a copy made elsewhere during a session.
+                    //  iOS shows the Paste from Other Apps row only after the app has once read a copy from another app
+                    // and iOS has asked; the app reads only with this on, after a copy made elsewhere during a session.
                     Text("Mac copies always come to this iPhone, and the Paste key sends this iPhone’s clipboard. "
                          + "Turn this on to also send what you copy in other apps. The first time, iOS asks "
                          + "whether Duo Desktop may paste from other apps; after that the choice is in "
@@ -139,8 +138,7 @@ struct LockedView: View {
             Button {
                 Task { await lock.unlock() }
             } label: {
-                // White on the orange accent fill, forced so the system never picks a dark label (the owner 2026-11-21:
-                // "Let's do white first and I will decide.").
+                // White on the orange accent fill, forced so the system never picks a dark label.
                 Text(method.unlockButton).foregroundStyle(.white).frame(minWidth: 220)
             }
             .buttonStyle(.glassProminent)

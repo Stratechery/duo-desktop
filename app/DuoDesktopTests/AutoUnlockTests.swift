@@ -5,7 +5,7 @@ import Security
 import XCTest
 @testable import DuoDesktop
 
-/// project notes. Every password here is a made-up word; no real password is used or printed.
+/// Project notes. Every password here is a made-up word; no real password is used or printed.
 @MainActor
 final class AutoUnlockTests: XCTestCase {
     /// A made-up word, never a real password.

@@ -1,11 +1,10 @@
 import XCTest
 
-/// Project notes item 4 (the owner, build 62 on the Duo held sideways: "Jetkvm only horizontal view doesn't
-/// load and has the iOS bar on right"). On a real JetKVM (the test computer's own; only connect, picture and turning, no
-/// clicks and no keys): open the JetKVM-only computer upright, wait for the picture, turn sideways, turn back.
-/// Screenshots at each step go to DUO_SHOTS, taken on the Mac side (as `NormalPhoneMenuUITests`). The connection must
-/// not restart: the run's log is checked on the Mac side for one "connecting, attempt 1" only.
-/// Run: tools/jetkvm-sideways-proof.sh <sim> <prefix> [--force-open-layout]
+/// Project notes item 4. On a real JetKVM (the test computer's own; only connect, picture and turning, no clicks and no
+/// keys): open the JetKVM-only computer upright, wait for the picture, turn sideways, turn back. Screenshots at each
+/// step go to DUO_SHOTS, taken on the Mac side (as `NormalPhoneMenuUITests`). The connection must not restart: the
+/// run's log is checked on the Mac side for one "connecting, attempt 1" only. Run: tools/jetkvm-sideways-proof.sh <sim>
+/// <prefix> [--force-open-layout]
 @MainActor
 final class JetKVMSidewaysUITests: XCTestCase {
     private var shots = ""

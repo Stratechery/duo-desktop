@@ -2,9 +2,8 @@ import GlassActCore
 import GlassActSession
 import UIKit
 
-/// The phone's clipboard in a session, through Glass Act's own clipboard sync (`ViewerController.pasteboard`,
-/// CLIPBOARD message, UTF-8 text only — the library carries text and nothing else). The owner 2026-11-20: "We should
-/// share the clipboard" and "can we eliminate all those permissions".
+/// The phone's clipboard in a session, through Glass Act's own clipboard sync (`ViewerController.pasteboard`, CLIPBOARD
+/// message, UTF-8 text only — the library carries text and nothing else).
 ///
 /// - Mac → phone: automatic. The library calls `setText`; writing the pasteboard never asks (Apple's UIPasteboard
 ///   page describes alerts only for apps that "get" or "pull" content).

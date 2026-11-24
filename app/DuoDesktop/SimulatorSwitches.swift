@@ -18,10 +18,9 @@ enum SimulatorSwitches {
     /// `--force-open-layout`: show the open-screen UI even in compact width (the folded Duo).
     static let forceOpenLayout = args.contains("--force-open-layout")
 
-    /// `--top-bar-reserve N`: the session, Terminal and JetKVM top bars get an empty N pt part at their right
-    /// (`TopBarStandIn`), taking that room from back, the name and the views (project notes (session-top-bar-narrow-first)). It
-    /// stands in for the live activities beside the clock on the owner's phone, which the simulator cannot draw: about 54
-    /// moves the open Duo's room end from about 467 pt (bare simulator) to about 413 pt (the owner's phone).
+    /// `--top-bar-reserve N`: the session, Terminal and JetKVM top bars get an empty, pinned N pt part at their right
+    /// (`TopBarStandIn`), taking that room from the rest of the bar. It stands in for the live activities beside the
+    /// clock on the owner's phone, which the simulator cannot draw.
     static var topBarReserve: CGFloat? {
         guard let i = args.firstIndex(of: "--top-bar-reserve"), i + 1 < args.count, let v = Double(args[i + 1])
         else { return nil }
@@ -31,6 +30,20 @@ enum SimulatorSwitches {
     /// `--no-app-lock`: this run skips the Touch ID lock (on by default), so scripted runs and UI tests can reach
     /// the Macs. Device builds have no such switch.
     static let noAppLock = args.contains("--no-app-lock")
+    /// `--rdp-demo` (simulator only): a PC's Remote Desktop screen shows a made-up Windows desktop and its controls,
+    /// as if live, with nothing connected (milestone 2 pictures). Always false on a device.
+    static let rdpDemo = args.contains("--rdp-demo")
+    /// `--ssh-says-windows` (README pictures): every SSH server's first line is read as Windows' own, so a terminal
+    /// computer on a test server is treated as a PC (PowerShell on the top bar). Always false on a device.
+    static let sshSaysWindows = args.contains("--ssh-says-windows")
+
+    /// `--rdp-prompt WHAT` with `--open-computer NAME` (simulator only, milestone 3 pictures): the PC's screen shows
+    /// one prompt or failure message with made-up words, nothing connected. WHAT: password, trust, changed,
+    /// wrong-password, not-allowed, rdp-off, not-reachable, forget (its ⓘ page's Forget Certificate). Nil on a device.
+    static var rdpPrompt: String? {
+        guard let i = args.firstIndex(of: "--rdp-prompt"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
 
     /// `--slide-slowdown N`: the crossing slide runs N times slower, so a screenshot can catch it mid-way.
     static var slideSlowdown: Double {
@@ -81,20 +94,19 @@ enum SimulatorSwitches {
         return Double(args[i + 1])
     }
 
-    /// `--keyboard-inset N`: upright, lay out as if the system keyboard reached N pt above the bottom safe area
-    /// (the owner's real Duo: 293, which gives the 3 x 8 grid; this simulator's keyboard is 277). Layout only; the
-    /// simulator's own keyboard stays as it is, so the band ends a little above it.
+    /// `--keyboard-inset N`: upright, lay out as if the system keyboard reached N pt above the bottom safe area. Layout
+    /// only; the simulator's own keyboard stays as it is, so the band ends a little above it.
     static var keyboardInset: CGFloat? {
         guard let i = args.firstIndex(of: "--keyboard-inset"), i + 1 < args.count, let v = Double(args[i + 1])
         else { return nil }
         return CGFloat(v)
     }
 
-    /// `--add-computer WAY` (`screenSharing`, `terminal`, `jetkvm`): the list opens with Add Computer showing, Start
+    /// `--add-computer WAY` (`screenSharing`, `remoteDesktop`, `terminal`, `jetkvm`): the list opens with Add Computer showing, Start
     /// With on WAY (pictures). The older `--add-mac` (Screen Sharing) and `--add-terminal "Name|address|user"`
     /// (Terminal, with those fields) still work. `--add-mac-address A` types A in Screen Sharing's address.
-    static var addComputerWay: WayIn? {
-        if let i = args.firstIndex(of: "--add-computer"), i + 1 < args.count { return WayIn(rawValue: args[i + 1]) }
+    static var addComputerWay: AddWay? {
+        if let i = args.firstIndex(of: "--add-computer"), i + 1 < args.count { return AddWay(rawValue: args[i + 1]) }
         if args.contains("--add-mac") { return .screenSharing }
         if args.contains("--add-terminal") { return .terminal }
         return nil
@@ -111,9 +123,9 @@ enum SimulatorSwitches {
     /// `--add-press`: Add is pressed 1.5 s after the sheet opens (pictures of the in-place result).
     static let addPress = args.contains("--add-press")
     /// `--add-way WAY` with `--mac-settings NAME`: that computer's ⓘ page opens with Add WAY showing.
-    static var addWayOnSettings: WayIn? {
+    static var addWayOnSettings: AddWay? {
         guard let i = args.firstIndex(of: "--add-way"), i + 1 < args.count else { return nil }
-        return WayIn(rawValue: args[i + 1])
+        return AddWay(rawValue: args[i + 1])
     }
     /// `--open-computer NAME`: open that computer at launch in Terminal or JetKVM (`--open-way WAY`, else the first
     /// of the two it has), as its list icon does.
@@ -241,8 +253,8 @@ enum SimulatorSwitches {
         }
     }
 
-    /// `--screen-tour`: once in session, the shape proof (project notes): choose screen 2, choose it
-    /// again, open and close All Screens, choose screen 1, choose 2 again; the log shows one decision per change.
+    /// `--screen-tour`: once in session, the shape proof: choose screen 2, choose it again, open and close All Screens,
+    /// choose screen 1, choose 2 again; the log shows one decision per change.
     @MainActor static var screenTour: ((SessionModel) -> Void)? {
         guard args.contains("--screen-tour") else { return nil }
         return { model in
@@ -259,8 +271,8 @@ enum SimulatorSwitches {
             }
         }
     }
-    // Live check on a real JetKVM (project notes). A headless simulator cannot type into
-    // a field or tap, so these run the same actions the fingers would. No secret passes through an argument.
+    // Live check on a real JetKVM. A headless simulator cannot type into a field or tap, so these run the same actions
+    // the fingers would. No secret passes through an argument.
 
     /// `--add-kvm-password-file PATH`: the Add sheet's JetKVM Password field starts with this file's contents (read
     /// here, never logged), so Add saves it to the Keychain exactly as a typed password.
@@ -299,7 +311,22 @@ enum SimulatorSwitches {
         guard let i = args.firstIndex(of: "--host-answers"), i + 1 < args.count else { return nil }
         return args[i + 1]
     }
+    /// `--fake-sign-in-failure CASE`: a terminal computer's check and its Terminal screen fail this way without
+    /// dialling anything. CASE: ordinary-no-password, ordinary-password, key-refused, nothing-on-port,
+    /// tailscale-refused.
+    static var fakeSignInFailure: String? {
+        guard let i = args.firstIndex(of: "--fake-sign-in-failure"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    /// `--sync-demo STATE`: the iCloud footer shows made-up sync state, nothing sent anywhere. STATE: uptodate,
+    /// waiting, error.
+    static var syncDemo: String? {
+        guard let i = args.firstIndex(of: "--sync-demo"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
     #else
+    static let syncDemo: String? = nil
+    static let fakeSignInFailure: String? = nil
     static let hostAnswersSignIn: String? = nil
     static let addKVMPasswordFromFile: String? = nil
     static let keychainReport: String? = nil
@@ -307,10 +334,10 @@ enum SimulatorSwitches {
     static let lockAfter: Double? = nil
     static let pressRemove: WayIn? = nil
     @MainActor static var screenTour: ((SessionModel) -> Void)? { nil }
-    static let addComputerWay: WayIn? = nil
+    static let addComputerWay: AddWay? = nil
     static let addFields: (name: String, address: String, user: String, kvmAddress: String)? = nil
     static let addPress = false
-    static let addWayOnSettings: WayIn? = nil
+    static let addWayOnSettings: AddWay? = nil
     static let openComputer: String? = nil
     static let openWay: WayIn? = nil
     static let openOverview = false
@@ -321,6 +348,9 @@ enum SimulatorSwitches {
     static let forceOpenLayout = false
     static let topBarReserve: CGFloat? = nil
     static let noAppLock = false
+    static let rdpDemo = false
+    static let sshSaysWindows = false
+    static let rdpPrompt: String? = nil
     static let slideSlowdown: Double = 1
     static let testUnlockWord: String? = nil
     static let testSignIn: (String, String)? = nil

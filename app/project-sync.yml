@@ -1,9 +1,8 @@
-# The list syncing through iCloud (project notes Part A). Included by project.yml only when
-# xcodegen runs with DUO_SYNC=YES in its environment:
-#   DUO_SYNC=YES xcodegen generate   → the iCloud (CloudKit) and push entitlements; the app syncs the list
-#   xcodegen generate                → no iCloud entitlements; the app never touches CloudKit, the list stays local
-# The container is iCloud.<bundle id>, from DUO_BUNDLE_ID: nothing here names a team or a person. Signing a build with
-# it needs that container on the App ID (automatic signing, or the developer site; see app/README.md).
+# The list syncing through iCloud. Included by project.yml only when xcodegen runs with DUO_SYNC=YES in its environment:
+# DUO_SYNC=YES xcodegen generate → the iCloud (CloudKit) and push entitlements; the app syncs the list xcodegen generate
+# → no iCloud entitlements; the app never touches CloudKit, the list stays local The container is iCloud.<bundle id>,
+# from DUO_BUNDLE_ID: nothing here names a team or a person. Signing a build with it needs that container on the App ID
+# (automatic signing, or the developer site; see app/README.md).
 targets:
   DuoDesktop:
     settings:
