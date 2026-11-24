@@ -14,7 +14,7 @@ It is precise because the controls are not on the picture. Open the phone. The t
 
 **Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one.
 
-It is astonishingly good:
+[Glass Act](https://github.com/brianmario/glassact) itself is astonishingly good:
 
 - **Text is pixel-perfect.** Glass Act is not a video stream. It sends the changed parts of the screen as exact pixels, so small text is as sharp on the phone as on the Mac.
 - **Motion is smooth.** Scroll, drag a window or play a video and it switches to the Mac's hardware video encoder, then snaps back to exact pixels the moment things stop.
