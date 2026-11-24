@@ -20,6 +20,8 @@ It is precise because the controls are not on the picture. Open the phone. The t
 
 Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a different experience from any other way of reaching it.
 
+**Use the Host from this repository, not Glass Act's own.** The two have the same name and look the same, but Duo Desktop needs the one on this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) page. It has changes the app depends on: several monitors, typing notices, unlock. With Glass Act's own Host you will have problems; for example, on a Mac with two displays the pointer can end up on the wrong one.
+
 **More than one monitor.** A Mac with several monitors shows all of them. See every screen at once and tap the one you want, pick one by name, or just push the pointer past the edge of a screen and the picture follows it onto the next one. See [More than one screen](#more-than-one-screen-a-mac).
 
 **Ways in.** One list of computers; each computer has one or more ways in:
@@ -129,7 +131,7 @@ A computer has **Screen Sharing or Remote Desktop, not both**: a Mac uses Screen
 
 **Why it is fast.** It runs on Glass Act Host; see [the top of this page](#duo-desktop).
 
-**What the Mac needs.** Glass Act Host, running, with its two permissions (Screen Recording, Accessibility); see [Installing](#installing). The first time, you sign in once with the Mac's user name and password, or approve the phone at the Mac.
+**What the Mac needs.** Glass Act Host from this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases) (not Glass Act's own), running, with its two permissions (Screen Recording, Accessibility); see [Installing](#installing). The first time, you sign in once with the Mac's user name and password, or approve the phone at the Mac.
 
 **Unlock Automatically.** In a Mac's ⓘ page. When the Mac's screen is locked, Duo Desktop types its password for you. The password stays in this iPhone's Keychain. It needs the app lock (see [Security](#security)): one Face ID or Touch ID then unlocks every Mac. When the lock is off, a **Turn On** button sits right under the switch.
 
@@ -326,7 +328,7 @@ A Mac with several screens shows them all. The second line under the name in the
 **Free, no support, no guarantees: you install and use this at your own risk.**
 
 - **The iPhone app** is built by you from this code with Xcode (see [Building](#building)).
-- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still works with today's app: the messages between them are the same. The app itself is built against Glass Act v26.11.4. You can also build the Host yourself; that build is v26.11.4 with the same patches.
+- **Glass Act Host** (for Screen Sharing on a Mac): a ready-to-install Host is attached to this repository's [Releases](https://github.com/Stratechery/duo-desktop/releases). It is signed with Developer ID and notarized by Apple. Use this one: Glass Act's own Host has the same name but lacks the changes the app depends on, and you will have problems with it. The current one, "Glass Act Host 26.11.3 for Duo Desktop 48", still works with today's app: the messages between them are the same. The app itself is built against Glass Act v26.11.4. You can also build the Host yourself; that build is v26.11.4 with the same patches.
 - **Windows PC:** nothing to install for Remote Desktop; turn Remote Desktop on in Windows. For Terminal, turn on Windows' OpenSSH Server.
 - **Linux:** an SSH server for Terminal.
 - **JetKVM:** set up the box as its maker describes.
