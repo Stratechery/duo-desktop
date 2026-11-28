@@ -119,6 +119,9 @@ struct AboutList: View {
             }
             .navigationTitle("About")
             .navigationBarTitleDisplayMode(.inline)
+            // Heat: the once-a-second speed readout runs only while this list is showing.
+            .onAppear { SessionModel.app.aboutAppeared() }
+            .onDisappear { SessionModel.app.aboutDisappeared() }
     }
 }
 

@@ -41,7 +41,7 @@ final class JetKVMSidewaysUITests: XCTestCase {
     func testTurningKeepsThePicture() {
         let app = XCUIApplication()
         let extra = ProcessInfo.processInfo.environment["DUO_EXTRA"].map { $0.split(separator: " ").map(String.init) } ?? []
-        app.launchArguments = ["--no-app-lock", "--open-computer", "Agents Mini"] + extra
+        app.launchArguments = ["--no-app-lock", "--open-computer", "JetKVM Mac"] + extra
         app.launch()
         sleep(14)
         assertPicture(app, "upright")

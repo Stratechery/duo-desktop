@@ -471,8 +471,15 @@ struct SessionScreen: View {
                                parts: parts, directTouch: true, followPointer: !wide && (view == .centred || normalPhone),
                                typingVisibleHeight: wide && model.keyboardRules.up ? horizontal.panelTop : nil,
                                typingAimY: wide && model.keyboardRules.up ? model.typingAimY : nil,
+                               covered: PictureCover.covers(view, wide: wide),
                                onPinch: { step in pinchStep(step, wide: wide) })
                         .allowsHitTesting(model.flow.acceptsInput)
+                        // Heat: the Terminal or JetKVM view covers the picture: the Mac pauses the stream and the
+                        // picture view stops presenting; both come back the moment the picture shows again.
+                        .onChange(of: PictureCover.covers(view, wide: wide), initial: true) { _, covered in
+                            model.setPictureCovered(covered)
+                        }
+                        .onDisappear { model.setPictureCovered(false) }
                         // Not live: the last picture, dimmed, with a quiet status (or the failure and Try Again).
                         .overlay { if model.flow.showsHeldPicture { NotLiveOverlay(model: model) } }
                         // All Screens (M4): every screen over the picture; a tap chooses one, never a click on the Mac.
@@ -1377,6 +1384,8 @@ private struct CanvasHost: UIViewRepresentable {
     var followPointer = false
     var typingVisibleHeight: CGFloat? = nil
     var typingAimY: CGFloat? = nil
+    /// Heat: the Terminal or JetKVM view covers the picture (`PictureCover`).
+    var covered = false
     var onPinch: ((PinchStep) -> Void)? = nil
 
     final class Coordinator { var generation = -1 }
@@ -1394,6 +1403,7 @@ private struct CanvasHost: UIViewRepresentable {
         v.typingVisibleHeight = typingVisibleHeight
         v.typingAimY = typingAimY
         v.onPinchStep = onPinch
+        v.pictureCovered = covered
         return v
     }
 
@@ -1403,6 +1413,7 @@ private struct CanvasHost: UIViewRepresentable {
         v.typingVisibleHeight = typingVisibleHeight
         v.typingAimY = typingAimY
         v.onPinchStep = onPinch
+        v.pictureCovered = covered
         v.attach(controller)
         v.follow(grid: grid, generation: generation, lastGeneration: &context.coordinator.generation)
     }

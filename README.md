@@ -52,7 +52,9 @@ Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a
 > - **You use it at your own risk.** It controls real computers: it clicks, types and can type passwords. It can take over a computer's session: signing in with Remote Desktop disconnects whoever is using that PC.
 > - The licence says it in its own words: *"THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."* Read the whole [LICENSE](LICENSE).
 
-The code here is **build 0.1 (94)**. Read [Known issues](#known-issues) before you start.
+The code here is **build 0.1 (95)**. Read [Known issues](#known-issues) before you start.
+
+**New in build 95: the phone runs cooler.** The Mac pauses its picture while the Terminal or JetKVM view hides it, the picture's frame timer rests when nothing on screen changes (full speed again at the first change or touch), and the speed readout runs only while About is open.
 
 *Pictures on this page are the real app in the iPhone Duo Simulator. The computers in them are test stand-ins under made-up names; no real computer is shown. Some pictures are from older builds; where the app has changed, the text says what is different.*
 

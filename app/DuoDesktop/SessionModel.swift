@@ -105,6 +105,12 @@ final class SessionModel {
     private var pollTimer: Timer?
     private var pollInFlight = false
     private var throughputTimer: Timer?
+    /// Heat: the speed readout runs only while About is showing (`aboutAppeared`/`aboutDisappeared`).
+    private var aboutShowing = 0
+    /// Heat: the Terminal or JetKVM view covers the picture, so the Mac is told it is hidden (`setPictureCovered`).
+    private(set) var pictureCovered = false
+    /// The app is on screen (not in the background); combined with `pictureCovered` for the library.
+    private var appVisible = true
     private var resumeOnForeground = false
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -318,6 +324,8 @@ final class SessionModel {
 
     /// Every input the session sends (the gate's `onSent`).
     func noteSentInput(kind: UInt8) {
+        // Heat: the picture's display timer comes back to full rate at once (`PresentPacer`).
+        CanvasView.wakeAll()
         // Only a real change is stored: every pointer move comes through here.
         var rules = keyboardRules
         switch kind & InputFlags.kindMask {
@@ -563,6 +571,11 @@ final class SessionModel {
     private func goLive(controller: ViewerController, grid: TileGrid) {
         let wasRejoin = flow.showsHeldPicture
         _ = flow.wentLive()
+        // A new session starts visible in the library: still covered (Terminal/JetKVM open across a rejoin) or in
+        // the background, tell it at once.
+        if !PictureCover.hostVisible(appVisible: appVisible, covered: pictureCovered) {
+            controller.windowVisibilityChanged(visible: false)
+        }
         shownGrid = grid
         rejoinTries = 0
         // The gate is still closed: this only clears the engines' own held state, nothing reaches the Mac.
@@ -583,9 +596,11 @@ final class SessionModel {
     private func startPace() {
         paceTimer?.invalidate()
         paceInFlight = false
-        paceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        paceTimer = Timer.scheduledTimer(withTimeInterval: Self.paceInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.paceFired() }
         }
+        // Heat: the system may fold this beat in with other wake-ups; the rate (and so the reconnect bound) stays.
+        paceTimer?.tolerance = Self.paceTolerance
     }
 
     private func paceFired() {
@@ -605,15 +620,37 @@ final class SessionModel {
         }
     }
 
+    static let paceInterval: TimeInterval = 0.25
+    static let paceTolerance: TimeInterval = 0.1
+
     private func startThroughput() {
         startPace()
+        updateThroughput()
+    }
+
+    /// About (the only reader of the speed readout) is showing / has gone.
+    func aboutAppeared() { aboutShowing += 1; updateThroughput() }
+    func aboutDisappeared() { aboutShowing = max(0, aboutShowing - 1); updateThroughput() }
+    /// Whether the once-a-second speed readout is running (tests).
+    var throughputRunning: Bool { throughputTimer != nil }
+
+    /// Heat: the once-a-second readout runs only while About is open in a live session.
+    private func updateThroughput() {
+        let want = aboutShowing > 0 && controller != nil
+        guard want != (throughputTimer != nil) else { return }
         throughputTimer?.invalidate()
-        throughputTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        throughputTimer = nil
+        guard want, let controller else { throughput = nil; return }
+        // First call only primes the library's counters (it measures since the last call); the beat shows rates.
+        controller.bandwidthSummary { _ in }
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let controller = self.controller else { return }
                 controller.bandwidthSummary { [weak self] line in self?.throughput = line }
             }
         }
+        timer.tolerance = 0.1
+        throughputTimer = timer
     }
 
     private func rememberHostKeyIfNew() {
@@ -950,16 +987,33 @@ final class SessionModel {
     /// Hidden (backgrounded, or the phone closed onto its outer screen): the Mac stops sending the picture.
     func setVisible(_ visible: Bool) {
         if !visible { releaseHeldInput?() }
-        controller?.windowVisibilityChanged(visible: visible)
+        tellVisible(app: visible)
+    }
+
+    /// Heat: the Terminal or JetKVM view covers the Mac picture (true) or shows it again (false). The Mac stops
+    /// sending while covered and starts again the moment the picture shows.
+    func setPictureCovered(_ covered: Bool) {
+        guard covered != pictureCovered else { return }
+        pictureCovered = covered
+        note(covered ? "picture covered: Mac asked to pause the stream" : "picture shown: stream resumed")
+        tellVisible(app: appVisible)
+    }
+
+    /// The library is told visible only when the app is on screen and the picture is not covered.
+    private func tellVisible(app visible: Bool) {
+        appVisible = visible
+        controller?.windowVisibilityChanged(visible: PictureCover.hostVisible(appVisible: visible,
+                                                                              covered: pictureCovered))
     }
 
     func didEnterBackground() {
+        appVisible = false
         switch flow.left() {
         case .pause:
             releaseHeldInput?()
             input.close()
             stopReturnCheck()
-            controller?.windowVisibilityChanged(visible: false)
+            tellVisible(app: false)
             note("left: session kept while iOS allows")
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Duo Desktop session") { [weak self] in
                 MainActor.assumeIsolated {
@@ -981,7 +1035,7 @@ final class SessionModel {
         }
         guard flow.stage == .none, let controller else { return }
         releaseHeldInput?()
-        controller.windowVisibilityChanged(visible: false)
+        tellVisible(app: false)
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Duo Desktop session") { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -998,10 +1052,11 @@ final class SessionModel {
     /// Back from another app. `locked`: the Touch ID lock is up, and the rejoin waits for it.
     func willEnterForeground(locked: Bool) {
         endBackgroundTask()
+        appVisible = true
         switch flow.returned(locked: locked) {
         case .check:
             // The picture comes back as normal at once; input waits for proof the session is alive.
-            controller?.windowVisibilityChanged(visible: true)
+            tellVisible(app: true)
             startReturnCheck()
             return
         case .dial:
@@ -1010,8 +1065,8 @@ final class SessionModel {
         default:
             if flow.stage != .none { return }
         }
-        if let controller {
-            controller.windowVisibilityChanged(visible: true)
+        if controller != nil {
+            tellVisible(app: true)
         } else if resumeOnForeground, mac != nil {
             resumeOnForeground = false
             phase = .reconnecting(attempt: 1)

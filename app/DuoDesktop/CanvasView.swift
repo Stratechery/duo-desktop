@@ -23,6 +23,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
     func crossingSlide(dx: CGFloat, dy: CGFloat, reduceMotion: Bool = UIAccessibility.isReduceMotionEnabled) {
         guard bounds.width > 0, bounds.height > 0, dx != 0 || dy != 0,
               let snap = snapshotView(afterScreenUpdates: false) else { return }
+        wake()
         slideSnapshot?.removeFromSuperview()
         layer.removeAnimation(forKey: "crossingSlide")
         snap.frame = bounds
@@ -57,6 +58,23 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
     private var presenterGeneration = 0
     private var blitInFlight = false
     private var link: CADisplayLink?
+    /// Heat (`PresentPacer`): the display timer rests after a second with nothing new; a watch on the engine's
+    /// queue wakes it the moment the picture data moves. Touch, input and size changes wake it too.
+    private var pacer = PresentPacer(nowUS: MonotonicClock.nowUS)
+    private var resting = false
+    private var restWatch: DispatchSourceTimer?
+    /// Every live picture view, so input sent to the Mac (`SessionModel.noteSentInput`) wakes them (`wakeAll`).
+    private static let live = NSHashTable<CanvasView>.weakObjects()
+    /// The Terminal or JetKVM view covers the picture: nothing is presented until it shows again.
+    var pictureCovered = false {
+        didSet {
+            guard pictureCovered != oldValue else { return }
+            if pictureCovered { stopPresenting() } else if window != nil { startPresenting() }
+        }
+    }
+    /// Whether the display timer is resting now (tests and the log).
+    var isResting: Bool { resting }
+    var isPresenting: Bool { link != nil }
 
     private let contentLayer = CALayer()
     private let cursorLayer = CALayer()
@@ -271,6 +289,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         isMultipleTouchEnabled = true
         installGestures()
         attach(controller)
+        Self.live.add(self)
     }
 
     /// Changes the session behind the picture. nil (the session ended, a rejoin is on the way): the last picture and
@@ -280,11 +299,13 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         guard new !== controller else { return }
         controller?.onCursorUpdate = nil
         controller = new
+        wake()
         guard let new else { return }
         presenter = SurfacePresenter(grid: grid)
         presenterGeneration += 1
         new.onCursorUpdate = { [weak self, weak new] in
             guard let self, let new, self.controller === new else { return }
+            self.wake()
             self.updateCursorLayer()
             self.onHostCursor?(new.cursorX, new.cursorY)
         }
@@ -318,21 +339,25 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         grid = newGrid
         presenter = SurfacePresenter(grid: newGrid)
         presenterGeneration += 1
+        wake()
         layoutContent()
         updateCursorLayer()
     }
 
     func startPresenting() {
-        guard link == nil else { return }
+        guard link == nil, !pictureCovered else { return }
         let link = CADisplayLink(target: self, selector: #selector(present))
+        // Full rate as before (no cap): the timer rests only when nothing is happening (`PresentPacer`).
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         self.link = link
+        pacer.activity(atUS: MonotonicClock.nowUS)
     }
 
     func stopPresenting() {
         link?.invalidate()
         link = nil
+        endRest()
     }
 
     override func didMoveToWindow() {
@@ -340,7 +365,56 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
         if window != nil { startPresenting() } else { stopPresenting() }
     }
 
+    /// Back to full rate at once: new picture data, a touch, input sent, a size change, a new session.
+    func wake() {
+        pacer.activity(atUS: MonotonicClock.nowUS)
+        guard resting else { return }
+        endRest()
+        link?.isPaused = false
+    }
+
+    /// Wakes every picture view (input went to the Mac: its answer will be on screen within a frame).
+    static func wakeAll() {
+        for v in live.allObjects { v.wake() }
+    }
+
+    private func endRest() {
+        resting = false
+        restWatch?.cancel()
+        restWatch = nil
+    }
+
+    /// Nothing new for a second and nothing moving: pause the display timer and watch the engine's content
+    /// version on its own queue (one integer read per 60 Hz beat, no copy, no main-thread hop).
+    private func rest() {
+        guard !resting, let link else { return }
+        resting = true
+        link.isPaused = true
+        // No live session (a rejoin on the way): nothing to watch; `attach` wakes the timer with the new session.
+        guard let controller else { return }
+        let engine = controller.engine
+        let timer = DispatchSource.makeTimerSource(queue: controller.queue)
+        var seen: UInt64?
+        timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(PresentPacer.watchIntervalNS)),
+                       leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            let version = engine.contentVersion
+            guard let before = seen else { seen = version; return }
+            guard version != before else { return }
+            seen = version
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.wake() }
+            }
+        }
+        restWatch = timer
+        timer.resume()
+    }
+
     @objc private func present() {
+        if !blitInFlight, pacer.shouldRest(nowUS: MonotonicClock.nowUS, fingersDown: !fingersDown.isEmpty,
+                                           animating: glide != nil || slideSnapshot != nil) {
+            return rest()
+        }
         guard !blitInFlight, let controller else { return }
         blitInFlight = true
         let presenter = self.presenter
@@ -361,6 +435,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
     private func blitLanded(_ frame: SurfacePresenter.Frame?, generation: Int) {
         blitInFlight = false
         guard generation == presenterGeneration, let frame else { return }
+        pacer.activity(atUS: MonotonicClock.nowUS)
         contentLayer.contents = frame.surface
         let flippedUS = SurfacePresenter.uptimeUS()
         controller?.recordPresent(blitUS: frame.blitUS,
@@ -565,6 +640,7 @@ final class CanvasView: UIView, UIGestureRecognizerDelegate {
     /// A new finger on the picture stops a glide, as on a Mac.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         stopGlide()
+        wake()
         for t in touches { fingersDown.insert(ObjectIdentifier(t)) }
         super.touchesBegan(touches, with: event)
     }
