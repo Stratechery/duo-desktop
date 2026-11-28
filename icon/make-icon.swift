@@ -1,10 +1,11 @@
-// Duo Desktop's app icon, drawn in code: an orange square with the iOS continuous-corner mask, a black frame line
-// close around the layout, and the layout itself (the screen on top, the band of three buttons, three rows of keys).
-// The screen is black with a thin white outline and holds a white fedora with an orange band.
+// Duo Desktop's app icon, drawn in code: an orange square with the iOS continuous-corner mask, a white body inside a
+// thin black outline, and the layout from the hand sketch on it: the screen on top, the band of three trackpad blocks,
+// three rows of keys. The screen is black with rounded corners and holds a white fedora with an orange band; the keys
+// are black and square-cornered; the trackpad blocks are orange.
 // Corners use the real iOS mask (continuous, radius 229 at 1024); a shape inset d is concentric at radius 229 - d.
-// Z1 is the app icon (Z2 and Z3 are the same drawing with a half and a one-and-a-half key gap inside the frame line).
+// Z1-line is the app icon; Z1-noline is the same drawing without the black outline.
 // Only system frameworks; nothing to install.
-// Usage: DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift make-icon.swift Z1 duo-desktop-icon-1024.png
+// Usage: DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift make-icon.swift Z1-line duo-desktop-icon-1024.png
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -67,9 +68,9 @@ func duoArt(bar barCol: CGColor = white, parts: CGColor = white, outerKeyR: CGFl
     let bar = CGRect(x: x0, y: y, width: W, height: screenH)
     round(barCol, bar, 40 * fh); y += screenH + g
     let w1 = 104 * fw, w2 = 220 * fw, w3 = W - w1 - w2 - 2 * g, mr = 26 * min(fh, fw)
-    round(parts, CGRect(x: x0, y: y, width: w1, height: midH), mr)
-    round(parts, CGRect(x: x0 + w1 + g, y: y, width: w2, height: midH), mr)
-    round(parts, CGRect(x: x0 + w1 + w2 + 2 * g, y: y, width: w3, height: midH), mr); y += midH + g
+    round(bg, CGRect(x: x0, y: y, width: w1, height: midH), 0)
+    round(bg, CGRect(x: x0 + w1 + g, y: y, width: w2, height: midH), 0)
+    round(bg, CGRect(x: x0 + w1 + w2 + 2 * g, y: y, width: w3, height: midH), 0); y += midH + g
     let u = (W - CGFloat(cols - 1) * kg) / CGFloat(cols)
     let ku = u / ((W - 6 * kg0) / 7), kr = 16 * min(ku, fh)
     for row in 0..<rows {
@@ -78,7 +79,7 @@ func duoArt(bar barCol: CGColor = white, parts: CGColor = white, outerKeyR: CGFl
         for n in widths {
             let w = n * u + (n - 1) * kg
             let key = CGRect(x: x, y: y, width: w, height: kh)
-            round(parts, key, kr)
+            round(parts, key, 0)
             x += w + kg
         }
         y += kh + kg
@@ -92,14 +93,15 @@ func hatIn(_ bar: CGRect, body: CGColor = dark, band: CGColor = white) {
 }
 let layoutScale: CGFloat = 0.84, barExtra: CGFloat = 24        // barExtra in layout units (20 px after scaling)
 let ringW: CGFloat = 34                                         // black ring at the icon edge (2 px at 60 px)
-let lineW: CGFloat = 28, lineOut: CGFloat = 70                  // frame line: 28 px wide
+let lineW: CGFloat = 14, lineOut: CGFloat = 70                  // frame line width (14 px at 1024)
 
 let args = Array(CommandLine.arguments.dropFirst())
-guard args.count == 2, ["Z1", "Z2", "Z3"].contains(args[0]) else { fatalError("usage: make-duo-z-black-screen.swift <Z1|Z2|Z3> <out.png>") }
+guard args.count == 2, ["Z1-line", "Z1-noline"].contains(args[0]) else { fatalError("usage: make-icon.swift <Z1-line|Z1-noline> <out.png>") }
 let v = "Z"
 // Layout's left edge after scaling (219.7 px) and one key gap after scaling (30 layout units -> 25.2 px).
 let layoutIn = size / 2 - (size / 2 - art.minX) * layoutScale, keyGap: CGFloat = 20 * 1.5 * layoutScale
-let gap = keyGap * ["Z1": 1.0, "Z2": 0.5, "Z3": 1.5][args[0]]!
+let gap = keyGap * 1.0
+let withLine = args[0] == "Z1-line"
 let lineOutT = layoutIn - gap - lineW                          // outer edge of the frame line, inset from the icon edge
 fill(bg, CGRect(x: 0, y: 0, width: size, height: size))
 if v != "Z" {
@@ -107,20 +109,18 @@ if v != "Z" {
     // corners outside the mask are black too (orange there bled into the ring's corners when scaled down to 60 px).
     fill(dark, CGRect(x: 0, y: 0, width: size, height: size)); fillPath(bg, maskInset(ringW))
 }
-ctx.setStrokeColor(v == "X" ? white : dark); ctx.setLineWidth(lineW)
-ctx.addPath(maskInset(lineOutT + lineW / 2)); ctx.strokePath()
+fillPath(white, maskInset(lineOutT))                            // white body: the whole inside of the frame
+if withLine { ctx.setStrokeColor(dark); ctx.setLineWidth(lineW); ctx.addPath(maskInset(lineOutT + lineW / 2)); ctx.strokePath() }
 // Layout scaled about the icon centre.
 ctx.saveGState()
 ctx.translateBy(x: size / 2, y: size / 2); ctx.scaleBy(x: layoutScale, y: layoutScale); ctx.translateBy(x: -size / 2, y: -size / 2)
-let barL = duoArt(bar: dark, barExtra: barExtra)
+let barL = duoArt(bar: dark, parts: dark, barExtra: barExtra)    // screen and keys black, trackpad blocks orange
 ctx.restoreGState()
 let bar = CGRect(x: size / 2 + (barL.minX - size / 2) * layoutScale, y: size / 2 + (barL.minY - size / 2) * layoutScale,
                  width: barL.width * layoutScale, height: barL.height * layoutScale)
-// The screen's outline: 14 px white, inside the bar's edge, corner concentric with the bar's own (scaled) corner.
+// The screen's corner radius after scaling (kept for reference; no outline is drawn on the screen).
 let fhL: CGFloat = 546.0 / 594, barR = 40 * fhL * layoutScale, olW: CGFloat = 14
-ctx.setStrokeColor(white); ctx.setLineWidth(olW)
-ctx.addPath(CGPath(roundedRect: bar.insetBy(dx: olW / 2, dy: olW / 2), cornerWidth: barR - olW / 2,
-                   cornerHeight: barR - olW / 2, transform: nil)); ctx.strokePath()
+// white body: the screen's white edge line is left out so the black screen spans the same width as the keys
 hatIn(bar, body: white, band: bg)
 FileHandle.standardError.write("line outer \(lineOutT) gap \(gap) bar \(bar) art \(art.minX) -> \(size / 2 + (art.minX - size / 2) * layoutScale)\n".data(using: .utf8)!)
 

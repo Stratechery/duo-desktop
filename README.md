@@ -52,7 +52,7 @@ Install the Host on a Mac once (see [Installing](#installing)) and that Mac is a
 > - **You use it at your own risk.** It controls real computers: it clicks, types and can type passwords. It can take over a computer's session: signing in with Remote Desktop disconnects whoever is using that PC.
 > - The licence says it in its own words: *"THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."* Read the whole [LICENSE](LICENSE).
 
-The code here is **build 0.1 (92)**. Read [Known issues](#known-issues) before you start.
+The code here is **build 0.1 (94)**. Read [Known issues](#known-issues) before you start.
 
 *Pictures on this page are the real app in the iPhone Duo Simulator. The computers in them are test stand-ins under made-up names; no real computer is shown. Some pictures are from older builds; where the app has changed, the text says what is different.*
 
@@ -461,7 +461,7 @@ Ben drew the first version by hand on 2026-11-21 as a picture of the app itself:
 
 <img src="docs/images/icon-sketch.jpg" alt="Ben's hand sketch of the icon: a screen on top, three buttons, rows of keys" width="360">
 
-The icon belongs to a family of Ben's own apps: an orange background, one white object, and a black fedora, the "agents" mark. Here the fedora sits inside the screen, because you are looking at your computer through Duo Desktop.
+The icon belongs to a family of Ben's own apps: an orange background, one white object, and a black fedora, the "agents" mark. Here the white object is the computer itself, with a black screen, black keys and an orange trackpad row. The fedora sits inside the screen, white on black, because you are looking at your computer through Duo Desktop.
 
 ![Duo Desktop's icon next to four of Ben's other app icons](docs/images/icon-family.png)
 
